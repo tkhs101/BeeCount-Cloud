@@ -15,6 +15,8 @@ import {
   useT,
 } from '@beecount/ui'
 import { Amount, CategoryIcon, periodLabel, TransactionList } from '@beecount/web-features'
+
+import { TAX_CATEGORY_NAME } from '../../lib/taxCategory'
 import { ArrowRight, Edit3, TrendingDown, TrendingUp } from 'lucide-react'
 
 import { useAuth } from '../../context/AuthContext'
@@ -63,13 +65,6 @@ interface Props {
   /** 当前账本的每月起始日（1-28），用于把交易折算到正确的记账周期桶。默认 1 = 自然月。 */
   ledgerMonthStartDay?: number
 }
-
-/**
- * 服务端把消费税归入的分类名(`config.tax_category_name`,env `TAX_CATEGORY_NAME`
- * 可改,默认「税与保险」)。Web 端没有那个 env,所以只能对默认值;改了 env 的
- * 部署会少显示这一行提示,不影响数字正确性。
- */
-const TAX_CATEGORY_NAME = '税与保险'
 
 interface StatsAgg {
   count: number

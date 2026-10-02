@@ -15,11 +15,17 @@ interface Props {
   onClickCategory?: (name: string) => void
 }
 
+/** 与饼图的扇区上限保持一致 —— 两处对不上会让同一份数据呈现两种口径。 */
+const TOP_CATEGORY_LIMIT = 8
+
 export function TopCategoriesList({ ranks, variant = 'expense', title, onClickCategory }: Props) {
   const t = useT()
-  const top = ranks.slice(0, 5)
+  // 与 HomeMonthCategoryDonut 的 MAX_SLICES 保持一致(8)。
+  // 消费税扇区金额天然很小,停在 5 的话它进不了列表 —— 而这个列表正是
+  // 用户核对「各类花了多少」的地方,税额缺席等于功能没做。
+  const top = ranks.slice(0, TOP_CATEGORY_LIMIT)
   const maxTotal = Math.max(1, ...top.map((r) => r.total))
-  // 占比基数:**所有分类总和**(不只 top 5),反映真实分布。如果只用 top 5
+  // 占比基数:**所有分类总和**(不只前 N),反映真实分布。如果只用前 N
   // 的 total 算占比,top 1 永远是 100% 这种数字,信息量 = 0。
   const grandTotal = Math.max(1, ranks.reduce((sum, r) => sum + r.total, 0))
 
