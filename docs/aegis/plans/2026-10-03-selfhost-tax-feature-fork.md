@@ -86,7 +86,7 @@ Y2（tx_count 重复计数）在我读码自查时已先行修掉。
 | 项 | 理由 |
 |---|---|
 | Y4 `attach_receipt` 先上传后 PATCH | 失败会留孤儿文件。单用户自托管下 PATCH 几乎不会失败；彻底修需要 append-only 的附件端点或写前鉴权，改动面远大于收益 |
-| Y5 共享账本非所有者成员无法用 MCP 附图 | projection 的 `user_id` 是账本所有者。单用户自托管无影响，已在测试 docstring 里写明 |
+| **Y5 共享账本里非所有者成员无法用 MCP 改/删/附图** | 影响 `update_transaction` / `delete_transaction` / `attach_receipt` **三个**工具 —— 它们都用 `ReadTxProjection.user_id == user.id` 找交易，而 projection 的 `user_id` 写的是**账本所有者**（`upsert_tx(user_id=ledger.user_id)`），所以 Editor 成员会一律拿到 "Transaction not found" | **不改**。单用户自托管零影响；改鉴权语义要动三个函数的授权路径，风险高于收益，而本项目部署形态根本用不到共享账本。已用 `test_attach_receipt_cannot_cross_users` 锁住「不越权」这一侧 |
 | Y8 `/sync/push` 无法清除税额 | `_merge_from_spec` 丢掉 payload 的 `None`，与 `nativeAmount` 同语义，可接受 |
 | B7 sniff 的 `"tax"` 别名可能误判英文账单为 BeeCount 格式 | 阈值 8/12 仍需命中 8 个表头，误判概率极低；改别名反而可能漏掉真导出 |
 | B9 迁移测试是弱测试 | 断言源码字符串。改为对 alembic op 打桩属另一个工作量级，当前至少锁住了「无回填」这个关键属性 |
