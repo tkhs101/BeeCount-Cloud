@@ -1090,7 +1090,6 @@ const en = {
   'transactions.tax.label': 'Tax (incl.)',
   'transactions.tax.placeholder': 'e.g. 298',
   'transactions.tax.netHint': 'Excl. tax: {net}',
-  'transactions.tax.invalidHint': 'Tax must be between 0 and the total amount',
   'transactions.placeholder.happenedAt': 'happened_at',
   'transactions.placeholder.note': 'note',
   'transactions.placeholder.categoryName': 'category_name',

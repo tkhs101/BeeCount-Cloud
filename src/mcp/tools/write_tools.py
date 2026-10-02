@@ -34,7 +34,12 @@ from ...models import (
     UserTagProjection,
 )
 from ...security import SCOPE_APP_WRITE, _create_token
-from .read_tools import _parse_dt, _resolve_ledger, live_ledgers
+from .read_tools import (
+    _parse_dt,
+    _resolve_ledger,
+    _safe_attachments as _load_attachments,
+    live_ledgers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -178,24 +183,6 @@ async def _upload_attachment(
         files={"file": (filename, raw, mime or "application/octet-stream")},
     )
 
-
-def _load_attachments(attachments_json: str | None) -> list[dict[str, Any]]:
-    """projection 里的 `attachments_json` → `AttachmentRef` 列表。
-
-    坏 JSON 不抛异常,退化成空列表 —— 附加新图不该因为一笔历史脏数据失败。
-    服务端 schema 是弱类型 `list[dict[str, Any]]`(schemas.py),零校验。
-    """
-    import json
-
-    if not attachments_json:
-        return []
-    try:
-        parsed = json.loads(attachments_json)
-    except (json.JSONDecodeError, TypeError):
-        return []
-    if not isinstance(parsed, list):
-        return []
-    return [item for item in parsed if isinstance(item, dict)]
 
 
 def _ext_for_mime(mime: str | None) -> str:
@@ -415,8 +402,30 @@ async def attach_receipt(
 
     **不存在的 sync_id 会报错,不会新建交易** —— 附加不是创建,两者语义不同。"""
     raw, prefix_mime = _decode_base64_image(image_base64)
-    mime = _guess_mime(file_name, mime_type or prefix_mime)
+    return await _attach_receipt_bytes(
+        user,
+        sync_id=sync_id,
+        raw=raw,
+        mime=_guess_mime(file_name, mime_type or prefix_mime),
+        file_name=file_name,
+    )
 
+
+async def _attach_receipt_bytes(
+    user: User,
+    *,
+    sync_id: str,
+    raw: bytes,
+    mime: str | None,
+    file_name: str | None,
+) -> dict[str, Any]:
+    """`attach_receipt` 的字节版 —— base64 只解一次。
+
+    `create_transaction_with_receipt` 也需要走这条路:它先把图解出来做大小
+    预检,如果再把**原始 base64 串**传给 `attach_receipt`,就会被解第二遍 ——
+    峰值内存 ≈ 2× 解码后字节,恰好抵消掉 `_decode_base64_image`「解码前预估
+    大小」的一半意义。
+    """
     with SessionLocal() as db:
         existing = db.scalar(
             select(ReadTxProjection).where(
@@ -449,7 +458,8 @@ async def attach_receipt(
         "sync_id": sync_id,
         "attachment": ref,
         "attachment_count": len(merged),
-        "_meta": upload,
+        # 不回传整个 upload 响应:对 LLM 是噪音(它要的是 file_id / sha256,
+        # 上面 attachment 里已经给了)。存储路径这类内部字段更不该进上下文。
     }
 
 
@@ -481,6 +491,7 @@ async def create_transaction_with_receipt(
 
     如果建交易成功但传图失败,会**明确报错并给出已建的 sync_id** —— 图丢了
     但账没丢,补传用 attach_receipt 即可,不要重复建交易。"""
+    # 只解一次;下面 attach 阶段复用同一份 bytes
     raw, prefix_mime = _decode_base64_image(image_base64)
     mime = _guess_mime(file_name, mime_type or prefix_mime)
 
@@ -503,12 +514,12 @@ async def create_transaction_with_receipt(
 
     name = file_name or f"receipt-{sync_id}.{_ext_for_mime(mime)}"
     try:
-        attached = await attach_receipt(
+        attached = await _attach_receipt_bytes(
             user,
             sync_id=str(sync_id),
-            image_base64=image_base64,
+            raw=raw,
+            mime=mime,
             file_name=name,
-            mime_type=mime,
         )
     except Exception as exc:
         # 账已经落库,图失败不能报成「整笔失败」—— 那会诱导 LLM 重复建账。
@@ -521,7 +532,7 @@ async def create_transaction_with_receipt(
                 f"do NOT create the transaction again."
             ),
         }
-    return {**created, "attachment": attached.get("attachment"), "_attached": attached}
+    return {**created, "attachment": attached.get("attachment")}
 
 
 async def update_transaction(

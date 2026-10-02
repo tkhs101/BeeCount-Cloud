@@ -451,11 +451,27 @@ def update_transaction(snapshot: dict, tx_id: str, payload: dict) -> dict:
                 str(item.get("type") or "expense"),
             )
     if "taxAmount" in item:
-        _normalize_tax_amount(
-            item["taxAmount"],
-            _to_float(item.get("amount")),
-            str(item.get("type") or "expense"),
-        )
+        # 对**既有**税额只做自洽性检查,不抛。
+        #
+        # 这一段校验的是「调用方没碰过的字段」—— 用户改个备注,不该因为一笔
+        # 历史脏数据(税额 >= amount,或 income 上带税)就打不开这笔交易。脏数据
+        # 真实可达:`/sync/push` 不经过本 mutator、merge 也不校验,推上来什么
+        # 样的 taxAmount 都收。这里降级为「剔除并告警」:统计侧的
+        # `tax_in_base_currency` 本来就把结果夹在 [0, base] 内,不会算出负
+        # 税额,所以丢掉这一笔的税额是安全降级,远好过整笔卡死。
+        try:
+            _normalize_tax_amount(
+                item["taxAmount"],
+                _to_float(item.get("amount")),
+                str(item.get("type") or "expense"),
+            )
+        except ValueError:
+            logger.warning(
+                "update_transaction: dropping inconsistent taxAmount tx_id=%s "
+                "tax=%r amount=%r type=%r",
+                tx_id, item.get("taxAmount"), item.get("amount"), item.get("type"),
+            )
+            item.pop("taxAmount", None)
 
     mapping = {
         "note": "note",

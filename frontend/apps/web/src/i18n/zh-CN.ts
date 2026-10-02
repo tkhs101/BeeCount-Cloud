@@ -1129,7 +1129,6 @@ const zhCN = {
   'transactions.tax.label': '消费税',
   'transactions.tax.placeholder': '如 298',
   'transactions.tax.netHint': '税前 {net}',
-  'transactions.tax.invalidHint': '税额须大于 0 且小于金额',
   'transactions.placeholder.happenedAt': '发生时间',
   'transactions.placeholder.note': '备注',
   'transactions.placeholder.categoryName': '分类名称',

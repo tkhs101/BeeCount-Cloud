@@ -1088,7 +1088,6 @@ const zhTW = {
   'transactions.tax.label': '消費稅',
   'transactions.tax.placeholder': '如 298',
   'transactions.tax.netHint': '稅前 {net}',
-  'transactions.tax.invalidHint': '稅額須大於 0 且小於金額',
   'transactions.placeholder.happenedAt': '發生時間',
   'transactions.placeholder.note': '備註',
   'transactions.placeholder.categoryName': '分類名稱',

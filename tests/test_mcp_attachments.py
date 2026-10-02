@@ -372,7 +372,7 @@ def test_attach_receipt_cannot_cross_users(monkeypatch) -> None:
         owner = _setup(client, TS, monkeypatch, "att-owner@t.com")
 
         # 另起一个用户,复用同一批 token 补丁但用不同账号
-        other_token = _register_and_token(
+        _register_and_token(
             client, "att-other@t.com", device_id="d-app2", client_type="app")
         with TS() as db:
             other = db.scalar(select(User).where(User.email == "att-other@t.com"))

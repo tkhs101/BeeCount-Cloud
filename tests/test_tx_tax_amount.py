@@ -843,17 +843,26 @@ def test_web_invalid_tax_returns_400_not_500(monkeypatch) -> None:
                          json={"base_change_id": base, "tax_amount": 9999.0})
         assert r.status_code == 400, f"PATCH 应 400,got {r.status_code}: {r.text[:200]}"
 
-        # 5) PATCH: expense → income 但留着税(既有税不自洽)
-        r = client.patch(f"/api/v1/write/ledgers/lg1/transactions/{tx_id}",
-                         headers={**hdr, "Content-Type": "application/json"},
-                         json={"base_change_id": base, "tx_type": "income"})
-        assert r.status_code == 400, r.status_code
-
-        # 6) 合法路径仍然 200
+        # 5) 合法路径仍然 200
         r = client.patch(f"/api/v1/write/ledgers/lg1/transactions/{tx_id}",
                          headers={**hdr, "Content-Type": "application/json"},
                          json={"base_change_id": base, "tax_amount": 350.0})
         assert r.status_code == 200, r.text[:200]
+        # 6) PATCH: expense → income 而既有税额变得不自洽(放最后,
+        #    因为它把这笔改成 income,之后的合法税额路径就不再合法了)。
+        #    这里**故意不是 400** —— 调用方并没有要求改税额,税额是上一轮写
+        #    进去的;把它当校验错误抛回去等于要求用户先手工清一次税额才能改
+        #    类型。降级策略是「剔除这笔税额并告警」(见 Y7 测试),静默但可恢复。
+        r = client.patch(f"/api/v1/write/ledgers/lg1/transactions/{tx_id}",
+                         headers={**hdr, "Content-Type": "application/json"},
+                         json={"base_change_id": base, "tx_type": "income"})
+        assert r.status_code == 200, r.text[:200]
+        after = next(t for t in client.get("/api/v1/read/workspace/transactions",
+                                          headers=hdr).json()["items"]
+                     if t["id"] == tx_id)
+        assert after["tx_type"] == "income"
+        assert after["tax_amount"] is None, "income 上的税额应被剔除"
+
     finally:
         app.dependency_overrides.clear()
 
@@ -895,5 +904,46 @@ def test_mcp_analytics_matches_web_slice(monkeypatch):
                 f"MCP 与 Web 对「{name}」口径不一致: {mcp_ranks[name]} vs {web_ranks[name]}"
             )
         assert abs(mcp_out["tax_total"] - 298.0) < 1e-6, mcp_out["tax_total"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_legacy_dirty_tax_does_not_block_editing(monkeypatch, caplog):
+    """**Y7** —— 历史脏数据(经 `/sync/push` 进来的)不能把整笔交易卡死。
+
+    `/sync/push` 不经过 snapshot_mutator、merge 也不校验,所以 `taxAmount`
+    大于 amount、或 income 上带税,都能直接落进 projection。这类数据落到
+    Web 上,用户改个备注都会 400 —— 而且叠加 R1 就是「整笔打不开」。
+
+    预期:改备注**成功**,同时把这笔的脏税额剔除并告警。统计侧本来就会把
+    税额夹在 [0, base] 内,剔除是安全降级。
+    """
+    client, TS = _make_client()
+    try:
+        app_token, web_token = _two_tokens(client, "tax-dirty@t.com")
+        hdr_app = {"Authorization": f"Bearer {app_token}"}
+        hdr_web = {"Authorization": f"Bearer {web_token}"}
+        # 脏数据:税 500 > 金额 100
+        _push(client, hdr_app, "lg1", "transaction", "txDirty",
+              {"syncId": "txDirty", "type": "expense", "amount": 100.0,
+               "happenedAt": _iso(), "categoryName": "餐饮", "taxAmount": 500.0})
+        base = 0
+
+        # 真实 PATCH:只改备注,完全不提税额
+        r = client.patch(
+            "/api/v1/write/ledgers/lg1/transactions/txDirty",
+            headers={**hdr_web, "Content-Type": "application/json"},
+            json={"base_change_id": base, "note": "只是改个备注"},
+        )
+        assert r.status_code == 200, f"改备注不该被脏税额卡死: {r.text[:250]}"
+        row = _get_tx(TS, _ledger_internal_id(TS, "lg1"), "txDirty")
+        assert row.note == "只是改个备注"
+        assert row.tax_amount is None, "不自洽的税额应被剔除"
+
+        # 统计不受影响:总额仍是 100
+        body = _analytics(client, hdr_web)
+        assert abs(body["summary"]["expense_total"] - 100.0) < 1e-6
+        ranks = {r["category_name"]: r["total"] for r in body["category_ranks"]}
+        assert TAX_BUCKET not in ranks, ranks
     finally:
         app.dependency_overrides.clear()

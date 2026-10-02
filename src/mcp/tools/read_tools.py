@@ -220,7 +220,6 @@ def get_transaction(user: User, sync_id: str) -> dict[str, Any] | None:
         led = db.scalar(select(Ledger).where(Ledger.id == row.ledger_id))
         out = _serialize_tx(row, row.category_name)
         out["ledger"] = led.name if led else None
-        out["attachments"] = json.loads(row.attachments_json or "[]") if row.attachments_json else []
         return out
 
 
