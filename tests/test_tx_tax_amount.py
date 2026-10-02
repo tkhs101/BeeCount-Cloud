@@ -752,3 +752,30 @@ def test_csv_import_tax_tolerates_garbage():
     assert _parse_tax_amount("10", 100.0, "income") is None, "income 无税"
     assert _parse_tax_amount("1,234.50", 5000.0, "expense") == 1234.50
     assert _parse_tax_amount("¥10", 100.0, "expense") == 10.0
+
+
+def test_tax_category_self_count_not_double():
+    """边界:一笔支出**本身就记在「税与保险」分类下**且带税额。
+
+    此时 tax_slot 与 category_slot 是同一个 dict —— 金额天然合并
+    (净额 + 税额 = 实付),但 count 若也加两次,一笔会显示成两笔。
+    这个 case 语义上少见(「消费税」是拆分出来的税,不是一笔独立支出),
+    但不能因此让 tx_count 说谎。"""
+    client, TS = _make_client()
+    try:
+        app_token, web_token = _two_tokens(client, "tax-self@t.com")
+        hdr_app = {"Authorization": f"Bearer {app_token}"}
+        hdr_web = {"Authorization": f"Bearer {web_token}"}
+        _seed_taxed_expense(client, hdr_app, amount=3280.0, tax=298.0,
+                            category=TAX_BUCKET)
+
+        body = _analytics(client, hdr_web)
+        assert abs(body["summary"]["expense_total"] - 3280.0) < 1e-6
+        rows = {r["category_name"]: r for r in body["category_ranks"]}
+        assert list(rows) == [TAX_BUCKET], rows
+        assert abs(rows[TAX_BUCKET]["total"] - 3280.0) < 1e-6, rows
+        assert rows[TAX_BUCKET]["tx_count"] == 1, (
+            f"一笔不能被算成两笔,got {rows[TAX_BUCKET]['tx_count']}"
+        )
+    finally:
+        app.dependency_overrides.clear()

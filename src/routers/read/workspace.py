@@ -1135,9 +1135,19 @@ def workspace_analytics(
                     # 饼图上的一个扇区(D1)。没有税额数据时这个 key 只在真有
                     # 数据时才出现,统计与升级前完全一致。
                     tax_slot = category_map.setdefault(
-                        tax_bucket_name, {"income": 0.0, "expense": 0.0, "count": 0.0})
+                        tax_bucket_name,
+                        {"income": 0.0, "expense": 0.0, "count": 0.0},
+                    )
                     tax_slot["expense"] += tax_native
-                    tax_slot["count"] += 1.0
+                    # **金额无条件加**:当 tax_bucket_name == category 时
+                    # tax_slot 就是上面那个 category_slot(同一个 dict),净额
+                    # 已经加过,这里补上税额正好凑回实付总额 —— 少加一分钱
+                    # 这个扇区就会比总额少一块。
+                    # 但 count 只在「另一个分类」时才加:同一个 key 下上面
+                    # 已经 `category_slot["count"] += 1` 过了,再加一次会让
+                    # 一笔显示成两笔。
+                    if tax_bucket_name != category:
+                        tax_slot["count"] += 1.0
                     bucket_cat[tax_bucket_name] = (
                         bucket_cat.get(tax_bucket_name, 0.0) + tax_native)
 
