@@ -14,7 +14,13 @@ import {
   useLocale,
   useT,
 } from '@beecount/ui'
-import { Amount, CategoryIcon, periodLabel, TransactionList } from '@beecount/web-features'
+import {
+  Amount,
+  CategoryIcon,
+  periodLabel,
+  taxInBaseCurrency,
+  TransactionList
+} from '@beecount/web-features'
 
 import { TAX_CATEGORY_NAME } from '../../lib/taxCategory'
 import { ArrowRight, Edit3, TrendingDown, TrendingUp } from 'lucide-react'
@@ -631,31 +637,6 @@ function TopList({
 // --------------------------------------------------------------------------
 // Aggregation helpers
 // --------------------------------------------------------------------------
-
-/**
- * 原币税额 → 折本位币税额(0020)。
- *
- * 与 server 的 `routers/read/_shared.tax_in_base_currency` **同一套公式**:
- * `tax / amount` 的比率与币种无关,按该笔自身的隐含汇率换算,保证税额和主
- * 金额走同一个汇率、不会各自漂移。
- *
- * 结果夹在 `[0, base]` 内 —— 脏数据(税额大于金额)也保证「净额 ≥ 0」且
- * 「净额 + 税 ≤ 实付」,不变式不会被打破。
- */
-export function taxInBaseCurrency(
-  taxAmount: number | null | undefined,
-  rawAmount: number | null | undefined,
-  baseAmount: number
-): number {
-  if (taxAmount == null) return 0
-  const tax = Math.abs(Number(taxAmount) || 0)
-  if (!(tax > 0)) return 0
-  const base = Math.abs(Number(baseAmount) || 0)
-  if (!(base > 0)) return 0
-  const raw = Math.abs(Number(rawAmount) || 0)
-  if (!(raw > 0)) return Math.min(tax, base)
-  return Math.max(0, Math.min(base, base * (tax / raw)))
-}
 
 export function aggregate(
   transactions: WorkspaceTransaction[],

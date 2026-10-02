@@ -5,6 +5,7 @@
  * 每个 insight 函数返回 { textKey, args },UI 用 i18n.t(textKey, args) 渲染。
  * args 是字典,方便 i18n placeholder 注入。
  */
+import { baseAmount } from '../../../lib/amountBasis'
 import type { AnnualReportData } from './types'
 import { TKEY } from '../i18n'
 
@@ -164,7 +165,10 @@ export function extremesInsight(d: AnnualReportData): Insight {
     textKey: TKEY.insightExtremes,
     args: {
       date,
-      amount: Math.round(d.largestExpense.amount),
+      // 用折本位币 —— 这张卡配的是账本本位币符号,用原币会显示成
+      // 「¥50」而实际是 50 CNY 折的数。选择逻辑在 aggregate 已按
+      // baseAmount 比大小,这里必须同口径,否则前后不一致。
+      amount: Math.round(baseAmount(d.largestExpense)),
       note:
         d.largestExpense.note ||
         d.largestExpense.categoryName ||

@@ -15,6 +15,7 @@ import type {
   TransactionLite,
 } from './types'
 import { computeAchievements } from './achievements'
+import { baseAmount } from '../../../lib/amountBasis'
 
 /**
  * 笔数 >= MIN_RECORDS 才生成报告,否则显示「数据太少」兜底。
@@ -27,21 +28,6 @@ export type AggregateInput = {
   prevYearTxs: TransactionLite[]
   year: number
   ledger: { id: string; name: string; currency: string }
-}
-
-/**
- * 聚合口径:折账本本位币,`nativeAmount ?? amount`(与 server 的
- * `coalesce(native_amount, amount)` 逐字对应)。
- *
- * 之前这里一律用原币 `t.amount`。单币种账本看不出问题,一旦账本里有外币
- * 交易,CNY 和 JPY 会被直接加在一起 —— 年度总收入 / 总支出 / 月度趋势
- * 全部错。与 server 的 `workspace_analytics` 是同一条口径。
- *
- * **年度总计不剥税** —— 预算是「每笔支出恰好计一次」的分区,同理年度报表
- * 也要保持总额 = 实付总额;税额的拆分只发生在分类饼图那类分析视图里。
- */
-export function baseAmount(t: TransactionLite): number {
-  return t.nativeAmount ?? t.amount
 }
 
 export function aggregate(input: AggregateInput): AnnualReportData {

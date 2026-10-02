@@ -1,3 +1,4 @@
+import { baseAmount } from '../../../lib/amountBasis'
 import { useRef } from 'react'
 import { motion, useInView } from 'framer-motion'
 import { useT } from '@beecount/ui'
@@ -42,7 +43,7 @@ export function PageExtremes({ data }: { data: AnnualReportData }) {
       key: 'largest',
       labelKey: TKEY.page8Largest,
       date: formatDate(data.largestExpense.happenedAt),
-      primary: `${sym}${Math.round(data.largestExpense.amount).toLocaleString()}`,
+      primary: `${sym}${Math.round(baseAmount(data.largestExpense)).toLocaleString()}`,
       secondary:
         data.largestExpense.note ||
         data.largestExpense.categoryName ||
@@ -61,7 +62,7 @@ export function PageExtremes({ data }: { data: AnnualReportData }) {
         data.firstRecord.note ||
         data.firstRecord.categoryName ||
         '—',
-      secondary: `${sym}${Math.round(data.firstRecord.amount).toLocaleString()}`,
+      secondary: `${sym}${Math.round(baseAmount(data.firstRecord)).toLocaleString()}`,
       accent: '#FBBF24',
     })
   }

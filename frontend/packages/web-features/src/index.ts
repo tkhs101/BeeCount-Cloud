@@ -1,3 +1,4 @@
+export * from './lib/amountBasis'
 export * from './components/Amount'
 export * from './components/BackupRestoreGuideDialog'
 export * from './components/CategoryIcon'
