@@ -701,6 +701,70 @@ async def create_category(
     }
 
 
+async def create_budget(
+    user: User,
+    *,
+    amount: float,
+    budget_type: str = "total",
+    category: str | None = None,
+    period: str = "monthly",
+    enabled: bool = True,
+    ledger_id: str | None = None,
+) -> dict[str, Any]:
+    """新建预算。之前 MCP 只有 update_budget,新建预算必须去 Web —— 而记账
+    走 MCP 时这是个很别扭的断点。
+
+    budget_type: 'total'(总预算,不分类)或 'category'(分类预算)。
+    category: 分类预算必填 —— 用**分类名**(与 create_transaction 的 category
+        同口径),服务端反查 sync_id;分类不存在会明确报错。
+    period: 'monthly'(默认)/ 'weekly' / 'yearly'。**实际周期跟随账本的
+        month_start_day**(D5 之后 start_day 已废弃),传 period 只是标注。
+    """
+    if budget_type not in {"total", "category"}:
+        raise ValueError(f"Invalid budget_type: {budget_type}")
+    if period not in {"monthly", "weekly", "yearly"}:
+        raise ValueError(f"Invalid period: {period}")
+    if amount <= 0:
+        raise ValueError("amount must be positive")
+    if budget_type == "category" and not category:
+        raise ValueError("category is required when budget_type is 'category'")
+
+    with SessionLocal() as db:
+        led, ledger_status = _resolve_write_ledger(db, user, ledger_id)
+        if ledger_status is not None:
+            return ledger_status
+        assert led is not None
+        ledger_external_id = led.external_id
+        ledger_name = led.name
+        category_sync_id = (
+            _lookup_category_sync_id(db, user.id, category, "expense")
+            if budget_type == "category"
+            else None
+        )
+
+    body: dict[str, Any] = {
+        "base_change_id": 0,
+        "type": budget_type,
+        "amount": float(amount),
+        "period": period,
+        "enabled": bool(enabled),
+    }
+    if category_sync_id:
+        body["category_id"] = category_sync_id
+
+    settings = get_settings()
+    path = f"{settings.api_prefix}/write/ledgers/{ledger_external_id}/budgets"
+    result = await _self_call("POST", path, user, json=body)
+    return {
+        "sync_id": result.get("entity_id"),
+        "ledger": ledger_name,
+        "budget_type": budget_type,
+        "category": category,
+        "amount": amount,
+        "period": period,
+    }
+
+
 async def update_budget(
     user: User,
     *,

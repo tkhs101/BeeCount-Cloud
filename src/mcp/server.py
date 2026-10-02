@@ -577,6 +577,40 @@ async def create_category(
 
 
 @mcp.tool()
+async def create_budget(
+    ctx: Context,
+    amount: float,
+    budget_type: str = "total",
+    category: str | None = None,
+    period: str = "monthly",
+    enabled: bool = True,
+    ledger_id: str | None = None,
+) -> dict[str, Any]:
+    """Create a spending budget.
+
+    Args:
+        amount: Positive number in the ledger's base currency.
+        budget_type: 'total' (whole-ledger cap) or 'category' (cap for one
+            category). Defaults to 'total'.
+        category: Existing category NAME; required when budget_type is
+            'category'. Use update_budget to change an existing budget's
+            amount, or delete_transaction-style flows for other edits.
+        period: 'monthly' (default), 'weekly', or 'yearly'. In practice the
+            billing period follows the ledger's month-start-day setting.
+        enabled: Create it paused when False.
+        ledger_id: Optional; uses active ledger if omitted.
+    """
+    kw = dict(
+        amount=amount, budget_type=budget_type, category=category,
+        period=period, enabled=enabled, ledger_id=ledger_id,
+    )
+    return await _logged_call(
+        ctx, name="create_budget", scope=SCOPE_MCP_WRITE, kwargs=kw,
+        body=lambda user: write_tools.create_budget(user, **kw),
+    )
+
+
+@mcp.tool()
 async def update_budget(ctx: Context, budget_id: str, amount: float) -> dict[str, Any]:
     """Update a budget's amount."""
     kw = {"budget_id": budget_id, "amount": amount}

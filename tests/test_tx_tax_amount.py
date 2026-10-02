@@ -947,3 +947,65 @@ def test_legacy_dirty_tax_does_not_block_editing(monkeypatch, caplog):
         assert TAX_BUCKET not in ranks, ranks
     finally:
         app.dependency_overrides.clear()
+
+
+# --------------------------------------------------------------------------- #
+# 7. 换算函数的防御分支                                                          #
+# --------------------------------------------------------------------------- #
+
+
+def test_tax_conversion_defensive_branches():
+    """**B10** —— `tax_in_base_currency` 的每个分支都要有测试。
+
+    这几个分支不是「保险起见」,它们是「脏数据下不变式依然成立」的**唯一
+    保证**:`/sync/push` 不经过 snapshot_mutator、merge 也不校验,所以
+    `taxAmount` 大于 amount、负数、非数字,甚至金额为负,都能直接落进
+    projection。没有这些分支,就会算出负税额切片,「分类税前 + 税切片 = 实付」
+    这条不变式当场破掉。
+
+    核心断言只有一个:**返回值永远落在 [0, base_amount] 内**。
+    """
+    from src.routers.read._shared import tax_in_base_currency as conv
+
+    # 正常比例法
+    assert conv(298.0, 3280.0, 3280.0) == 298.0
+    assert conv(5.0, 50.0, 1000.0) == 100.0, "外币按比例折算"
+
+    # tax_amount 为 None(免税 / 未记录)→ 0
+    assert conv(None, 3280.0, 3280.0) == 0.0
+
+    # tax 非法类型 / 非法值
+    assert conv("N/A", 3280.0, 3280.0) == 0.0, "非数字字符串"
+    assert conv("", 3280.0, 3280.0) == 0.0
+    assert conv(0.0, 3280.0, 3280.0) == 0.0
+    assert conv(-298.0, 3280.0, 3280.0) == 0.0, "负税额"
+    # NaN / inf:显式挡掉。靠「NaN 和任何数比较都 False」兜底不可靠 ——
+    # `tax <= 0` 守卫会静默放行,然后 NaN 一路传染到 JSON 响应
+    # (FastAPI 序列化 NaN 会产出非法 JSON)。
+    assert conv(float("nan"), 3280.0, 3280.0) == 0.0
+    assert conv(float("inf"), 3280.0, 3280.0) == 0.0
+    assert conv(298.0, float("nan"), 3280.0) == 298.0, "raw 异常 → 退化 1:1"
+    assert conv(298.0, 3280.0, float("inf")) == 0.0, "base 非有限 → 不产生切片"
+
+    # 金额非正 → 不产生税切片(否则会算出负税额)
+    assert conv(298.0, -100.0, -100.0) == 0.0, "负金额"
+    assert conv(298.0, 0.0, 0.0) == 0.0, "零金额"
+
+    # 税额超过金额 → 夹到 base(脏数据可达:sync/push 不校验)
+    assert conv(5000.0, 100.0, 100.0) == 100.0, "tax>amount 必须夹住,不能溢出"
+    assert 0.0 <= conv(5000.0, 100.0, 100.0) <= 100.0
+
+    # 原币金额推不出比率 → 退化 1:1 并夹住
+    assert conv(298.0, 0.0, 500.0) == 298.0, "raw=0 时按 1:1"
+    assert conv(9999.0, 0.0, 500.0) == 500.0, "1:1 也要夹到 base"
+
+    # base_amount 为 None / 非数字
+    assert conv(298.0, 3280.0, None) == 0.0
+
+    # 不变式的最终形式:任意输入,结果都在 [0, base] 内
+    for tax, raw, base in [
+        (298.0, 3280.0, 3280.0), (5000.0, 100.0, 100.0), (-1.0, -1.0, -1.0),
+        (0.0, 0.0, 0.0), (1e18, 1.0, 1.0), (298.0, None, 3280.0),
+    ]:
+        got = conv(tax, raw, base)
+        assert 0.0 <= got <= max(0.0, base), (tax, raw, base, got)

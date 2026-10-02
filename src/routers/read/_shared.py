@@ -15,6 +15,7 @@ _get_latest_change_id / snapshot_cache 相关 / Flutter ↔ server 字段转换 
 """
 
 import json
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
@@ -739,18 +740,24 @@ def tax_in_base_currency(
         tax = float(tax_amount)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return 0.0
-    if tax <= 0:
+    # NaN / inf 必须显式挡掉:它们和任何数比较都返回 False,`tax <= 0` 这种
+    # 守卫会**静默放行**,然后污染出 NaN 金额并一路传染到 JSON 响应
+    # (FastAPI 序列化 NaN 会变成非法 JSON)。靠比较的偶然顺序兜底不可靠。
+    if not math.isfinite(tax) or tax <= 0:
         return 0.0
     # amount 非正 → 不产生税切片。全链路只有 budget 有 >0 校验,交易金额
     # 本身不校验正负;web write 走 mutator 会拒(快照校验),但 /sync/push
     # 不经过 mutator,脏数据能进来。这里守住,免得负金额算出负税额。
-    base = float(base_amount or 0.0)
-    if base <= 0:
+    try:
+        base = float(base_amount or 0.0)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(base) or base <= 0:
         return 0.0
     try:
         raw = float(raw_amount or 0.0)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         raw = 0.0
-    if raw <= 0:
+    if not math.isfinite(raw) or raw <= 0:
         return min(tax, base)
     return min(base, max(0.0, base * (tax / raw)))

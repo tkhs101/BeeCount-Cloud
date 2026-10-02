@@ -72,6 +72,16 @@ def _make_ledger(client: TestClient, token: str, name: str = "Main") -> str:
     return res.json()["entity_id"]
 
 
+def _login_token(client: TestClient, email: str = "tools@example.com") -> str:
+    r = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "123456", "client_type": "web",
+              "device_name": "pytest-web", "platform": "web"},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["access_token"]
+
+
 def _fetch_user(session_maker, email: str) -> User:
     with session_maker() as db:
         user = db.scalar(select(User).where(User.email == email))
@@ -398,3 +408,85 @@ def test_batch_item_schema_enforces_required_and_numeric() -> None:
     # 正负:schema 放行,留给运行时守卫
     assert adapter.validate_python([{"amount": 0}])[0]["amount"] == 0.0
     assert adapter.validate_python([{"amount": -1}])[0]["amount"] == -1.0
+
+
+def _seed_category(client, hdr, sync_id: str, name: str = "餐饮") -> None:
+    client.post(
+        "/api/v1/sync/push",
+        headers=hdr,
+        json={"device_id": "d-app", "changes": [{
+            "ledger_id": "lg1", "entity_type": "category",
+            "entity_sync_id": sync_id, "action": "upsert",
+            "updated_at": "2026-10-03T00:00:00+00:00",
+            "payload": {"syncId": sync_id, "name": name,
+                        "kind": "expense", "level": 1},
+        }]},
+    )
+
+
+def test_mcp_create_budget(monkeypatch) -> None:
+    """MCP 建总预算 —— 此前 MCP 只有 update_budget,新建预算必须去 Web,
+    而记账全走 MCP 时这是个别扭的断点。"""
+    import asyncio
+    from datetime import timedelta
+
+    from src.mcp.tools import write_tools
+    from src.security import SCOPE_APP_WRITE, SCOPE_WEB_WRITE, _create_token
+
+    client, session_maker = _make_client_and_engine(monkeypatch)
+    monkeypatch.setattr(write_tools, "SessionLocal", session_maker)
+    monkeypatch.setattr(
+        write_tools, "_internal_token",
+        lambda u: _create_token(
+            sub=u.id, token_type="access", expires_delta=timedelta(seconds=60),
+            scopes=[SCOPE_APP_WRITE, SCOPE_WEB_WRITE], client_type="app",
+        ),
+    )
+    try:
+        _register(client)
+        user = _fetch_user(session_maker, "tools@example.com")
+        hdr = {"Authorization": "Bearer x"}
+        # 建账本 + 分类
+        r = client.post("/api/v1/write/ledgers",
+                        headers={"Authorization": "Bearer " + _login_token(client),
+                                 "X-Device-ID": "d-web"},
+                        json={"ledger_id": "lg1", "ledger_name": "Main",
+                              "currency": "CNY"})
+        assert r.status_code == 200, r.text
+
+        out = asyncio.run(write_tools.create_budget(user, amount=30000.0))
+        assert out["sync_id"], out
+        assert out["budget_type"] == "total"
+        assert out["amount"] == 30000.0
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_mcp_create_budget_validation() -> None:
+    """参数校验要发生在 self-call 之前,给 LLM 可读报错。"""
+    import asyncio
+
+    from src.mcp.tools import write_tools
+
+    with pytest.raises(ValueError, match="budget_type"):
+        asyncio.run(write_tools.create_budget(None, amount=100.0, budget_type="bogus"))
+    with pytest.raises(ValueError, match="period"):
+        asyncio.run(write_tools.create_budget(None, amount=100.0, period="daily"))
+    with pytest.raises(ValueError, match="positive"):
+        asyncio.run(write_tools.create_budget(None, amount=0.0))
+    with pytest.raises(ValueError, match="category is required"):
+        asyncio.run(write_tools.create_budget(
+            None, amount=100.0, budget_type="category"))
+
+
+def test_mcp_create_budget_registered() -> None:
+    """MCP 注册表里必须有 create_budget,且参数完整 —— schema 缺参数 LLM 就传不进来。"""
+    import asyncio
+
+    from src.mcp.server import mcp
+
+    tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
+    assert "create_budget" in tools, sorted(tools)
+    props = tools["create_budget"].inputSchema["properties"]
+    for key in ("amount", "budget_type", "category", "period"):
+        assert key in props, sorted(props)
