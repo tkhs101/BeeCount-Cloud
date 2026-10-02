@@ -389,3 +389,39 @@ def test_attach_receipt_cannot_cross_users(monkeypatch) -> None:
         assert owner is not None
     finally:
         app.dependency_overrides.clear()
+
+
+def test_attach_receipt_checks_write_permission_before_uploading(monkeypatch) -> None:
+    """**Y4** —— 权限检查必须发生在**上传之前**。
+
+    附件没有删除端点,孤儿 GC 只在删交易/删附件时触发。所以如果
+    「先上传后 PATCH」的 PATCH 因权限失败,那个 blob 和 AttachmentFile 行
+    就成了删不掉的资源泄漏。这里断言:被拒时 `_upload_attachment` 一次都
+    不该被调用。
+    """
+    client, TS = _make_client()
+    try:
+        user = _setup(client, TS, monkeypatch, "att-perm@t.com")
+
+        async def boom(*a, **k):
+            raise AssertionError(
+                "权限不足时不得上传 —— 会留下删不掉的孤儿文件"
+            )
+
+        monkeypatch.setattr(write_tools, "_upload_attachment", boom)
+        monkeypatch.setattr(
+            write_tools, "_assert_can_write_ledger",
+            _deny("Only ledger owners/editors can attach files"),
+        )
+        with pytest.raises(PermissionError, match="owners/editors"):
+            asyncio.run(write_tools.attach_receipt(
+                user, sync_id="tx1",
+                image_base64=base64.b64encode(_PNG).decode()))
+    finally:
+        app.dependency_overrides.clear()
+
+
+def _deny(msg: str):
+    async def _inner(*a, **k):
+        raise PermissionError(msg)
+    return _inner

@@ -411,6 +411,27 @@ async def attach_receipt(
     )
 
 
+async def _assert_can_write_ledger(user: User, ledger_external_id: str) -> None:
+    """上传前确认用户对该账本有写权限(Owner / Editor)。
+
+    共享账本里 projection.user_id 是**账本所有者**,所以只看 `user_id ==
+    tx.user_id` 挡不住 Viewer 成员 —— 他们能查到这笔交易,却无权 PATCH。
+    """
+    from ...ledger_access import WRITABLE_ROLES, get_accessible_ledger_by_external_id
+
+    with SessionLocal() as db:
+        row = get_accessible_ledger_by_external_id(
+            db, user_id=user.id, ledger_external_id=ledger_external_id
+        )
+    if row is None:
+        raise ValueError(f"Ledger not found: {ledger_external_id}")
+    ledger, role = row
+    if role not in WRITABLE_ROLES:
+        raise PermissionError(
+            f"Only ledger owners/editors can attach files (your role: {role!r})"
+        )
+
+
 async def _attach_receipt_bytes(
     user: User,
     *,
@@ -440,6 +461,16 @@ async def _attach_receipt_bytes(
             raise ValueError("Ledger missing for this tx")
         ledger_external_id = led.external_id
         current = _load_attachments(existing.attachments_json)
+
+    # **上传之前**先验写权限。
+    #
+    # 附件没有删除端点,而孤儿 GC 只在删交易 / 删附件时触发 —— 所以如果
+    # 「先上传后 PATCH」里的 PATCH 因权限失败,那个 blob 和 AttachmentFile
+    # 行就成了删不掉的孤儿。这里把可预见的鉴权失败提前到上传之前。
+    # (真正的写权限检查在 write endpoint 的
+    # `_prepare_write(required_roles={OWNER, EDITOR})`,这里用同一份
+    # WRITABLE_ROLES 常量,避免两套口径。)
+    await _assert_can_write_ledger(user, ledger_external_id)
 
     name = file_name or f"receipt-{sync_id}.{_ext_for_mime(mime)}"
     upload = await _upload_attachment(

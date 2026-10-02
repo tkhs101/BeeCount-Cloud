@@ -445,8 +445,7 @@ def test_mcp_create_budget(monkeypatch) -> None:
     try:
         _register(client)
         user = _fetch_user(session_maker, "tools@example.com")
-        hdr = {"Authorization": "Bearer x"}
-        # 建账本 + 分类
+        # 建账本
         r = client.post("/api/v1/write/ledgers",
                         headers={"Authorization": "Bearer " + _login_token(client),
                                  "X-Device-ID": "d-web"},

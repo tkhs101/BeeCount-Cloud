@@ -20,7 +20,9 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import importlib.util
+import io
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -192,18 +194,67 @@ def test_projection_has_tax_amount_column():
         app.dependency_overrides.clear()
 
 
-def test_migration_0020_is_nullable_add_column_no_backfill():
-    """0020 是纯 nullable 加列,**不做回填** —— 存量行保持无税。"""
+def test_migration_0020_adds_nullable_column_and_preserves_rows(tmp_path):
+    """**迁移的行为**,不是源码里有没有某个字符串。
+
+    上一版这个测试是 `"nullable=True" in src`(源码 grep)+ `assert not
+    hasattr(mod, "BACKFILL_STATEMENT")` —— 那个属性从来就不存在,换任何实现
+    都会通过;真写了内联回填它照样绿。等于什么都没锁。
+
+    这里真跑一遍迁移:先建一张**不含** tax_amount 的 read_tx_projection,
+    塞几行存量数据,再用 alembic 的 op 执行 upgrade(),然后断言:
+      1. 列被加上了
+      2. 可空
+      3. **存量行原样保留**(无回填 → 存量 = 无税)
+    """
+    import sqlalchemy as sa
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
     mod = _load_migration_0020()
     assert mod.revision == "0020_tx_tax_amount"
     assert mod.down_revision == "0019_account_hidden"
-    src = Path(
-        Path(__file__).parent.parent / "alembic" / "versions" / "0020_tx_tax_amount.py"
-    ).read_text(encoding="utf-8")
-    assert "nullable=True" in src
-    assert "tax_amount\"" in src
-    # 迁移链连续:0020 的上家必须是当前 head
-    assert not hasattr(mod, "BACKFILL_STATEMENT")
+
+    db_path = tmp_path / "m.db"
+    engine = sa.create_engine(f"sqlite:///{db_path}")
+    meta = sa.MetaData()
+    sa.Table(
+        "read_tx_projection", meta,
+        sa.Column("ledger_id", sa.String(64), primary_key=True),
+        sa.Column("sync_id", sa.String(255), primary_key=True),
+        sa.Column("amount", sa.Float(), nullable=False),
+        sa.Column("native_amount", sa.Float(), nullable=True),
+    )
+    meta.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(sa.text(
+            "INSERT INTO read_tx_projection (ledger_id, sync_id, amount) "
+            "VALUES ('L1', 'tx1', 100.0)"
+        ))
+        conn.execute(sa.text(
+            "INSERT INTO read_tx_projection (ledger_id, sync_id, amount) "
+            "VALUES ('L1', 'tx2', 250.0)"
+        ))
+
+    with engine.begin() as conn:
+        ctx = MigrationContext.configure(conn)
+        with Operations.context(ctx):
+            mod.upgrade()
+
+    insp = sa.inspect(engine)
+    cols = {c["name"]: c for c in insp.get_columns("read_tx_projection")}
+    assert "tax_amount" in cols, sorted(cols)
+    assert cols["tax_amount"]["nullable"] is True
+
+    with engine.connect() as conn:
+        rows = conn.execute(sa.text(
+            "SELECT sync_id, amount, tax_amount FROM read_tx_projection "
+            "ORDER BY sync_id"
+        )).all()
+    assert len(rows) == 2, rows
+    for sync_id, _amount, tax in rows:
+        assert tax is None, f"{sync_id} 的 tax 应为 NULL(无回填),got {tax!r}"
+    assert [r[1] for r in rows] == [100.0, 250.0], "存量金额不能被动过"
 
 
 # --------------------------------------------------------------------------- #
@@ -678,19 +729,18 @@ def test_csv_export_row_carries_tax(monkeypatch):
         r = client.get("/api/v1/read/workspace/transactions.csv",
                        headers=hdr_web, params={"lang": "en"})
         assert r.status_code == 200, r.text
-        lines = [ln for ln in r.text.splitlines() if ln.strip()]
-        header = lines[0].lstrip("﻿").split(",")
+        # 用 csv 模块解析,别裸 split(",") —— 备注里出现逗号就会整行错位,
+        # 而错位时断言可能仍然「看起来通过」。
+        rows = list(csv.reader(io.StringIO(r.text.lstrip("﻿"))))
+        header = [h.strip() for h in rows[0]]
         assert header[-1] == "Tax"
-        tax_col = len(header) - 1
+        tax_col = header.index("Tax")
         amount_col = header.index("Amount")
 
-        rows = {ln.split(",")[0] + "|" + ln.split(",")[3]: ln.split(",")
-                for ln in lines[1:]}
-        taxed = next(v for k, v in rows.items() if v[tax_col] == "298.00")
-        assert taxed[tax_col] == "298.00"
+        taxed = next(x for x in rows[1:] if x[tax_col] == "298.00")
         assert taxed[amount_col] == "3280.00", "amount 列必须是实付总额"
-        untaxed = next(v for k, v in rows.items() if v[tax_col] == "")
-        assert untaxed[tax_col] == "", "无税写空串,不是 0"
+        untaxed = next(x for x in rows[1:] if x[tax_col] == "")
+        assert untaxed[amount_col] == "100.00", "无税写空串,不是 0"
     finally:
         app.dependency_overrides.clear()
 

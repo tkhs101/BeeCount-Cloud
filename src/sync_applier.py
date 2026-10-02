@@ -210,6 +210,11 @@ _LEDGER_MERGE_SPECS: dict[str, _MergeSpec] = {
         # 消费税税额(0020):漏登记会导致 /sync/push 增量更新时税额被 merge
         # 丢掉 —— CLAUDE.md 点名的「漏 merge 某字段」类 bug 的标准形态
         # (2026-04 budget 那次就是这样 500 的)。
+        #
+        # 注意不对称:登记后**能保住**已有税额(push 别的字段不会冲掉它),
+        # 但**清不掉** —— `_merge_from_spec` 丢弃 payload 里的 None,
+        # 所以 push `taxAmount: null` 会保留旧值。这与 nativeAmount 完全同
+        # 语义,可接受;要清除税额走 Web/MCP(PATCH 显式 null)。
         ("taxAmount", "tax_amount"),
     ]),
 }
