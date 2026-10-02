@@ -314,6 +314,7 @@ const en = {
   'detail.category.level': 'Level',
   'detail.category.empty.title': 'No transactions in this category',
   'detail.category.empty.desc': 'Add one from the transactions page.',
+  'detail.category.taxSliceHint': 'This slice also includes consumption tax extracted from other categories, so the total here is smaller than the pie slice.',
   'detail.category.kpi.total': 'Total',
   'detail.category.kpi.avg': 'Avg / tx',
   'detail.category.kpi.max': 'Largest',

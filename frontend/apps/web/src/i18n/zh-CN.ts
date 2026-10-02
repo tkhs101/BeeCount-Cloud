@@ -819,6 +819,7 @@ const zhCN = {
   'detail.category.level': '层级',
   'detail.category.empty.title': '该分类下还没有交易',
   'detail.category.empty.desc': '可在交易页选这个分类记一笔。',
+  'detail.category.taxSliceHint': '这个分类还包含从其他分类里剥离出来的消费税,所以这里的合计会小于饼图上的扇区值。',
   'detail.category.kpi.total': '累计金额',
   'detail.category.kpi.avg': '笔均',
   'detail.category.kpi.max': '单笔最高',

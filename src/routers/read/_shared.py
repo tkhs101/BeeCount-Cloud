@@ -698,6 +698,9 @@ __all__ = [
     '_owner_map_for_ledgers',
     '_user_info_map',
     '_is_ledger_deleted',
+    # 消费税(0020):原币税额 → 折本位币税额。workspace.py 与 MCP 的
+    # get_analytics_summary 共用同一实现,否则两边口径会打架。
+    'tax_in_base_currency',
     '_visible_workspace_ledgers',
     '_snapshot_ledger_info',
     '_resolve_ledger_name',
@@ -710,3 +713,44 @@ __all__ = [
     '_csv_field',
     '_sanitize_filename',
 ]
+
+
+def tax_in_base_currency(
+    tax_amount: object, raw_amount: object, base_amount: float
+) -> float:
+    """原币税额 → 折账本本位币的税额(0020)。
+
+    **比例法**:`tax / amount` 的比率与币种无关,用该笔自身的隐含汇率换算,
+    保证税额和主金额走**同一个汇率**、不会各自漂移。汇率快照本身已经存在
+    `native_amount` 里,这里只是复用,不额外存一份折算后的税额 ——
+    存两份就等于复制 native_amount 当年「改了 amount 忘了改折算值」的坑。
+
+    - `tax_amount` 为 NULL(免税 / 未记录)→ 0
+    - `base_amount <= 0`(金额非正)→ 0,不产生税切片
+    - `raw_amount <= 0` 推不出比率 → 退化 1:1 并夹到 base_amount,与
+      native_amount 既有退化规则同口径
+
+    结果永远夹在 `[0, base_amount]` 内,保证「分类税前 + 税切片 = 实付」
+    这条不变式在任何数据下都成立,不会因为脏数据算出负税额。
+    """
+    if tax_amount is None:
+        return 0.0
+    try:
+        tax = float(tax_amount)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    if tax <= 0:
+        return 0.0
+    # amount 非正 → 不产生税切片。全链路只有 budget 有 >0 校验,交易金额
+    # 本身不校验正负;web write 走 mutator 会拒(快照校验),但 /sync/push
+    # 不经过 mutator,脏数据能进来。这里守住,免得负金额算出负税额。
+    base = float(base_amount or 0.0)
+    if base <= 0:
+        return 0.0
+    try:
+        raw = float(raw_amount or 0.0)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raw = 0.0
+    if raw <= 0:
+        return min(tax, base)
+    return min(base, max(0.0, base * (tax / raw)))

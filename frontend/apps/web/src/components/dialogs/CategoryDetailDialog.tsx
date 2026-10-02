@@ -64,6 +64,13 @@ interface Props {
   ledgerMonthStartDay?: number
 }
 
+/**
+ * 服务端把消费税归入的分类名(`config.tax_category_name`,env `TAX_CATEGORY_NAME`
+ * 可改,默认「税与保险」)。Web 端没有那个 env,所以只能对默认值;改了 env 的
+ * 部署会少显示这一行提示,不影响数字正确性。
+ */
+const TAX_CATEGORY_NAME = '税与保险'
+
 interface StatsAgg {
   count: number
   /** 税前合计(与饼图分类切片同口径 —— 这里曾用原币全额算,和饼图对不上) */
@@ -192,6 +199,15 @@ export function CategoryDetailDialog({
             ) : null}
             <div className="flex min-w-0 flex-col">
               <span className="truncate text-lg font-semibold">{category?.name || ''}</span>
+              {/* 消费税(0020):饼图上「税与保险」是一个**虚拟扇区** —— 它还包含
+                  从餐饮/购物等分类里剥出来的消费税,而那些交易并不真的挂在
+                  「税与保险」下。所以点进来看到的合计必然**小于**扇区值。
+                  不说清楚的话用户会以为数据丢了。 */}
+              {category?.name?.trim() === TAX_CATEGORY_NAME ? (
+                <span className="mt-1 text-[11px] font-normal normal-case tracking-normal text-muted-foreground">
+                  {t('detail.category.taxSliceHint')}
+                </span>
+              ) : null}
               <span
                 className={`mt-0.5 flex items-center gap-1.5 text-[11px] font-normal uppercase tracking-[0.18em] ${kindToneClass}`}
               >

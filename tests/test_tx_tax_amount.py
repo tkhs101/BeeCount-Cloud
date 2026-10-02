@@ -856,3 +856,44 @@ def test_web_invalid_tax_returns_400_not_500(monkeypatch) -> None:
         assert r.status_code == 200, r.text[:200]
     finally:
         app.dependency_overrides.clear()
+
+
+def test_mcp_analytics_matches_web_slice(monkeypatch):
+    """**Y1 回归锁** —— MCP 的 `get_analytics_summary` 必须和 Web 的
+    `workspace_analytics` **同一套切片**。
+
+    用户的记账入口是 MCP。如果 MCP 不剥税,LLM 会照着 MCP 的数回答
+    「餐饮花了 3280」,而界面饼图显示「餐饮 2982 + 税与保险 298」——
+    同一个问题两个答案。expense 总额两边都保持全额。
+    """
+    from src.mcp.tools import read_tools
+
+    client, TS = _make_client()
+    # read_tools 直接 `with SessionLocal()` 查 projection —— 必须打到测试库
+    monkeypatch.setattr(read_tools, "SessionLocal", TS)
+    try:
+        app_token, web_token = _two_tokens(client, "tax-mcp-ana@t.com")
+        hdr_app = {"Authorization": f"Bearer {app_token}"}
+        hdr_web = {"Authorization": f"Bearer {web_token}"}
+        _seed_taxed_expense(client, hdr_app, amount=3280.0, tax=298.0)
+        _push(client, hdr_app, "lg1", "transaction", "tx2",
+              {"syncId": "tx2", "type": "expense", "amount": 50000.0,
+               "happenedAt": _iso(), "categoryName": TAX_BUCKET})
+
+        user = _fetch_user(TS, "tax-mcp-ana@t.com")
+        mcp_out = read_tools.get_analytics_summary(user, scope="all")
+        mcp_ranks = {r["name"]: r["total"] for r in mcp_out["top_categories"]}
+
+        web_out = _analytics(client, hdr_web)
+        web_ranks = {r["category_name"]: r["total"] for r in web_out["category_ranks"]}
+
+        assert abs(mcp_out["expense"] - web_out["summary"]["expense_total"]) < 1e-6
+        assert abs(mcp_out["expense"] - 53280.0) < 1e-6, "总额仍全额"
+        for name in ("餐饮", TAX_BUCKET):
+            assert name in mcp_ranks, (name, mcp_ranks)
+            assert abs(mcp_ranks[name] - web_ranks[name]) < 1e-2, (
+                f"MCP 与 Web 对「{name}」口径不一致: {mcp_ranks[name]} vs {web_ranks[name]}"
+            )
+        assert abs(mcp_out["tax_total"] - 298.0) < 1e-6, mcp_out["tax_total"]
+    finally:
+        app.dependency_overrides.clear()

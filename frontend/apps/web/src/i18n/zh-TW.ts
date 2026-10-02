@@ -312,6 +312,7 @@ const zhTW = {
   'detail.category.level': '層級',
   'detail.category.empty.title': '該分類下還沒有交易',
   'detail.category.empty.desc': '可在交易頁選這個分類記一筆。',
+  'detail.category.taxSliceHint': '這個分類還包含從其他分類剝離出來的消費稅,所以這裡的合計會小於圓餅圖上的扇區值。',
   'detail.category.kpi.total': '累計金額',
   'detail.category.kpi.avg': '筆均',
   'detail.category.kpi.max': '單筆最高',

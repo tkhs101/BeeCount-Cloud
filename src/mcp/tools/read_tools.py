@@ -31,7 +31,8 @@ from ...models import (
 
 # 复用 read 端的唯一权威"软删除"判定 —— 保证 MCP 与 web/mobile 账本可见性口径
 # 一致(issue #31)。read._shared 不依赖 mcp,无循环 import。
-from ...routers.read._shared import _is_ledger_deleted
+from ...config import get_settings
+from ...routers.read._shared import _is_ledger_deleted, tax_in_base_currency
 
 # ---------- helpers ----------------------------------------------------------
 
@@ -428,12 +429,24 @@ def get_analytics_summary(
         expense = sum(_native(r) for r in rows if r.tx_type == "expense")
 
         # 分类排名 — 按支出金额 top 10
+        # 消费税(0020):与 web 的 workspace_analytics **同一套切片** —— 税额从
+        # 原分类剥出归入「税与保险」。不做的话 MCP 报「餐饮 3280」而 Web 饼图
+        # 显示「餐饮 2982 + 税与保险 298」,LLM 照 MCP 的数回答用户就会和
+        # 界面打架。expense 总额仍然全额(不变式)。
+        tax_bucket = (get_settings().tax_category_name or "").strip() or "税与保险"
         cat_total: dict[str, float] = {}
+        tax_total = 0.0
         for r in rows:
             if r.tx_type != "expense":
                 continue
+            base = _native(r)
+            tax_native = tax_in_base_currency(r.tax_amount, r.amount, base)
             name = r.category_name or "(未分类)"
-            cat_total[name] = cat_total.get(name, 0) + _native(r)
+            cat_total[name] = cat_total.get(name, 0.0) + (base - tax_native)
+            if tax_native > 0:
+                tax_total += tax_native
+        if tax_total > 0:
+            cat_total[tax_bucket] = cat_total.get(tax_bucket, 0.0) + tax_total
         ranks = sorted(cat_total.items(), key=lambda x: -x[1])[:10]
 
         return {
@@ -445,6 +458,9 @@ def get_analytics_summary(
             "balance": round(income - expense, 2),
             "transaction_count": len(rows),
             "top_categories": [{"name": n, "total": round(v, 2)} for n, v in ranks],
+            # 消费税合计(0020)。给 LLM 一个直接可答的数,不用自己去
+            # top_categories 里找「税与保险」那一项。
+            "tax_total": round(tax_total, 2),
         }
 
 
