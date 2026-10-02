@@ -27,11 +27,11 @@ from ...models import (
     Ledger,
     ReadBudgetProjection,
     ReadTxProjection,
+    User,
     UserAccountProjection,
     UserCategoryProjection,
     UserExchangeRateProjection,
     UserTagProjection,
-    User,
 )
 from ...security import SCOPE_APP_WRITE, _create_token
 from .read_tools import _parse_dt, _resolve_ledger, live_ledgers
@@ -87,6 +87,147 @@ async def _self_call(method: str, path: str, user: User, **kwargs: Any) -> dict[
         return resp.json()
     except Exception:
         return {"_raw": resp.text}
+
+
+# ---------- 交易附件(F3 / #513)------------------------------------------------
+
+# base64 解码前先按编码长度估算解码后大小:一个超大 base64 串如果先解码
+# 再判断,会先吃满内存。4 个 base64 字符 → 3 字节,留 4% 余量给 padding。
+_B64_DECODE_RATIO = 0.75
+_B64_HEADROOM = 1.05
+
+# 不猜 MIME 时按扩展名兜底。image/* 走这一档;其余按二进制。
+_EXT_MIME = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".gif": "image/gif", ".webp": "image/webp", ".heic": "image/heic",
+    ".heif": "image/heif", ".pdf": "application/pdf",
+}
+
+
+def _decode_base64_image(image_base64: str) -> tuple[bytes, str | None]:
+    """base64 图片 → ``(raw_bytes, mime_from_prefix)``。
+
+    同时接受裸 base64 和 ``data:image/jpeg;base64,`` 前缀(官方已上线的同名
+    工具两种都收,保持一致)。**解码前**先按编码长度估算大小并比对上限 ——
+    超限直接拒,不在内存里展开。
+
+    上限取 `attachment_max_upload_bytes`(默认 64MB)再放宽 1%,因为
+    attachment 端点判的是解码后大小,而 base64 本身膨胀 ~33%。
+    """
+    import base64
+    import binascii
+
+    text = (image_base64 or "").strip()
+    mime: str | None = None
+    if text.lower().startswith("data:"):
+        header, _, payload = text.partition(",")
+        if not _:
+            raise ValueError("image_base64: malformed data URL")
+        mime = header[len("data:"):].split(";")[0] or None
+        text = payload.strip()
+    if not text:
+        raise ValueError("image_base64 is empty")
+
+    max_bytes = int(get_settings().attachment_max_upload_bytes)
+    estimated = len(text) * _B64_DECODE_RATIO / _B64_HEADROOM
+    if estimated > max_bytes:
+        raise ValueError(
+            f"Attachment too large: ~{int(estimated)} bytes exceeds the "
+            f"{max_bytes} byte limit"
+        )
+    try:
+        raw = base64.b64decode(text, validate=False)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"image_base64 is not valid base64: {exc}") from exc
+    if not raw:
+        raise ValueError("image_base64 decoded to zero bytes")
+    # base64 长度只是估算,解码后再按真值判一次
+    if len(raw) > max_bytes:
+        raise ValueError(
+            f"Attachment too large: {len(raw)} bytes exceeds the {max_bytes} byte limit"
+        )
+    return raw, mime
+
+
+def _guess_mime(filename: str | None, fallback: str | None) -> str | None:
+    if fallback:
+        return fallback
+    if not filename:
+        return "image/jpeg"
+    lower = filename.lower()
+    for ext, mime in _EXT_MIME.items():
+        if lower.endswith(ext):
+            return mime
+    return "application/octet-stream"
+
+
+async def _upload_attachment(
+    user: User, ledger_external_id: str, raw: bytes, filename: str, mime: str | None
+) -> dict[str, Any]:
+    """把字节流交给 `/attachments/upload`(multipart self-call)。
+
+    返回 `AttachmentUploadOut`:`{file_id, sha256, size, mime_type, file_name, ...}`。
+    sha256 去重由端点自己做(命中已有文件直接返回,不重复落盘)。
+    """
+    settings = get_settings()
+    path = f"{settings.api_prefix}/attachments/upload"
+    # multipart:`data` 走普通字段,`files` 走文件部分。别和 `json=` 同时给。
+    return await _self_call(
+        "POST", path, user,
+        data={"ledger_id": ledger_external_id},
+        files={"file": (filename, raw, mime or "application/octet-stream")},
+    )
+
+
+def _load_attachments(attachments_json: str | None) -> list[dict[str, Any]]:
+    """projection 里的 `attachments_json` → `AttachmentRef` 列表。
+
+    坏 JSON 不抛异常,退化成空列表 —— 附加新图不该因为一笔历史脏数据失败。
+    服务端 schema 是弱类型 `list[dict[str, Any]]`(schemas.py),零校验。
+    """
+    import json
+
+    if not attachments_json:
+        return []
+    try:
+        parsed = json.loads(attachments_json)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [item for item in parsed if isinstance(item, dict)]
+
+
+def _ext_for_mime(mime: str | None) -> str:
+    """MIME → 扩展名(给默认文件名用)。认不出就给 .jpg(小票绝大多数是 jpeg)。"""
+    if not mime:
+        return "jpg"
+    for ext, known in _EXT_MIME.items():
+        if known == mime:
+            return ext.lstrip(".")
+    return "jpg"
+
+
+def _build_attachment_ref(upload: dict[str, Any], sort_order: int) -> dict[str, Any]:
+    """`AttachmentUploadOut` → 写进 `attachments_json` 的 `AttachmentRef`。
+
+    字段名以 `frontend/packages/api-client/src/types.ts:126-135` 为准
+    (camelCase);`fileName` 存的是 `<file_id>_<原名>` 拼接形式,见
+    `TransactionsPage.tsx:1329-1333`。这些字段是 GC 的反向引用依据 ——
+    `projection.py:768-788` 按 `cloudFileId` 查有没有交易引用它。
+    """
+    file_id = str(upload.get("file_id") or "")
+    if not file_id:
+        raise ValueError(f"Attachment upload returned no file_id: {upload}")
+    original = str(upload.get("file_name") or "attachment")
+    return {
+        "fileName": f"{file_id}_{original}",
+        "originalName": original,
+        "fileSize": upload.get("size"),
+        "sortOrder": sort_order,
+        "cloudFileId": file_id,
+        "cloudSha256": upload.get("sha256"),
+    }
 
 
 # ---------- ledger resolution for writes ------------------------------------
@@ -253,6 +394,134 @@ async def create_transaction(
         "account": account,
         "_meta": result,
     }
+
+
+async def attach_receipt(
+    user: User,
+    *,
+    sync_id: str,
+    image_base64: str,
+    file_name: str | None = None,
+    mime_type: str | None = None,
+) -> dict[str, Any]:
+    """给**已有**交易附上一张小票图片(不改金额/分类)。
+
+    image_base64:裸 base64 或 `data:image/jpeg;base64,` 前缀都行。
+    上限受 server 的 `attachment_max_upload_bytes` 约束(默认 64MB);
+    超限在解码前就会被拒,不会先把超大串展开进内存。
+
+    同一张图重复传不会占两份空间 —— server 按 sha256 去重。
+    新图追加到该笔已有附件之后(sortOrder 递增)。
+
+    **不存在的 sync_id 会报错,不会新建交易** —— 附加不是创建,两者语义不同。"""
+    raw, prefix_mime = _decode_base64_image(image_base64)
+    mime = _guess_mime(file_name, mime_type or prefix_mime)
+
+    with SessionLocal() as db:
+        existing = db.scalar(
+            select(ReadTxProjection).where(
+                ReadTxProjection.user_id == user.id,
+                ReadTxProjection.sync_id == sync_id,
+            )
+        )
+        if existing is None:
+            raise ValueError(f"Transaction not found: {sync_id}")
+        led = db.scalar(select(Ledger).where(Ledger.id == existing.ledger_id))
+        if led is None:
+            raise ValueError("Ledger missing for this tx")
+        ledger_external_id = led.external_id
+        current = _load_attachments(existing.attachments_json)
+
+    name = file_name or f"receipt-{sync_id}.{_ext_for_mime(mime)}"
+    upload = await _upload_attachment(
+        user, ledger_external_id, raw, name, mime,
+    )
+    ref = _build_attachment_ref(upload, sort_order=len(current))
+    merged = [*current, ref]
+
+    settings = get_settings()
+    path = (
+        f"{settings.api_prefix}/write/ledgers/{ledger_external_id}"
+        f"/transactions/{sync_id}"
+    )
+    await _self_call("PATCH", path, user, json={"base_change_id": 0, "attachments": merged})
+    return {
+        "sync_id": sync_id,
+        "attachment": ref,
+        "attachment_count": len(merged),
+        "_meta": upload,
+    }
+
+
+async def create_transaction_with_receipt(
+    user: User,
+    *,
+    amount: float,
+    image_base64: str,
+    tx_type: str = "expense",
+    category: str | None = None,
+    account: str | None = None,
+    happened_at: str | None = None,
+    note: str | None = None,
+    tags: list[str] | None = None,
+    ledger_id: str | None = None,
+    currency: str | None = None,
+    tax_amount: float | None = None,
+    file_name: str | None = None,
+    mime_type: str | None = None,
+) -> dict[str, Any]:
+    """**建交易 + 附小票图**一步到位 —— 拍完小票记一笔的推荐入口。
+
+    等价于 create_transaction 再 attach_receipt,但少了中间的「已建未附」
+    状态,也少一次 LLM 往返。
+
+    参数与 create_transaction 完全一致,另加 image_base64(裸 base64 或
+    `data:image/jpeg;base64,` 前缀)。tax_amount 语义相同:消费税绝对值,
+    照抄小票不要按税率倒算。
+
+    如果建交易成功但传图失败,会**明确报错并给出已建的 sync_id** —— 图丢了
+    但账没丢,补传用 attach_receipt 即可,不要重复建交易。"""
+    raw, prefix_mime = _decode_base64_image(image_base64)
+    mime = _guess_mime(file_name, mime_type or prefix_mime)
+
+    created = await create_transaction(
+        user,
+        amount=amount,
+        tx_type=tx_type,
+        category=category,
+        account=account,
+        happened_at=happened_at,
+        note=note,
+        tags=tags,
+        ledger_id=ledger_id,
+        currency=currency,
+        tax_amount=tax_amount,
+    )
+    sync_id = created.get("sync_id")
+    if not sync_id:
+        raise ValueError(f"Transaction created but no sync_id returned: {created}")
+
+    name = file_name or f"receipt-{sync_id}.{_ext_for_mime(mime)}"
+    try:
+        attached = await attach_receipt(
+            user,
+            sync_id=str(sync_id),
+            image_base64=image_base64,
+            file_name=name,
+            mime_type=mime,
+        )
+    except Exception as exc:
+        # 账已经落库,图失败不能报成「整笔失败」—— 那会诱导 LLM 重复建账。
+        return {
+            **created,
+            "attachment_error": str(exc),
+            "attachment_hint": (
+                f"Transaction {sync_id} WAS created; only the image upload failed. "
+                f"Retry the image with attach_receipt(sync_id={sync_id!r}, ...) — "
+                f"do NOT create the transaction again."
+            ),
+        }
+    return {**created, "attachment": attached.get("attachment"), "_attached": attached}
 
 
 async def update_transaction(

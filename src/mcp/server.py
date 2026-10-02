@@ -391,6 +391,98 @@ async def create_transaction(
 
 
 @mcp.tool()
+async def attach_receipt(
+    ctx: Context,
+    sync_id: str,
+    image_base64: str,
+    file_name: str | None = None,
+    mime_type: str | None = None,
+) -> dict[str, Any]:
+    """Attach a receipt photo to an EXISTING transaction.
+
+    Use this when the expense is already recorded and you only have the
+    picture to add. To record the expense AND the picture together, prefer
+    create_transaction_with_receipt.
+
+    Args:
+        sync_id: The transaction to attach to. Must already exist — this
+            never creates a transaction.
+        image_base64: Raw base64, or a `data:image/jpeg;base64,` prefix.
+            Re-sending the same image does not store it twice (the server
+            deduplicates on sha256).
+        file_name: Optional display name; inferred from the prefix or
+            extension when omitted.
+        mime_type: Optional; inferred when omitted.
+    """
+    kw = dict(
+        sync_id=sync_id, image_base64=image_base64, file_name=file_name,
+        mime_type=mime_type,
+    )
+    return await _logged_call(
+        ctx, name="attach_receipt", scope=SCOPE_MCP_WRITE, kwargs=kw,
+        body=lambda user: write_tools.attach_receipt(user, **kw),
+    )
+
+
+@mcp.tool()
+async def create_transaction_with_receipt(
+    ctx: Context,
+    amount: float,
+    image_base64: str,
+    tx_type: str = "expense",
+    category: str | None = None,
+    account: str | None = None,
+    happened_at: str | None = None,
+    note: str | None = None,
+    tags: list[str] | None = None,
+    ledger_id: str | None = None,
+    currency: str | None = None,
+    tax_amount: float | None = None,
+    file_name: str | None = None,
+    mime_type: str | None = None,
+) -> dict[str, Any]:
+    """Create a transaction AND attach its receipt photo in one step.
+
+    This is the preferred entry point when the user hands you a receipt
+    picture: one call instead of create_transaction followed by attach_receipt.
+
+    Args:
+        amount: Positive number; for an expense this is the TOTAL PAID
+            (tax-inclusive), not the pre-tax price.
+        image_base64: Raw base64, or a `data:image/jpeg;base64,` prefix.
+        tx_type: 'expense' (default), 'income', or 'transfer'.
+        category: Existing category name (server rejects unknown names).
+        account: Existing account name; the from-account for transfers.
+        happened_at: ISO date or datetime. Defaults to now.
+        note: Optional memo — the merchant name usually goes here.
+        tags: Optional list of tag names.
+        ledger_id: Optional; uses active ledger if omitted.
+        currency: ISO 4217 code for foreign-currency amounts.
+        tax_amount: Consumption tax inside `amount` (Japan's 消費税), as the
+            ABSOLUTE figure printed on the receipt — do not derive it from a
+            rate, retailers round differently. Expense only.
+        file_name: Optional display name; inferred when omitted.
+        mime_type: Optional; inferred when omitted.
+
+    Returns the transaction plus `attachment`. If only the image upload
+    failed, the result carries `attachment_error` and an `attachment_hint`:
+    the transaction WAS created — retry the image with attach_receipt and do
+    NOT create the transaction again.
+    """
+    kw = dict(
+        amount=amount, image_base64=image_base64, tx_type=tx_type,
+        category=category, account=account, happened_at=happened_at, note=note,
+        tags=tags, ledger_id=ledger_id, currency=currency,
+        tax_amount=tax_amount, file_name=file_name, mime_type=mime_type,
+    )
+    return await _logged_call(
+        ctx, name="create_transaction_with_receipt", scope=SCOPE_MCP_WRITE,
+        kwargs=kw,
+        body=lambda user: write_tools.create_transaction_with_receipt(user, **kw),
+    )
+
+
+@mcp.tool()
 async def create_transactions(
     ctx: Context,
     transactions: list[BatchTxItem],

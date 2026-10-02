@@ -28,10 +28,10 @@ from ...models import (
     UserCategoryProjection,
     UserTagProjection,
 )
+
 # 复用 read 端的唯一权威"软删除"判定 —— 保证 MCP 与 web/mobile 账本可见性口径
 # 一致(issue #31)。read._shared 不依赖 mcp,无循环 import。
 from ...routers.read._shared import _is_ledger_deleted
-
 
 # ---------- helpers ----------------------------------------------------------
 
@@ -91,7 +91,21 @@ def _serialize_tx(row: ReadTxProjection, category_name: str | None) -> dict[str,
         "tags": row.tags_csv or "",
         "currency_code": row.currency_code,
         "native_amount": row.native_amount,
+        # 附件(0020 前的 #513 缺口):此前只有 get_transaction 返回附件,
+        # 列表里看不到 —— LLM 判断不了「这笔到底有没有小票」。
+        "attachments": _safe_attachments(row.attachments_json),
     }
+
+
+def _safe_attachments(attachments_json: str | None) -> list[dict[str, Any]]:
+    """`attachments_json` → 列表。坏 JSON 退化成空列表,不抛。"""
+    if not attachments_json:
+        return []
+    try:
+        parsed = json.loads(attachments_json)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return [item for item in parsed if isinstance(item, dict)] if isinstance(parsed, list) else []
 
 
 # ---------- tool implementations --------------------------------------------

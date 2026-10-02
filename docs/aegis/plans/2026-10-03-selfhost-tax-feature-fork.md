@@ -400,14 +400,75 @@ cd frontend && pnpm -C apps/web test
 
 ---
 
-### T5 · PWA 分享图片记账（0.5 天，独立阶段 — D5）
+### T5 · MCP 附件（F3 / #513，1 天）
+
+> **落盘时补记**：F3 在 §1 声明为目标却没有对应任务，且原 T5 错误引用了
+> 「T2 已实现的上传路径」（T2 是批量修复，不含上传）。这是计划自身的缺陷。
+
+**Change Necessity**：REST 层**全部现成** —— `/attachments/upload`（multipart
+`ledger_id` + `file`）、sha256 去重、`attachment_files` 表、`attachments_json`
+关联、孤儿 GC、Web 端展示链路都已在跑。缺的只是 MCP 那一层接线。这不是
+「帮我加个功能」，而是「你们已经有这个能力，只是没接到 MCP 上」。
+
+**真正的阻塞点**（调查结论已修正）：
+
+1. **`deps.py:290-297` 的 `get_current_user` 显式拒绝 PAT** ——「PAT can only be
+   used for MCP endpoints」。所以 MCP **不能**直接调 `/attachments/upload`，
+   必须走 §2.2 那套 self-call 短期 JWT（scope `SCOPE_APP_WRITE`，正好满足
+   `attachments.py:28-29` 的 `_WRITE_SCOPE_DEP`）。
+2. ~~`_self_call` 只支持 `json=`~~ —— **这条是错的**。`write_tools.py:79` 是
+   `client.request(method, path, headers=headers, **kwargs)` 直接透传，httpx
+   原生支持 `files=` / `data=`，multipart 无需改底层。已实测确认 httpx
+   `request()` 签名含 `data` / `files`。
+
+**改动**：
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `write_tools.py` | 新增 `_upload_attachment(...)`：算 sha256 → self-call multipart(`files=`/`data=`) → 返回 `AttachmentUploadOut` |
+| 2 | `write_tools.py` | 新增 `attach_receipt(user, *, sync_id, image_base64, ...)`：base64 → bytes → 上传 → 组装 `AttachmentRef` → PATCH 交易的 `attachments` |
+| 3 | `write_tools.py` | 新增 `create_transaction_with_receipt(...)`：建交易 + 附图（一步到位，避免「先建后补」中间态） |
+| 4 | `server.py` | 注册两个新工具 + docstring（LLM 读的就是这段 Args） |
+| 5 | `read_tools.py` | `list_transactions` 的 `_serialize_tx` 当前**不含 attachments**（只有 `get_transaction` 有）→ 补上，否则列表里看不到图 |
+
+**附件对象结构**（`types.ts:126-135` 为准，服务端 `schemas.py:519` 是弱类型
+`list[dict[str, Any]]`，零校验）：`{fileName, originalName, fileSize, sortOrder,
+cloudFileId, cloudSha256}`。`fileName` 存的是 `<file_id>_<原名>` 拼接形式
+（见 `TransactionsPage.tsx:1329-1333`）。
+
+**base64 输入处理**：接受裸 base64 与 `data:image/jpeg;base64,` 前缀两种
+（与官方已上线的同名工具保持一致）。**必须在上传前解码 + 校验大小**
+（`attachment_max_upload_bytes`，默认 64MB），否则一个超大 base64 串会在
+解码时吃满内存。
+
+**孤儿 GC 注意**：`projection.py:768-788` 的 `_extract_tx_cloud_file_ids` 按
+`cloudFileId` 反查，`gc_orphan_attachments` 会清掉没被任何交易引用的文件。
+所以**上传和 PATCH 必须在同一个操作里完成**，中间态太长会有极小概率被 GC 扫走
+（默认延迟，且 `attach_receipt` 是同步的，不构成实际风险）。
+
+**测试**：新增 `tests/test_mcp_attachments.py`
+- `test_self_call_supports_multipart`（打桩验证 files/data 透传）
+- `test_attach_receipt_uploads_and_links`
+- `test_create_transaction_with_receipt_creates_tx_and_attachment`
+- `test_attach_receipt_rejects_oversized`
+- `test_attach_receipt_rejects_unknown_tx`
+
+**Commands**：`python -m pytest tests/test_mcp_attachments.py -q`
+
+**验收**：MCP 传一张小票图 → 交易带上附件，Web 详情弹窗能看到缩略图。
+
+---
+
+### T6 · PWA 分享图片记账（0.5 天，独立阶段 — D5）
 
 **Change Necessity**：接收管道已铺好，只差接上（上游自己留的 TODO，`ShareIncomingPage.tsx:103`）。
 
 - 现状：service worker 已缓存 share-target 投递的文件 → `ShareIncomingPage.tsx:40-107` 能读到图片，
   但 `:106` 直接弹 `t('pwa.share.imageNotYet')` 就跳转
-- 接上：拿到 `File` → 复用 T2 已实现的 MCP/前端上传路径 → 建交易 + 写 `attachments_json`
-- 依赖 T2 的附件上传能力（如果 T2 已在前端实现 `createTransactionWithReceipt`，此处直接复用）
+- 接上：拿到 `File` → 走**前端**已有的 `uploadAttachment`（`packages/api-client/src/attachments.ts`）
+  + `createTransaction` → 建交易 + 写 `attachments_json`
+- 依赖：前端上传链路已现成，**不依赖 T5**（T5 是 MCP 侧接线，前端各走各的）
+- 新增 i18n key 三语：`pwa.share.imageReady` / `pwa.share.imageFailed`
 
 **验收**：iPhone 相册长按分享小票给 BeeCount → 落地一笔带图交易。
 **Risk**：iOS share target 的 `launchQueue` 时序（`ShareIncomingPage.tsx:121-122` 已注释说明有 fallback 竞态）。
@@ -444,9 +505,10 @@ cd frontend && pnpm -C apps/web test
 
 | 阶段 | 内容 | 量 | 执行者 | 解除的痛点 |
 |---|---|---|---|---|
-| **T2** | MCP 批量 bug | **1 小时** | 本地 | **批量导入不通** |
-| **T4** | 消费税字段 | 3 天 | 本地 | 饼图看到税 |
-| **T5** | PWA 分享图片 | 0.5 天 | 本地 | 小票拍照进账 |
+| **T2** | MCP 批量 bug | **1 小时** | 本地 ✅ | **批量导入不通** |
+| **T4** | 消费税字段 | 3 天 | 本地 ✅ | 饼图看到税 |
+| **T5** | MCP 附件 | 1 天 | 本地 | 每笔附小票 |
+| **T6** | PWA 分享图片 | 0.5 天 | 本地 | 小票拍照进账 |
 | **T1** | 一次性部署到 VPS | 0.5 天 | **用户** | 摆脱官方托管 |
 | **T3** | 用 MCP 建「税与保险」分类 | 1 小时 | **用户**（部署后） | 住民税/国保有归处 |
 

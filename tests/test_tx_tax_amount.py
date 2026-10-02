@@ -572,6 +572,7 @@ def test_mcp_read_tools_report_tax_amount():
         tags_csv = ""
         currency_code = None
         native_amount = None
+        attachments_json = None
 
     out = _serialize_tx(FakeRow(), None)
     assert out["amount"] == 3280.0, "amount 必须是实付总额"
