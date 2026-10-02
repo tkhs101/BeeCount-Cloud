@@ -632,9 +632,38 @@ function TopList({
 // Aggregation helpers
 // --------------------------------------------------------------------------
 
-function aggregate(transactions: WorkspaceTransaction[], startDay = 1): StatsAgg {
+/**
+ * 原币税额 → 折本位币税额(0020)。
+ *
+ * 与 server 的 `routers/read/_shared.tax_in_base_currency` **同一套公式**:
+ * `tax / amount` 的比率与币种无关,按该笔自身的隐含汇率换算,保证税额和主
+ * 金额走同一个汇率、不会各自漂移。
+ *
+ * 结果夹在 `[0, base]` 内 —— 脏数据(税额大于金额)也保证「净额 ≥ 0」且
+ * 「净额 + 税 ≤ 实付」,不变式不会被打破。
+ */
+export function taxInBaseCurrency(
+  taxAmount: number | null | undefined,
+  rawAmount: number | null | undefined,
+  baseAmount: number
+): number {
+  if (taxAmount == null) return 0
+  const tax = Math.abs(Number(taxAmount) || 0)
+  if (!(tax > 0)) return 0
+  const base = Math.abs(Number(baseAmount) || 0)
+  if (!(base > 0)) return 0
+  const raw = Math.abs(Number(rawAmount) || 0)
+  if (!(raw > 0)) return Math.min(tax, base)
+  return Math.max(0, Math.min(base, base * (tax / raw)))
+}
+
+export function aggregate(
+  transactions: WorkspaceTransaction[],
+  startDay = 1
+): StatsAgg {
   let total = 0
   let taxTotal = 0
+  let counted = 0
   let maxAmount = 0
   let maxTx: WorkspaceTransaction | null = null
   const monthlyMap = new Map<string, { amount: number; count: number }>()
@@ -643,16 +672,28 @@ function aggregate(transactions: WorkspaceTransaction[], startDay = 1): StatsAgg
   const tagMap = new Map<string, { count: number; amount: number; color: string | null }>()
 
   for (const tx of transactions) {
-    // 口径对齐 server 的账本维度统计(workspace_analytics,0018/0020):
+    // 排除标记为「不计入收支统计」的交易 —— server 的 workspace_analytics 在
+    // SQL 层就把它们滤掉了(`exclude_from_stats == false`),而这里是客户端
+    // 聚合,漏掉这一层就会让「分类详情合计」比「饼图切片」大,点进去对不上账。
+    // 下面 TransactionList 仍会列出这些交易(用户要能看到自己排除了什么),
+    // 所以只在这里滤,不在拉数据时滤。
+    if (tx.exclude_from_stats) continue
+
+    // 其余口径对齐 server 的账本维度统计(workspace_analytics,0018/0020):
     //   基数 = coalesce(native_amount, amount)  ← 这里原来只读原币 amount,
     //     外币交易会和饼图对不上
-    //   净额 = 基数 - 税额                       ← 饼图分类切片是税前,
-    //     这里原来用全额,和饼图切片对不上
+    //   净额 = 基数 - 折本位币税额                ← 饼图分类切片是税前
+    //
+    // 税额必须**按比率折成本位币**再减:`base * (tax / amount)`。直接拿原币
+    // 税额去减本位币基数是错的 —— 50 CNY / 税 5 / 汇率 20 的交易会算出
+    // 1000 − 5 = 995,而正确值是 1000 − 100 = 900。server 侧
+    // `tax_in_base_currency` 做的就是这件事,这里必须同口径。
     const base = Math.abs(Number(tx.native_amount ?? tx.amount) || 0)
-    const tax = Math.min(Math.abs(Number(tx.tax_amount) || 0), base)
-    const amt = base - tax
+    const taxNative = taxInBaseCurrency(tx.tax_amount, tx.amount, base)
+    const amt = base - taxNative
+    counted += 1
+    taxTotal += taxNative
     total += amt
-    taxTotal += tax
     if (amt > maxAmount) {
       maxAmount = amt
       maxTx = tx
@@ -701,11 +742,13 @@ function aggregate(transactions: WorkspaceTransaction[], startDay = 1): StatsAgg
   }
 
   return {
-    count: transactions.length,
+    // 注意是**过滤后**的笔数,不是 transactions.length —— 被
+    // exclude_from_stats 排除的那些在饼图里没有,笔数也得跟着少
+    count: counted,
     total,
     grossTotal: total + taxTotal,
     taxTotal,
-    avg: transactions.length > 0 ? total / transactions.length : 0,
+    avg: counted > 0 ? total / counted : 0,
     max: { amount: maxAmount, tx: maxTx },
     monthly,
     topAccounts,
