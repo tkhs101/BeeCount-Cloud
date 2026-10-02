@@ -1122,3 +1122,69 @@ def test_category_budget_on_tax_category_excludes_extracted_tax():
         assert abs((pie[TAX_BUCKET] - 1000.0) - 298.0) < 1e-6
     finally:
         app.dependency_overrides.clear()
+
+
+def test_admin_backup_restore_preserves_tax(monkeypatch):
+    """**备份 → 还原整条链路保住税额** —— 而且顺带修掉一个上游缺陷。
+
+    原来的 `create_backup` 去 `sync_changes` 里找一条 `ledger_snapshot` 行。
+    方案 B(projection-as-authority)之后**没有任何代码再写那种行**
+    (`_commit_write` / `/sync/push` 都不写,`SYNC_ARCHITECTURE.md` §1 有说明),
+    所以对任何新建账本都必然 404 "No snapshot for ledger" —— 管理面板的
+    「备份」按钮在方案 B 之后是坏的。
+
+    自托管最怕「以为备份了其实没有」,所以这条必须端到端验证:建备份 → 删掉
+    交易 → 还原 → 税额与统计切片都回到原样。
+    """
+    client, TS = _make_client()
+    try:
+        token = _register_and_token(client, "bk-restore@t.com", device_id="d-web",
+                                    client_type="web")
+        hdr = {"Authorization": f"Bearer {token}", "X-Device-ID": "web"}
+        J = {**hdr, "Content-Type": "application/json"}
+        base = _web_ledger(client, hdr)
+        client.post("/api/v1/write/ledgers/lg1/categories", headers=J,
+                    json={"base_change_id": base, "name": "餐饮", "kind": "expense"})
+        res = _web_create(client, hdr, "lg1", base=base, payload={
+            "tx_type": "expense", "amount": 3280.0, "happened_at": _iso(),
+            "category_name": "餐饮", "category_kind": "expense",
+            "tax_amount": 298.0, "note": "KING BEAR NOW"})
+        tx_id = res["entity_id"]
+
+        before = _analytics(client, hdr)
+        before_ranks = {r["category_name"]: r["total"] for r in before["category_ranks"]}
+        assert abs(before_ranks["餐饮"] - 2982.0) < 1e-6
+        assert abs(before_ranks[TAX_BUCKET] - 298.0) < 1e-6
+
+        # 1) 建备份 —— 旧写法在这里就 404
+        r = client.post("/api/v1/admin/backups/create", headers=J,
+                        json={"ledger_id": "lg1", "note": "含税"})
+        assert r.status_code == 200, f"备份应可用: {r.text[:200]}"
+        snapshot_id = r.json()["snapshot_id"]
+
+        # 2) 破坏数据
+        r = client.request("DELETE", f"/api/v1/write/ledgers/lg1/transactions/{tx_id}",
+                           headers=J, json={"base_change_id": base, "confirm": True})
+        assert r.status_code == 200, r.text[:200]
+        assert _analytics(client, hdr)["category_ranks"] == []
+
+        # 3) 还原
+        r = client.post("/api/v1/admin/backups/restore", headers=J,
+                        json={"snapshot_id": snapshot_id, "device_id": "web"})
+        assert r.status_code == 200, f"还原应成功: {r.text[:200]}"
+
+        # 4) 税额与统计切片都回到原样
+        after = _analytics(client, hdr)
+        after_ranks = {r["category_name"]: r["total"] for r in after["category_ranks"]}
+        assert abs(after["summary"]["expense_total"] - 3280.0) < 1e-6, after
+        assert abs(after_ranks["餐饮"] - 2982.0) < 1e-6, after_ranks
+        assert abs(after_ranks[TAX_BUCKET] - 298.0) < 1e-6, after_ranks
+
+        tx = next((t for t in client.get("/api/v1/read/workspace/transactions",
+                                        headers=hdr).json()["items"]
+                   if t["id"] == tx_id), None)
+        assert tx is not None, "交易没被还原"
+        assert tx["tax_amount"] == 298.0, "还原后税额丢了"
+        assert tx["note"] == "KING BEAR NOW"
+    finally:
+        app.dependency_overrides.clear()

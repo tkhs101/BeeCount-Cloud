@@ -62,7 +62,7 @@ from ..schemas import (
 from ..services import data_cleanup as data_cleanup_svc
 from ..services.ai.docs_refresh import get_docs_refresh_service
 from ..security import SCOPE_APP_WRITE, SCOPE_OPS_WRITE, hash_password, verify_password
-from .. import projection, snapshot_cache
+from .. import projection, snapshot_builder, snapshot_cache
 
 logger = logging.getLogger(__name__)
 
@@ -938,22 +938,29 @@ def create_backup(
         raise HTTPException(status_code=404, detail="Ledger not found")
     ledger, _ = row
 
-    snapshot = db.scalar(
-        select(SyncChange)
-        .where(
-            SyncChange.ledger_id == ledger.id,
-            SyncChange.entity_type == "ledger_snapshot",
-            SyncChange.action == "upsert",
-        )
-        .order_by(SyncChange.change_id.desc())
-    )
-    if not snapshot:
-        raise HTTPException(status_code=404, detail="No snapshot for ledger")
+    # 从 projection **现场构建**快照,而不是去找一条 `ledger_snapshot` 的
+    # SyncChange 行。
+    #
+    # 旧写法对**任何方案 B 之后新建的账本必然 404**("No snapshot for ledger"):
+    # projection-as-authority 之后 `_commit_write` 和 `/sync/push` 都不再写
+    # 那种行(`SYNC_ARCHITECTURE.md` §1 有说明),新账本上一条都不存在。
+    # `snapshot_builder.build` 是文档指定的权威来源(`/sync/full` 走的就是
+    # 它),而且拿到的是**当前**状态 —— 读一条可能很旧的存量行反而更不可靠。
+    snapshot_dict = snapshot_builder.build(db, ledger)
+    payload = {
+        # 与 upload-snapshot 路径同形:`content` 是快照 JSON 字符串,
+        # restore 会 `json.loads(payload["content"])` 还原。
+        "content": json.dumps(snapshot_dict, ensure_ascii=False),
+        "metadata": {
+            "ledgerId": ledger.external_id,
+            "count": snapshot_dict.get("count"),
+        },
+    }
 
     backup = BackupSnapshot(
         user_id=current_user.id,
         ledger_id=ledger.id,
-        snapshot_json=json.dumps(snapshot.payload_json, ensure_ascii=False),
+        snapshot_json=json.dumps(payload, ensure_ascii=False),
         note=req.note,
     )
     db.add(backup)
