@@ -122,6 +122,75 @@ await page.waitForTimeout(700)
 ok('income 下税额输入框不渲染', (await taxIn(dialog).count()) === 0)
 
 ok('页面无未捕获异常', jsErrors.length === 0, jsErrors.join(' | '))
+
+/**
+ * 饼图是否真的显示了税额切片。
+ *
+ * 为什么要单独验:R5 那个「钉住」的修复,之前只用纯函数测试 + AST 接线断言
+ * 验证过 —— 都是「代码看起来对」。而税额扇区的金额天然最小(日本月消费税通常
+ * 几千日元,比日常分类小一两个数量级),**按金额排名取前 N 必然把它挤进
+ * 「其他」**,界面还不会有任何异常表现。所以必须在渲染层确认。
+ *
+ * 数据前提:构造若干大额分类 + 一笔小额含税,让税额排在最后一位。
+ * 数据由调用方准备好(见文件头的跑法),这里只断言渲染结果。
+ */
+async function checkPie(page, token) {
+  console.log('\n=== 5. 首页饼图必须显示「税与保险」切片 ===')
+  await page.goto(`${BASE}/app/overview`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(2500)
+
+  // 整页有**两个**带分类名的列表(饼图图例 + TopCategoriesList 排行榜),
+  // 直接 `ul li` 会匹配到两倍数量。锚点用「同时含 conic-gradient 和图例 ul
+  // 的那个 flex 容器」—— conic-gradient 是饼图独有的。
+  const legend = await page.evaluate(() => {
+    const grad = document.querySelector('[style*="conic-gradient"]')
+    if (!grad) return null
+    let n = grad
+    while (n && !(n.tagName === 'DIV' && n.querySelector('ul'))) n = n.parentElement
+    const ul = n && n.querySelector('ul')
+    return ul
+      ? [...ul.querySelectorAll('li')].map((li) => li.innerText.replace(/\s+/g, ' ').trim())
+      : null
+  })
+  console.log('  图例:', (legend || []).join(' | ').slice(0, 220))
+
+  ok('饼图图例已渲染', Array.isArray(legend) && legend.length > 0)
+  ok('图例里出现「税与保险」', (legend || []).some((t) => t.includes('税与保险')), '未找到')
+  ok('其余分类都在(未被 Top-N 挤掉)',
+     ['住房', '交通', '购物'].every((n) => (legend || []).some((t) => t.includes(n))))
+  const taxItem = (legend || []).find((t) => t.includes('税与保险')) || ''
+  ok('税额切片百分比 <1%(确实是最小的一项)', /0\.\d%/.test(taxItem), taxItem)
+
+  // 排行榜用完整数字,顺便确认它显示的是**税前**值。
+  // 期望值从服务端算,不写死 —— 本脚本第 3 步也会建一笔含税交易,写死的数字
+  // 会在重跑时给出误导性的失败(第一版就踩了这个)。
+  const txRes = await page.request.get(`${BASE}/api/v1/read/workspace/transactions`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  const txs = (await txRes.json()).items || []
+  const netOf = (cat) => txs
+    .filter((t) => t.category_name === cat)
+    .reduce((s, t) => s + (t.amount - (t.tax_amount || 0)), 0)
+  const grossOf = (cat) => txs
+    .filter((t) => t.category_name === cat)
+    .reduce((s, t) => s + t.amount, 0)
+  const cat = txs.find((t) => t.tax_amount)?.category_name || '餐饮'
+  const wantNet = Math.round(netOf(cat))
+  const wantGross = Math.round(grossOf(cat))
+  const netRow = await page.evaluate((needle) => {
+    const lis = [...document.querySelectorAll('li')].map((li) =>
+      li.innerText.replace(/\s+/g, ' ').trim()
+    )
+    return lis.find((t) => t.includes(needle) && t.includes(needle)) || null
+  }, String(wantNet).replace(/\B(?=(\d{3})+(?!\d))/g, ','))
+  ok(
+    `排行榜「${cat}」显示税前 ${wantNet.toLocaleString()}(含税则是 ${wantGross.toLocaleString()})`,
+    !!netRow,
+    netRow || '未找到该行',
+  )
+}
+
+await checkPie(page, TOKEN)
 await browser.close()
 console.log('\n' + (fails.length ? `FAILED: ${fails.join('; ')}` : 'UI SMOKE ALL PASSED'))
 process.exit(fails.length ? 1 : 0)
