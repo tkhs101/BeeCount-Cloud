@@ -828,6 +828,9 @@ def _build_tx_payload(tx, auto_tags: list[str], actor_base: dict) -> dict:
         # App pull 后 L11 横幅可按当前汇率补折算 —— 导入端点内不做外部
         # 汇率 HTTP 调用(稳定性)。
         "currency_code": tx.currency_code,
+        # 消费税(0020):CSV 税额列 → snapshot item 的 taxAmount。None = 无税,
+        # 与 Web / MCP 录入走同一条校验链(mutator)。
+        "tax_amount": tx.tax_amount,
         "category_name": tx.category_name,
         "category_kind": tx.tx_type if tx.tx_type != "transfer" else None,
         "account_name": tx.account_name,

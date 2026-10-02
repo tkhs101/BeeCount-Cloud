@@ -636,3 +636,119 @@ def test_mcp_update_rejects_tax_not_below_amount(monkeypatch) -> None:
                 user, sync_id="tx1", tax_amount=9999.0))
     finally:
         app.dependency_overrides.clear()
+
+# --------------------------------------------------------------------------- #
+# 6. CSV 导出 / 导入往返                                                      #
+# --------------------------------------------------------------------------- #
+
+
+def test_csv_export_includes_tax_column():
+    """导出第 13 列是税额;amount 列仍是实付总额。"""
+    from src.routers.read.workspace import _CSV_HEADERS_BY_LANG
+
+    for lang, expected in (("zh-CN", "税额"), ("zh-TW", "稅額"), ("en", "Tax")):
+        headers = _CSV_HEADERS_BY_LANG[lang]
+        assert headers[-1] == expected, (lang, headers[-1:])
+        # 前 12 列位置不打乱(mobile 导出对齐)
+        assert len(headers) == 13, headers
+        assert headers[3] in {"金额", "金額", "Amount"}, headers[3]
+
+
+def test_csv_export_row_carries_tax(monkeypatch):
+    """有税写数值、无税写空串。"""
+    client, TS = _make_client()
+    try:
+        app_token, web_token = _two_tokens(client, "tax-csv@t.com")
+        hdr_app = {"Authorization": f"Bearer {app_token}"}
+        hdr_web = {"Authorization": f"Bearer {web_token}"}
+        _seed_taxed_expense(client, hdr_app, amount=3280.0, tax=298.0)
+        _push(client, hdr_app, "lg1", "transaction", "txNoTax",
+              {"syncId": "txNoTax", "type": "expense", "amount": 100.0,
+               "happenedAt": _iso(), "categoryName": "餐饮"})
+
+        r = client.get("/api/v1/read/workspace/transactions.csv",
+                       headers=hdr_web, params={"lang": "en"})
+        assert r.status_code == 200, r.text
+        lines = [ln for ln in r.text.splitlines() if ln.strip()]
+        header = lines[0].lstrip("﻿").split(",")
+        assert header[-1] == "Tax"
+        tax_col = len(header) - 1
+        amount_col = header.index("Amount")
+
+        rows = {ln.split(",")[0] + "|" + ln.split(",")[3]: ln.split(",")
+                for ln in lines[1:]}
+        taxed = next(v for k, v in rows.items() if v[tax_col] == "298.00")
+        assert taxed[tax_col] == "298.00"
+        assert taxed[amount_col] == "3280.00", "amount 列必须是实付总额"
+        untaxed = next(v for k, v in rows.items() if v[tax_col] == "")
+        assert untaxed[tax_col] == "", "无税写空串,不是 0"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def _beecount_csv(*rows: list[str], headers: list[str] | None = None) -> str:
+    """按导出端的真实表头拼 CSV。
+
+    列顺序必须跟 `workspace._CSV_HEADERS_BY_LANG["zh-CN"]` 一致(时间列值带
+    前后各两空格,那是导出端的既有格式)。按列构造而不是手写逗号串 ——
+    手数逗号很容易错位,而且错位时 parser 不会报错,只会静默解析成空值。
+    """
+    header = headers or ["类型", "分类", "二级分类", "金额", "币种", "账户",
+                         "转出账户", "转入账户", "备注", "时间", "标签", "附件", "税额"]
+    lines = [",".join(header)]
+    for row in rows:
+        assert len(row) == len(header), (len(row), len(header), row)
+        lines.append(",".join(row))
+    return "\n".join(lines)
+
+
+def test_csv_import_roundtrip_restores_tax():
+    """导出 → 导入 → 税额还原。只导出不做导入会造成「往返静默丢税额」。"""
+    from src.services.import_data.parser import parse_csv_text
+    from src.services.import_data.transformer import _transform_row
+
+    csv_text = _beecount_csv(
+        ["支出", "餐饮", "", "3280.00", "", "", "", "",
+         "KING BEAR NOW", "  2026-10-03 00:00:00  ", "", "", "298.00"],
+        ["支出", "餐饮", "", "100.00", "", "", "", "",
+         "无税", "  2026-10-03 00:00:00  ", "", "", ""],
+    )
+    data = parse_csv_text(raw_text=csv_text)
+    assert str(data.source_format) in ("beecount", "SourceFormat.BEECOUNT"), data.source_format
+
+    tax_col = data.suggested_mapping.tax_amount
+    assert tax_col == "税额", "导出文件里的税额列没被映射到"
+
+    txs = [_transform_row(row, data.suggested_mapping) for row in data.rows]
+    assert all(t is not None for t in txs), "两行都应解析成功"
+    assert txs[0].tax_amount == 298.0
+    assert txs[1].tax_amount is None, "空税额列 = 无税"
+
+    # 旧导出文件(12 列,无税额列)必须仍能被识别 —— 新增第 13 列不改变解析
+    old = _beecount_csv(
+        ["支出", "餐饮", "", "3280.00", "", "", "", "",
+         "KING BEAR NOW", "  2026-10-03 00:00:00  ", "", ""],
+        headers=["类型", "分类", "二级分类", "金额", "币种", "账户",
+                 "转出账户", "转入账户", "备注", "时间", "标签", "附件"],
+    )
+    old_data = parse_csv_text(raw_text=old)
+    assert str(old_data.source_format) in ("beecount", "SourceFormat.BEECOUNT")
+    assert old_data.suggested_mapping.tax_amount is None
+    old_tx = _transform_row(old_data.rows[0], old_data.suggested_mapping)
+    assert old_tx.tax_amount is None, "旧文件无税列 → 不导入税额"
+
+
+def test_csv_import_tax_tolerates_garbage():
+    """导入侧宽容:脏值当无税,不阻断整份 CSV。"""
+    from src.services.import_data.transformer import _parse_tax_amount
+
+    assert _parse_tax_amount(None, 100.0, "expense") is None
+    assert _parse_tax_amount("", 100.0, "expense") is None
+    assert _parse_tax_amount("N/A", 100.0, "expense") is None
+    assert _parse_tax_amount("-5", 100.0, "expense") is None
+    assert _parse_tax_amount("0", 100.0, "expense") is None
+    assert _parse_tax_amount("100", 100.0, "expense") is None, ">= amount"
+    assert _parse_tax_amount("10", -100.0, "expense") is None, "负金额"
+    assert _parse_tax_amount("10", 100.0, "income") is None, "income 无税"
+    assert _parse_tax_amount("1,234.50", 5000.0, "expense") == 1234.50
+    assert _parse_tax_amount("¥10", 100.0, "expense") == 10.0

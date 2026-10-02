@@ -246,16 +246,19 @@ def list_workspace_transactions(
 
 
 _CSV_HEADERS_BY_LANG: dict[str, list[str]] = {
-    # 跟 mobile lib/pages/data/export_page.dart 的 12 列严格对齐(v30 加币种):
+    # 前 12 列跟 mobile lib/pages/data/export_page.dart 严格对齐(v30 加币种):
+    # 第 13 列「税额」(0020)**追加在末尾**,不打乱前 12 列位置 —— 导入侧
+    # BeeCountParser 按**表头名**匹配(sniff 也按表头命中数打分,不卡列数),
+    # 旧文件与旧导入器都不受影响。
     # Type, Category, SubCategory, Amount, Currency, Account, FromAccount,
     # ToAccount, Note, Time, Tags, Attachments
     "zh-CN": ["类型", "分类", "二级分类", "金额", "币种", "账户", "转出账户",
-              "转入账户", "备注", "时间", "标签", "附件"],
+              "转入账户", "备注", "时间", "标签", "附件", "税额"],
     "zh-TW": ["類型", "分類", "二級分類", "金額", "幣種", "帳戶", "轉出帳戶",
-              "轉入帳戶", "備註", "時間", "標籤", "附件"],
+              "轉入帳戶", "備註", "時間", "標籤", "附件", "稅額"],
     "en":    ["Type", "Category", "Subcategory", "Amount", "Currency",
               "Account", "From Account", "To Account", "Note", "Time",
-              "Tags", "Attachments"],
+              "Tags", "Attachments", "Tax"],
 }
 
 _TX_TYPE_LABELS_BY_LANG: dict[str, dict[str, str]] = {
@@ -483,6 +486,8 @@ def export_workspace_transactions_csv(
                 _csv_field(time_str),
                 _csv_field(",".join(tags_list)),
                 _csv_field(",".join(attachment_names)),
+                # 税额(0020):原币绝对值,无税则空。amount 列仍是实付总额。
+                f"{tx.tax_amount:.2f}" if tx.tax_amount is not None else "",
             ]) + "\n"
 
     if date_from is None and date_to is None:
@@ -979,8 +984,12 @@ def _tax_in_base_currency(
     存两份就等于复制 native_amount 当年「改了 amount 忘了改折算值」的坑。
 
     - `tax_amount` 为 NULL(免税 / 未记录)→ 0
+    - `base_amount <= 0`(金额非正)→ 0,不产生税切片
     - `raw_amount <= 0` 推不出比率 → 退化 1:1 并夹到 base_amount,与
       native_amount 既有退化规则同口径
+
+    结果永远夹在 `[0, base_amount]` 内,保证「分类税前 + 税切片 = 实付」
+    这条不变式在任何数据下都成立,不会因为脏数据算出负税额。
     """
     if tax_amount is None:
         return 0.0
@@ -990,14 +999,19 @@ def _tax_in_base_currency(
         return 0.0
     if tax <= 0:
         return 0.0
+    # amount 非正 → 不产生税切片。全链路只有 budget 有 >0 校验,交易金额
+    # 本身不校验正负;web write 走 mutator 会拒(快照校验),但 /sync/push
+    # 不经过 mutator,脏数据能进来。这里守住,免得负金额算出负税额。
+    base = float(base_amount or 0.0)
+    if base <= 0:
+        return 0.0
     try:
         raw = float(raw_amount or 0.0)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         raw = 0.0
-    base = float(base_amount or 0.0)
     if raw <= 0:
         return min(tax, base)
-    return min(base, base * (tax / raw))
+    return min(base, max(0.0, base * (tax / raw)))
 
 
 @router.get("/workspace/analytics", response_model=WorkspaceAnalyticsOut)

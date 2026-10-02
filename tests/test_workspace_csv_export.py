@@ -202,7 +202,9 @@ def test_csv_header_and_bom_default_en():
         # 默认 en
         assert first_line == (
             "Type,Category,Subcategory,Amount,Currency,Account,From Account,"
-            "To Account,Note,Time,Tags,Attachments"
+            # 第 13 列「Tax」是消费税(0020),追加在末尾 —— 前 12 列与
+            # mobile 导出逐列对齐(导入侧按表头名匹配,不卡列数)。
+            "To Account,Note,Time,Tags,Attachments,Tax"
         )
     finally:
         app.dependency_overrides.clear()
@@ -223,7 +225,7 @@ def test_csv_header_localized_zh_cn():
             headers=web_hdr,
         )
         first_line = r.content.decode("utf-8").lstrip("\ufeff").split("\n")[0]
-        assert first_line == "类型,分类,二级分类,金额,币种,账户,转出账户,转入账户,备注,时间,标签,附件"
+        assert first_line == "类型,分类,二级分类,金额,币种,账户,转出账户,转入账户,备注,时间,标签,附件,税额"
     finally:
         app.dependency_overrides.clear()
 
@@ -242,7 +244,7 @@ def test_csv_header_localized_zh_tw():
             headers=web_hdr,
         )
         first_line = r.content.decode("utf-8").lstrip("\ufeff").split("\n")[0]
-        assert first_line == "類型,分類,二級分類,金額,幣種,帳戶,轉出帳戶,轉入帳戶,備註,時間,標籤,附件"
+        assert first_line == "類型,分類,二級分類,金額,幣種,帳戶,轉出帳戶,轉入帳戶,備註,時間,標籤,附件,稅額"
     finally:
         app.dependency_overrides.clear()
 

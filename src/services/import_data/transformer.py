@@ -173,11 +173,17 @@ def _transform_row(row: ParsedRow, mapping: ImportFieldMapping) -> ImportTransac
         else None
     )
 
+    # 消费税(0020):照抄 CSV 的绝对值。**非法值一律当无税**,不阻断整行导入 ——
+    # 导入是一个批量操作,一行脏数据不该让整份 CSV 失败。真值仍会在
+    # snapshot_mutator 里再校验一次(那里才是权威口径)。
+    tax_amount = _parse_tax_amount(opt(mapping.tax_amount), float(amount), tx_type)
+
     return ImportTransaction(
         tx_type=tx_type,
         amount=amount,
         happened_at=dt,
         currency_code=currency_code,
+        tax_amount=tax_amount,
         note=opt(mapping.note),
         category_name=tx_category_name,
         parent_category_name=tx_parent_name,
@@ -220,6 +226,28 @@ def _parse_tx_type(
         if kw in s:
             return "transfer"
     return None
+
+
+def _parse_tax_amount(
+    raw: str | None, amount: float, tx_type: str
+) -> float | None:
+    """CSV 税额列 → float 或 None(= 无税)。
+
+    宽容优先:空 / 非数字 / 负数 / >= amount / 非 expense 一律返回 None,
+    不抛。导入是批量操作,一行脏数据不该让整份 CSV 失败;真正落库前
+    `snapshot_mutator._normalize_tax_amount` 还会再兜一次底。
+    """
+    if not raw:
+        return None
+    try:
+        tax = float(raw.strip().replace(",", "").replace("¥", "").replace("$", ""))
+    except (TypeError, ValueError):
+        return None
+    if tax <= 0 or amount <= 0 or tax >= amount:
+        return None
+    if tx_type != "expense":
+        return None
+    return tax
 
 
 def _parse_amount(raw: str, strip_currency: bool) -> tuple[Decimal, bool]:

@@ -75,6 +75,9 @@ class ImportFieldMapping:
     note: str | None = None
     # v30 多币种:币种列(可选)。值须像 ISO code(3-8 位字母)才被采纳。
     currency: str | None = None
+    # 消费税税额(0020,可选列)。导出 CSV 的第 13 列「税额」;空 / 非法 /
+    # 负数 / >= amount 一律当作无税(不阻断整行导入)。仅 expense 有意义。
+    tax_amount: str | None = None
     tags: list[str] = field(default_factory=list)
     # transformer 选项
     datetime_format: str | None = None
@@ -123,6 +126,9 @@ class ImportTransaction:
     happened_at: datetime
     # v30 多币种:交易原币种(CSV 币种列;None = 账本本位币,payload 不产字段)
     currency_code: str | None = None
+    # 消费税税额(0020):原币绝对值;None = 无税。写进 snapshot item 的
+    # taxAmount,与 Web/MCP 录入同一条校验(mutator 里再兜一次)。
+    tax_amount: float | None = None
     note: str | None = None
     category_name: str | None = None
     parent_category_name: str | None = None
