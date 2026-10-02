@@ -114,6 +114,28 @@ export function TransactionDetailDialog({
                   })}
                 </span>
               ) : null}
+              {/* 消费税(0020):有小票税额时把「税前 / 消费税 / 实付合计」三段摊开,
+                  像收银小票一样。上面那个大金额**始终是实付合计**(amount
+                  语义不变),这里只是额外给出税前视角。 */}
+              {tx.tax_amount != null && tx.tax_amount > 0 ? (
+                <div className="mt-1 flex items-center justify-center gap-3 text-xs tabular-nums text-muted-foreground">
+                  <span>
+                    {t('detail.transaction.netAmount')}{' '}
+                    {(tx.amount - tx.tax_amount).toLocaleString('zh-CN', {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </span>
+                  <span className="text-border">|</span>
+                  <span>
+                    {t('detail.transaction.tax')}{' '}
+                    {tx.tax_amount.toLocaleString('zh-CN', {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
+              ) : null}
               <span className="text-xs text-muted-foreground">
                 <Calendar className="mr-1 inline h-3 w-3" />
                 {formatDateTime(tx.happened_at)}

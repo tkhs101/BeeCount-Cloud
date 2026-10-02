@@ -24,6 +24,10 @@ export type TxForm = {
   exclude_from_stats: boolean
   /** 不计入预算用量(仅 expense 显示开关)。 */
   exclude_from_budget: boolean
+  /** 消费税税额(0020):照抄小票的「消費税等」绝对值,空串 = 无税。
+   *  amount 仍是实付总额,税额只是叠加维度 —— 统计时从分类切片剥出归入
+   *  「税与保险」,两块相加仍等于实付。仅 expense 有意义。 */
+  tax_amount: string
 }
 
 export type AccountForm = {
@@ -92,6 +96,25 @@ export type TagForm = {
   color: string
 }
 
+/** 税额输入框的字符串 → payload 数值(0020)。
+ *
+ *  空串 / 纯空白 / 非数字 一律归一成 `null`(表示「无税」)。**不拦非法值**
+ *  —— `0 < tax < amount` 与「仅 expense」的硬校验在 server
+ *  (snapshot_mutator._normalize_tax_amount),前端只负责把「用户没填」和
+ *  「填了但不是数字」统一成 null,好让两处提交路径
+ *  (TransactionsPage / GlobalEditDialogs)共用一条规则而不是各写一遍。 */
+export function parseTaxAmount(raw: string | null | undefined): number | null {
+  const text = (raw ?? '').trim()
+  if (!text) return null
+  const value = Number(text)
+  return Number.isFinite(value) ? value : null
+}
+
+/** 已存交易的 tax_amount → 表单输入框字符串(编辑回显用)。null → 空串。 */
+export function taxAmountToInput(raw: number | null | undefined): string {
+  return typeof raw === 'number' && Number.isFinite(raw) ? String(raw) : ''
+}
+
 export const txDefaults = (): TxForm => ({
   editingId: null,
   editingOwnerUserId: '',
@@ -109,7 +132,8 @@ export const txDefaults = (): TxForm => ({
   currency: '',
   original_currency: '',
   exclude_from_stats: false,
-  exclude_from_budget: false
+  exclude_from_budget: false,
+  tax_amount: ''
 })
 
 export const accountDefaults = (): AccountForm => ({

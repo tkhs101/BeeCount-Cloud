@@ -90,6 +90,8 @@ import {
   canManageLedger,
   canWriteTransactions,
   txDefaults,
+  parseTaxAmount,
+  taxAmountToInput,
   type TxForm
 } from '@beecount/web-features'
 
@@ -1473,6 +1475,13 @@ export function TransactionsPage() {
         // §三 标记按 type 条件落库:转账两者都 false;收入只允许 stats;支出两者都允许。
         exclude_from_stats: isTransfer ? false : txForm.exclude_from_stats,
         exclude_from_budget: txForm.tx_type === 'expense' ? txForm.exclude_from_budget : false,
+        // 消费税(0020):仅 expense 有效,空串 → null(= 无税)。编辑模式下
+        // 留空等于「清除这笔的税额」——server 侧靠 exclude_unset 区分
+        // 「不传=不变」与「显式传 null=清除」。
+        tax_amount:
+          !isTransfer && txForm.tx_type === 'expense'
+            ? parseTaxAmount(txForm.tax_amount)
+            : null,
         ...currencyFields
       }
       // eslint-disable-next-line no-console
@@ -1989,6 +1998,7 @@ export function TransactionsPage() {
                     original_currency: (tx.currency_code || '').toUpperCase() === txWriteLedgerCurrency
                       ? ''
                       : (tx.currency_code || '').toUpperCase(),
+                    tax_amount: taxAmountToInput(tx.tax_amount),
                     tags:
                       tx.tags_list && tx.tags_list.length > 0
                         ? tx.tags_list

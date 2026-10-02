@@ -151,11 +151,19 @@ async def create_transaction(
     tags: list[str] | None = None,
     ledger_id: str | None = None,
     currency: str | None = None,
+    tax_amount: float | None = None,
 ) -> dict[str, Any]:
     """新建一笔交易。category / account 用名字。happened_at 不传 = 当前时间。
 
     currency(v30 多币种):记外币时传 ISO code(如 USD/JPY)。不传则:有账户
-    随账户币种、无账户随账本主币种。外币会按当前汇率折算到账本主币种。"""
+    随账户币种、无账户随账本主币种。外币会按当前汇率折算到账本主币种。
+
+    tax_amount(0020,消费税):**照抄小票上「消費税等」那一行的绝对值**,
+    不要按税率倒算 —— 日本各家舍入方式不同(合計 1780 按 8% 反推是
+    1648.15,收银机显示的是 1649,差 1 円)。不传 = 无税。仅 expense 有效。
+    amount 仍是**实付总额**,税额只是叠加维度:统计时从分类里剥出归入
+    「税与保险」,两块相加仍等于实付。
+    例:合計 3280 / 消費税 298 → amount=3280, tax_amount=298。"""
     if tx_type not in {"expense", "income", "transfer"}:
         raise ValueError(f"Invalid tx_type: {tx_type}")
     if amount <= 0:
@@ -203,6 +211,16 @@ async def create_transaction(
             body["from_account_name"] = account
         else:
             body["account_name"] = account
+    # 消费税(0020):有值才发字段。硬校验在 server(snapshot_mutator),这里
+    # 只挡明显非法的负数,好让 LLM 拿到可读的报错而不是 500。
+    if tax_amount is not None:
+        if tax_amount < 0:
+            raise ValueError("tax_amount must be positive")
+        if tax_amount >= amount:
+            raise ValueError("tax_amount must be less than amount")
+        if tx_type != "expense":
+            raise ValueError("tax_amount is only allowed on expense transactions")
+        body["tax_amount"] = float(tax_amount)
     # 始终注入 MCP 默认标签;跟 LLM 传的 tags 并集去重,顺序保持 LLM 给的在前
     final_tags = _merge_default_tag(tags)
     body["tags"] = final_tags
@@ -248,8 +266,14 @@ async def update_transaction(
     happened_at: str | None = None,
     note: str | None = None,
     tags: list[str] | None = None,
+    tax_amount: float | None = None,
 ) -> dict[str, Any]:
-    """更新现有交易。只更新传入的字段。"""
+    """更新现有交易。只更新传入的字段。
+
+    tax_amount(0020,消费税):省略 = 不变;**传 0 = 清除这笔的税额**(PATCH 的
+    显式 null 在 MCP 层没法与「没传」区分,所以用 0 当清除信号);正数 = 覆盖。
+    照抄小票绝对值,不要按税率倒算(各家舍入不同,倒推会对不上收银机)。
+    """
     with SessionLocal() as db:
         existing = db.scalar(
             select(ReadTxProjection).where(
@@ -278,6 +302,20 @@ async def update_transaction(
         if tx_type not in {"expense", "income", "transfer"}:
             raise ValueError(f"Invalid tx_type: {tx_type}")
         patch["tx_type"] = tx_type
+    # 消费税(0020):0 当「清除」信号(PATCH 的显式 null 与「没传」在 MCP 层
+    # 无法区分);正数覆盖。amount 取本次生效值做 < amount 校验。
+    if tax_amount is not None:
+        if tax_amount < 0:
+            raise ValueError("tax_amount must be positive")
+        if tax_amount == 0:
+            patch["tax_amount"] = None
+        else:
+            effective_amount = float(amount) if amount is not None else float(existing.amount)
+            if effective_amount <= 0 or tax_amount >= effective_amount:
+                raise ValueError("tax_amount must be less than amount")
+            if effective_tx_type != "expense":
+                raise ValueError("tax_amount is only allowed on expense transactions")
+            patch["tax_amount"] = float(tax_amount)
     if happened_at is not None:
         patch["happened_at"] = _parse_dt(happened_at).isoformat()
     if note is not None:
@@ -453,6 +491,7 @@ class BatchTxItem(TypedDict):
     note: NotRequired[str]
     tags: NotRequired[list[str]]
     currency: NotRequired[str]
+    tax_amount: NotRequired[float]
 
 
 async def create_transactions(
@@ -528,6 +567,18 @@ async def create_transactions(
         item["__ccy_arg"] = (str(raw["currency"]).strip().upper()
                              if raw.get("currency") else None)
         item["__acc_name"] = str(account) if account else None
+        # 消费税(0020):照抄小票绝对值。校验口径跟单条一致,给 LLM 可读报错。
+        tax = raw.get("tax_amount")
+        if tax is not None:
+            if tax < 0:
+                raise ValueError(f"transactions[{i}]: tax_amount must be positive")
+            if tax >= float(amount):
+                raise ValueError(f"transactions[{i}]: tax_amount must be less than amount")
+            if tx_type != "expense":
+                raise ValueError(
+                    f"transactions[{i}]: tax_amount is only allowed on expense transactions"
+                )
+            item["tax_amount"] = float(tax)
         norm_items.append(item)
 
     # 3. 预校验 category / account 名是否存在(O(1) 查询,给 LLM 清晰报错,

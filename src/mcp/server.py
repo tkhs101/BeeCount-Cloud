@@ -352,11 +352,14 @@ async def create_transaction(
     tags: list[str] | None = None,
     ledger_id: str | None = None,
     currency: str | None = None,
+    tax_amount: float | None = None,
 ) -> dict[str, Any]:
     """Create a new transaction.
 
     Args:
-        amount: Positive number; type captured separately via tx_type.
+        amount: Positive number; type captured separately via tx_type. For an
+            expense this is the TOTAL PAID (tax-inclusive), not the pre-tax
+            price.
         tx_type: 'expense' (default), 'income', or 'transfer'.
         category: Existing category name (server rejects unknown names).
         account: Existing account name. For transfers this is the from-account.
@@ -368,11 +371,18 @@ async def create_transaction(
             foreign currency. Omit to follow the account's currency, or the
             ledger's base currency when no account is given. The server converts
             to the ledger base at current rates and stores both amounts.
+        tax_amount: Consumption tax contained in `amount` (Japan's 消費税). Pass
+            the ABSOLUTE figure printed on the receipt — do NOT derive it from
+            a tax rate: rounding differs between retailers (a 合計 of 1780 at
+            8% back-computes to 1648.15, while the register shows 1649 — off by
+            one yen). Omit when there is no tax. Expense only. `amount` stays
+            the total paid; statistics move the tax into a "tax & insurance"
+            slice, and the two still add up to `amount`.
     """
     kw = dict(
         amount=amount, tx_type=tx_type, category=category, account=account,
         happened_at=happened_at, note=note, tags=tags, ledger_id=ledger_id,
-        currency=currency,
+        currency=currency, tax_amount=tax_amount,
     )
     return await _logged_call(
         ctx, name="create_transaction", scope=SCOPE_MCP_WRITE, kwargs=kw,
@@ -421,11 +431,18 @@ async def update_transaction(
     happened_at: str | None = None,
     note: str | None = None,
     tags: list[str] | None = None,
+    tax_amount: float | None = None,
 ) -> dict[str, Any]:
-    """Patch an existing transaction. Only the fields you pass are changed."""
+    """Patch an existing transaction. Only the fields you pass are changed.
+
+    `tax_amount` (consumption tax): omit to leave it unchanged, pass 0 to CLEAR
+    it, pass a positive number to set it. Pass the absolute figure from the
+    receipt rather than deriving it from a rate — retailers round differently.
+    """
     kw = dict(
         sync_id=sync_id, amount=amount, tx_type=tx_type, category=category,
         account=account, happened_at=happened_at, note=note, tags=tags,
+        tax_amount=tax_amount,
     )
     return await _logged_call(
         ctx, name="update_transaction", scope=SCOPE_MCP_WRITE, kwargs=kw,

@@ -77,7 +77,11 @@ def _serialize_tx(row: ReadTxProjection, category_name: str | None) -> dict[str,
     return {
         "sync_id": row.sync_id,
         "tx_type": row.tx_type,
+        # amount 语义不变,仍是**实付总额**(含税)。税前 = amount - tax_amount。
         "amount": float(row.amount or 0),
+        # 消费税(0020):None = 无税。绝不折成 0,否则「免税商品」和「没记税」
+        # 分不清,统计口径也会跟着错。
+        "tax_amount": (float(row.tax_amount) if row.tax_amount is not None else None),
         "happened_at": row.happened_at.isoformat() if row.happened_at else None,
         "note": row.note,
         "category_name": category_name or row.category_name,
@@ -85,6 +89,8 @@ def _serialize_tx(row: ReadTxProjection, category_name: str | None) -> dict[str,
         "from_account_name": row.from_account_name,
         "to_account_name": row.to_account_name,
         "tags": row.tags_csv or "",
+        "currency_code": row.currency_code,
+        "native_amount": row.native_amount,
     }
 
 

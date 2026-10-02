@@ -343,6 +343,19 @@ export function TransactionsPanel({
   const canSubmit = Boolean(writeLedgerId.trim()) && (isTransfer
     ? Boolean(form.from_account_name.trim()) && Boolean(form.to_account_name.trim())
     : true)
+  // 消费税(0020):两个数都在且自洽时预览「税前」,帮用户对账。
+  // 只做展示 —— 真正的校验在 server(snapshot_mutator._normalize_tax_amount),
+  // 这里不拦提交,免得前后端两套规则漂移。
+  const taxNetPreview = (() => {
+    const amount = Number((form.amount || '').toString().trim())
+    const tax = Number((form.tax_amount || '').toString().trim())
+    if (!Number.isFinite(amount) || !Number.isFinite(tax)) return ''
+    if (amount <= 0 || tax <= 0 || tax >= amount) return ''
+    return (amount - tax).toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    })
+  })()
   const selectedTags = form.tags
   const categoryValue = form.category_name.trim()
 
@@ -458,6 +471,35 @@ export function TransactionsPanel({
                 value={form.amount}
                 onChange={(e) => onFormChange({ ...form, amount: e.target.value })}
               />
+              {/* 消费税税额(0020):仅 expense 有意义。日本小票印「合計 /
+                  消費税等」两个绝对值(不印税率,各家舍入也不同),所以这里让
+                  用户照抄,不按税率倒算 —— 3280 ÷ 1.08 = 1648.15 会和收银机
+                  显示的 1649 差 1 円。
+                  inputMode 是必须的:不带的话 iPhone PWA 弹全键盘而不是数字
+                  键盘(仓内 TxDraftList/TransactionsPage 筛选框有先例)。 */}
+              {form.tx_type === 'expense' ? (
+                <div className="space-y-1 pt-1">
+                  <Label className="text-xs text-muted-foreground">
+                    {t('transactions.tax.label')}
+                  </Label>
+                  <Input
+                    inputMode="decimal"
+                    placeholder={t('transactions.tax.placeholder')}
+                    value={form.tax_amount}
+                    onChange={(e) =>
+                      onFormChange({ ...form, tax_amount: e.target.value })
+                    }
+                  />
+                  {/* 两个数都在时把「税前」算出来给用户对账 —— 省得自己减 */}
+                  {taxNetPreview ? (
+                    <p className="text-xs text-muted-foreground">
+                      {t('transactions.tax.netHint', {
+                        net: taxNetPreview
+                      })}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
               {/* v30 多币种:币种另起一行,全宽显示币种全名+国旗(挨金额太窄会截断);
                   选非本位币 → 账户下拉按币种过滤 + 已选账户清空(币种优先联动,
                   transfer 不支持)。 */}

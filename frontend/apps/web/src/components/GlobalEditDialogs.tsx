@@ -23,6 +23,8 @@ import {
   txDefaults,
   type CategoryForm,
   type TxForm,
+  parseTaxAmount,
+  taxAmountToInput,
 } from '@beecount/web-features'
 
 import { useLedgerWrite } from '../app/useLedgerWrite'
@@ -145,6 +147,7 @@ export function GlobalEditDialogs() {
         // 变更折算由 server L14 隐含汇率联动,防快照漂移)
         currency: (tx.currency_code || '').toUpperCase(),
         original_currency: (tx.currency_code || '').toUpperCase(),
+        tax_amount: taxAmountToInput(tx.tax_amount),
         note: tx.note || '',
         category_name: tx.category_name || '',
         category_kind: (tx.category_kind as TxForm['category_kind']) || 'expense',
@@ -297,6 +300,10 @@ export function GlobalEditDialogs() {
         editTxForm.tx_type === 'transfer' ? false : editTxForm.exclude_from_stats,
       exclude_from_budget:
         editTxForm.tx_type === 'expense' ? editTxForm.exclude_from_budget : false,
+      // 消费税(0020):与 TransactionsPage 同一套 parseTaxAmount —— 这条
+      // 提交路径和上面那条是复制粘贴关系(R3:改一处漏一处会静默丢字段)。
+      tax_amount:
+        editTxForm.tx_type === 'expense' ? parseTaxAmount(editTxForm.tax_amount) : null,
       ...currencyFields
     }
 

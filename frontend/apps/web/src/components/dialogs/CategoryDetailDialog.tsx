@@ -66,7 +66,12 @@ interface Props {
 
 interface StatsAgg {
   count: number
+  /** 税前合计(与饼图分类切片同口径 —— 这里曾用原币全额算,和饼图对不上) */
   total: number
+  /** 含税合计(实付),= total + taxTotal */
+  grossTotal: number
+  /** 该分类下所有交易的税额合计(0020) */
+  taxTotal: number
   avg: number
   max: { amount: number; tx: WorkspaceTransaction | null }
   monthly: { bucket: string; amount: number; count: number }[]
@@ -329,38 +334,57 @@ function KpiRow({
 }) {
   const empty = !statsLoading && (!stats || stats.count === 0)
   return (
-    <div className="grid grid-cols-4 gap-3 border-b border-border/60 bg-muted/20 px-6 py-4 text-center">
-      <KpiCell label={t('detail.stats.txCount')} loading={statsLoading} empty={empty}>
-        <span className="font-mono text-xl font-bold tabular-nums">{stats?.count ?? 0}</span>
-      </KpiCell>
-      <KpiCell label={t('detail.category.kpi.total')} loading={statsLoading} empty={empty}>
-        <Amount
-          value={stats?.total ?? 0}
-          currency={currency}
-          size="md"
-          bold
-          tone={amountTone}
-        />
-      </KpiCell>
-      <KpiCell label={t('detail.category.kpi.avg')} loading={statsLoading} empty={empty}>
-        <Amount
-          value={stats?.avg ?? 0}
-          currency={currency}
-          size="md"
-          bold
-          tone={amountTone}
-        />
-      </KpiCell>
-      <KpiCell label={t('detail.category.kpi.max')} loading={statsLoading} empty={empty}>
-        <Amount
-          value={stats?.max.amount ?? 0}
-          currency={currency}
-          size="md"
-          bold
-          tone={amountTone}
-        />
-      </KpiCell>
-    </div>
+    <>
+      <div className="grid grid-cols-4 gap-3 border-b border-border/60 bg-muted/20 px-6 py-4 text-center">
+        <KpiCell label={t('detail.stats.txCount')} loading={statsLoading} empty={empty}>
+          <span className="font-mono text-xl font-bold tabular-nums">{stats?.count ?? 0}</span>
+        </KpiCell>
+        <KpiCell label={t('detail.category.kpi.total')} loading={statsLoading} empty={empty}>
+          <Amount
+            value={stats?.total ?? 0}
+            currency={currency}
+            size="md"
+            bold
+            tone={amountTone}
+          />
+        </KpiCell>
+        <KpiCell label={t('detail.category.kpi.avg')} loading={statsLoading} empty={empty}>
+          <Amount
+            value={stats?.avg ?? 0}
+            currency={currency}
+            size="md"
+            bold
+            tone={amountTone}
+          />
+        </KpiCell>
+        <KpiCell label={t('detail.category.kpi.max')} loading={statsLoading} empty={empty}>
+          <Amount
+            value={stats?.max.amount ?? 0}
+            currency={currency}
+            size="md"
+            bold
+            tone={amountTone}
+          />
+        </KpiCell>
+      </div>
+      {/* 消费税(0020):上面的「累计金额」是税前(与饼图切片同口径)。有这个
+          分类含税时补一行「消费税 X · 实付合计 Y」,免得用户以为钱少了。 */}
+      {!empty && stats && stats.taxTotal > 0 ? (
+        <p className="border-b border-border/60 bg-muted/20 px-6 pb-3 text-center text-xs tabular-nums text-muted-foreground">
+          {t('detail.transaction.tax')}{' '}
+          {stats.taxTotal.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}
+          {' · '}
+          {t('detail.transaction.grossAmount')}{' '}
+          {stats.grossTotal.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}
+        </p>
+      ) : null}
+    </>
   )
 }
 
@@ -599,6 +623,7 @@ function TopList({
 
 function aggregate(transactions: WorkspaceTransaction[], startDay = 1): StatsAgg {
   let total = 0
+  let taxTotal = 0
   let maxAmount = 0
   let maxTx: WorkspaceTransaction | null = null
   const monthlyMap = new Map<string, { amount: number; count: number }>()
@@ -607,8 +632,16 @@ function aggregate(transactions: WorkspaceTransaction[], startDay = 1): StatsAgg
   const tagMap = new Map<string, { count: number; amount: number; color: string | null }>()
 
   for (const tx of transactions) {
-    const amt = Math.abs(Number(tx.amount) || 0)
+    // 口径对齐 server 的账本维度统计(workspace_analytics,0018/0020):
+    //   基数 = coalesce(native_amount, amount)  ← 这里原来只读原币 amount,
+    //     外币交易会和饼图对不上
+    //   净额 = 基数 - 税额                       ← 饼图分类切片是税前,
+    //     这里原来用全额,和饼图切片对不上
+    const base = Math.abs(Number(tx.native_amount ?? tx.amount) || 0)
+    const tax = Math.min(Math.abs(Number(tx.tax_amount) || 0), base)
+    const amt = base - tax
     total += amt
+    taxTotal += tax
     if (amt > maxAmount) {
       maxAmount = amt
       maxTx = tx
@@ -659,6 +692,8 @@ function aggregate(transactions: WorkspaceTransaction[], startDay = 1): StatsAgg
   return {
     count: transactions.length,
     total,
+    grossTotal: total + taxTotal,
+    taxTotal,
     avg: transactions.length > 0 ? total / transactions.length : 0,
     max: { amount: maxAmount, tx: maxTx },
     monthly,

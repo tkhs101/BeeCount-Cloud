@@ -195,6 +195,9 @@ export type ReadTransaction = {
   currency_code?: string | null
   /** 折账本本位币的金额快照(记账时汇率,保存即定)。null 时 fallback 用 amount。 */
   native_amount?: number | null
+  /** 消费税税额(0020):一笔支出中包含的税(日本「消費税」)。null = 无税。
+   *  amount 仍是实付总额,税前 = amount - tax_amount。 */
+  tax_amount?: number | null
   last_change_id: number
   ledger_id?: string | null
   ledger_name?: string | null
@@ -590,6 +593,10 @@ export type TxPayload = {
   exclude_from_stats?: boolean | null
   /** 不计入预算用量(仅 expense 有意义)。 */
   exclude_from_budget?: boolean | null
+  /** 消费税税额(0020):照抄小票「消費税等」的绝对值。amount 仍是实付总额,
+   *  本字段只是叠加维度 —— 统计时剥出归入「税与保险」。不传 = 无税。
+   *  仅 expense 有意义。 */
+  tax_amount?: number | null
 }
 
 export type BudgetCreatePayload = {

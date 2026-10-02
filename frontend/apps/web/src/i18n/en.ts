@@ -303,6 +303,10 @@ const en = {
   'detail.transaction.tags': 'Tags',
   'detail.transaction.attachments': 'Attachments',
   'detail.transaction.attachmentsCount': '{count} attachment(s)',
+  // 消费税(0020):详情页的税前/税/合计三段拆分
+  'detail.transaction.tax': 'Tax',
+  'detail.transaction.netAmount': 'Excl. tax',
+  'detail.transaction.grossAmount': 'Total paid',
   'detail.transaction.createdBy': 'Created by',
   'detail.transaction.lastEditedBy': 'Last edited by',
   'detail.transaction.editRequiresTxPage': 'Loading edit dialog, please wait',
@@ -1076,6 +1080,12 @@ const en = {
 
   'transactions.title': 'Transactions',
   'transactions.placeholder.amount': 'amount',
+  // 消费税(0020):日本小票印「合計 / 消費税等」两个绝对值,不印税率,
+  // 各家舍入也不同(1780 ÷ 1.08 会和收银机差 1 円),所以让用户照抄。
+  'transactions.tax.label': 'Tax (incl.)',
+  'transactions.tax.placeholder': 'e.g. 298',
+  'transactions.tax.netHint': 'Excl. tax: {net}',
+  'transactions.tax.invalidHint': 'Tax must be between 0 and the total amount',
   'transactions.placeholder.happenedAt': 'happened_at',
   'transactions.placeholder.note': 'note',
   'transactions.placeholder.categoryName': 'category_name',

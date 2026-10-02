@@ -19,10 +19,12 @@
 """
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -32,7 +34,7 @@ from sqlalchemy.pool import StaticPool
 from src.config import get_settings
 from src.database import Base, get_db
 from src.main import app
-from src.models import Ledger, ReadTxProjection
+from src.models import Ledger, ReadTxProjection, User
 
 TAX_BUCKET = get_settings().tax_category_name.strip() or "税与保险"
 
@@ -113,6 +115,14 @@ def _get_tx(TS, ledger_internal_id, sync_id):
                 ReadTxProjection.sync_id == sync_id,
             )
         )
+
+
+def _fetch_user(TS, email):
+    with TS() as db:
+        row = db.scalar(select(User).where(User.email == email))
+        assert row is not None
+        db.expunge(row)
+        return row
 
 
 def _web_create(client, hdr, ledger_id, *, base, payload):
@@ -517,5 +527,111 @@ def test_budget_usage_still_full_amount():
         assert abs(items["bud1"] - 3280.0) < 1e-6, (
             f"预算必须按实付全额 3280,got {items.get('bud1')}"
         )
+    finally:
+        app.dependency_overrides.clear()
+
+
+# --------------------------------------------------------------------------- #
+# 5. MCP 契约(用户的记账入口)                                                 #
+# --------------------------------------------------------------------------- #
+
+
+def test_mcp_write_tools_expose_tax_amount():
+    """三个写工具的 MCP schema 都得带 tax_amount —— 用户所有记账走 MCP,
+    schema 缺了 LLM 就永远传不进来。"""
+    import asyncio
+
+    from src.mcp.server import mcp
+
+    tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
+    for name in ("create_transaction", "update_transaction"):
+        assert "tax_amount" in tools[name].inputSchema["properties"], name
+    batch = tools["create_transactions"].inputSchema
+    item_def = batch["$defs"]["BatchTxItem"]
+    assert "tax_amount" in item_def["properties"], sorted(item_def["properties"])
+    # 只有 amount 必填;税额可选(大多数消费没有税)
+    assert item_def.get("required") == ["amount"], item_def.get("required")
+
+
+def test_mcp_read_tools_report_tax_amount():
+    """读工具回读要带 tax_amount,且**免税/未记税必须是 None 而不是 0** ——
+    折成 0 就分不清「免税商品」和「没记税」。"""
+    from src.mcp.tools.read_tools import _serialize_tx
+
+    class FakeRow:
+        sync_id = "tx1"
+        tx_type = "expense"
+        amount = 3280.0
+        tax_amount = 298.0
+        happened_at = datetime(2026, 10, 3, tzinfo=timezone.utc)
+        note = "KING BEAR NOW"
+        category_name = "餐饮"
+        account_name = None
+        from_account_name = None
+        to_account_name = None
+        tags_csv = ""
+        currency_code = None
+        native_amount = None
+
+    out = _serialize_tx(FakeRow(), None)
+    assert out["amount"] == 3280.0, "amount 必须是实付总额"
+    assert out["tax_amount"] == 298.0
+
+    FakeRow.tax_amount = None
+    assert _serialize_tx(FakeRow(), None)["tax_amount"] is None
+
+
+def test_mcp_update_zero_means_clear(monkeypatch) -> None:
+    """update_transaction 的「传 0 = 清除」约定:0 → patch 里的显式 null。
+
+    PATCH 的 null 与「没传」在 MCP 层无法区分,所以用 0 当清除信号。
+    """
+    from src.mcp.tools import write_tools
+
+    client, TS = _make_client()
+    # write_tools 直接 `with SessionLocal()` 查 projection —— 必须打到测试库
+    monkeypatch.setattr(write_tools, "SessionLocal", TS)
+    try:
+        app_token, _ = _two_tokens(client, "tax-clear@t.com")
+        hdr = {"Authorization": f"Bearer {app_token}"}
+        _seed_taxed_expense(client, hdr, amount=3280.0, tax=298.0)
+        user = _fetch_user(TS, "tax-clear@t.com")
+
+        captured: dict = {}
+
+        async def fake_self_call(method, path, u, **kwargs):
+            captured.update(kwargs.get("json") or {})
+            return {"entity_id": "tx1"}
+
+        monkeypatch.setattr(write_tools, "_self_call", fake_self_call)
+        asyncio.run(write_tools.update_transaction(user, sync_id="tx1", tax_amount=0))
+
+        assert "tax_amount" in captured, captured
+        assert captured["tax_amount"] is None, (
+            "0 必须翻译成显式 null(server 侧靠它区分「清除」)"
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_mcp_update_rejects_tax_not_below_amount(monkeypatch) -> None:
+    """MCP 层也要挡明显非法的税额,给 LLM 可读报错而不是等 server 500。"""
+    from src.mcp.tools import write_tools
+
+    client, TS = _make_client()
+    monkeypatch.setattr(write_tools, "SessionLocal", TS)
+    try:
+        app_token, _ = _two_tokens(client, "tax-mcp-bad@t.com")
+        hdr = {"Authorization": f"Bearer {app_token}"}
+        _seed_taxed_expense(client, hdr, amount=3280.0, tax=298.0)
+        user = _fetch_user(TS, "tax-mcp-bad@t.com")
+
+        async def boom(*a, **k):
+            raise AssertionError("不应发出 self-call")
+
+        monkeypatch.setattr(write_tools, "_self_call", boom)
+        with pytest.raises(ValueError, match="less than amount"):
+            asyncio.run(write_tools.update_transaction(
+                user, sync_id="tx1", tax_amount=9999.0))
     finally:
         app.dependency_overrides.clear()
