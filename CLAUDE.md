@@ -104,3 +104,50 @@ Mobile 端(Flutter)和 Web 端(React)各自有仓,各自有 CLAUDE.md:
 - 本地 dev server:`uvicorn src.main:app --reload`
 - 本地 DB 默认 SQLite:`beecount.db`(仓根),可用 `sqlite3` CLI 直接查
 - 生产部署见 `docs/DEPLOYMENT.md`
+
+---
+
+# ⚠️ fork 特有改动(非上游内容)
+
+本仓是 `tkhs101/BeeCount-Cloud`,从 `TNT-Likely/BeeCount-Cloud` 的
+`3d9f64b`(tag `1.6.7`)分叉。**部署形态是自托管云端 + Web/PWA,不使用官方
+App**。改这个仓之前先读
+[`docs/aegis/plans/2026-10-03-selfhost-tax-feature-fork.md`](docs/aegis/plans/2026-10-03-selfhost-tax-feature-fork.md),
+里面有全部决策依据、验证证据和踩过的坑。
+
+## 新增:消费税税额(`tax_amount`,alembic `0020`)
+
+一笔支出可记录税额。**`amount` 语义不变,仍是实付总额**;税额是叠加维度。
+
+| 要改的地方 | 文件 |
+|---|---|
+| 模型列 | `src/models.py` `ReadTxProjection.tax_amount` |
+| 写入校验 | `src/snapshot_mutator.py` `_normalize_tax_amount` |
+| projection 落库 | `src/projection.py` `upsert_tx` |
+| **反向桥(最易漏)** | `src/routers/write/_shared.py` `_projection_row_to_tx_dict` |
+| merge 契约 | `src/sync_applier.py` `_LEDGER_MERGE_SPECS` |
+| 统计切片 | `src/routers/read/_shared.py` `tax_in_base_currency`(MCP 与 Web 共用) |
+| 前端口径 | `frontend/packages/web-features/src/lib/amountBasis.ts` |
+| MCP 工具 | `create_transaction` / `update_transaction` / `create_transactions` / `get_analytics_summary` |
+
+**三条容易踩的**(`CLAUDE.md` 上游那节讲的是移动端同步契约,这几个是本 fork 独有的):
+
+1. **`_projection_row_to_tx_dict` 漏了税额** → Web PATCH 更新会**静默抹掉它
+   且不报错**。上游 `nativeAmount` 当年就踩过同一个坑,注释还在 `:895-899`。
+2. **金额运算不要写 `t.amount`** → 那是原币,多币种账本会把 CNY 和 JPY 直接
+   相加。聚合一律走 `baseAmount()`。已有护栏
+   `frontend/apps/web/src/amountBasisGuard.test.ts` 会拦。
+3. **hook 别插进函数体** → 语法完全合法但永不可达,`tsc` 和 build 都抓不到。
+   护栏 `frontend/apps/web/src/hookPlacement.test.ts`。
+
+## 新增:MCP 附件
+
+`attach_receipt` / `create_transaction_with_receipt`。REST 层
+(`/attachments/upload`)是上游就有的,本 fork 只补了 MCP 接线。
+
+## 环境相关的坑
+
+- **源码安装不用 Docker**:`WEB_STATIC_DIR` 默认是 `/app/static`(Docker 路径),
+  源码装必须改指向 `frontend/apps/web/dist`,否则 Web 面板 404
+- `TAX_CATEGORY_NAME` env 决定税额归到哪个分类名(默认「税与保险」);
+  **前端拿不到这个 env**,改它会让税额扇区不再被钉住显示

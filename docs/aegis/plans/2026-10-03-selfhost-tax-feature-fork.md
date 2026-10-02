@@ -52,6 +52,47 @@ Y2（tx_count 重复计数）在我读码自查时已先行修掉。
 | 🔵 B12 | CSV 测试用裸 `split(",")` 解析整行 | ✅ 改用 `csv` 模块 |
 | — | **R5 饼图扇区上限（原计划标为「用户反馈后再定」）** | ✅ **发现这是会让功能目标落空的硬伤，已修** —— 见下 |
 
+### 第四轮：后端同模式排查 + 护栏
+
+用同一把尺子扫了后端所有 `ReadTxProjection.amount` 的使用点，**没有第四个副本**：
+
+| 位置 | 判定 |
+|---|---|
+| `workspace.py:581/584` 账户维度聚合用原币 | **契约明确要求**如此（`read/_shared.py:436-437`：「账户维度仍读 amount 原币，不要仿此改」）—— 不是 bug |
+| `snapshot_builder.py:53` 序列化、净值历史 | 原币本就正确（snapshot 契约就是原币） |
+| `workspace.py:1033` 税额比率来源 | 本 fork 新增，取原币是**必需的** |
+| `amount_min/max` 过滤器用原币 | **不是 bug**。查过 `TransactionRow.tsx`：交易列表的主数字就是**原币**（外币才加 `≈ 本位币` 副标）。所以「按金额筛选」用原币与用户看到的完全一致；若擅自改成本位币反而会引入「筛不出自己看到的条目」的新 bug |
+
+**「先查清再改」这条在这里救了场** —— 看代码时 `amount_min/max` 用原币而聚合用本位币，
+第一反应是漏改；查完才发现显示侧本来就是原币，两者是一致的。
+
+### 第四轮：金额口径集中 + 护栏
+
+识别出「客户端重复实现 server 口径」会出现三次之后，两个 helper 还散在不同文件里 ——
+等于**没给后来者一个正确的落点**。补上：
+
+- `frontend/packages/web-features/src/lib/amountBasis.ts` 收拢 `baseAmount` /
+  `taxInBaseCurrency` / `splitTax`，两处原有实现改为引用，公式不再有两份
+- `frontend/apps/web/src/amountBasisGuard.test.ts` 扫全部前端源码，找出**参与金额
+  运算的 `.amount`**（加法 / `+=` / `reduce` / `Math.abs|max|min`），命中就必须
+  引共享口径或在 ALLOW 表写明理由
+
+**护栏刚立就抓到两个新的**（年报「最大支出」卡用原币显示却配本位币符号，
+选择逻辑已改而显示没改，同一功能内部前后不一致）—— 已修。
+
+ALLOW 表刻意做得宽（宁可多报），代价是每加一个真实聚合点可能要补一条 ——
+但它同时是一份**已复核记录**。已验证：塞一个 `reduce((s, t) => s + t.amount)`
+进去，护栏立刻变红。
+
+### 第四轮：给 fork 加维护者索引
+
+`CLAUDE.md` 追加「fork 特有改动」一节：税额字段的改动地图、三条本 fork 独有的坑
+（反向桥静默抹数据 / 别写 `t.amount` / hook 别插进函数体）、以及两个环境坑
+（`WEB_STATIC_DIR` 与 `TAX_CATEGORY_NAME`）。目的是让未来的维护者（含 AI 助手）
+不必重新踩一遍。
+
+---
+
 ### 第三轮：系统性排查「客户端重复实现 server 口径」
 
 上一轮修了 `CategoryDetailDialog.aggregate` 的**原币直接相加**。这轮用
