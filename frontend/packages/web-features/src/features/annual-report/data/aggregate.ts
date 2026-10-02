@@ -29,6 +29,21 @@ export type AggregateInput = {
   ledger: { id: string; name: string; currency: string }
 }
 
+/**
+ * 聚合口径:折账本本位币,`nativeAmount ?? amount`(与 server 的
+ * `coalesce(native_amount, amount)` 逐字对应)。
+ *
+ * 之前这里一律用原币 `t.amount`。单币种账本看不出问题,一旦账本里有外币
+ * 交易,CNY 和 JPY 会被直接加在一起 —— 年度总收入 / 总支出 / 月度趋势
+ * 全部错。与 server 的 `workspace_analytics` 是同一条口径。
+ *
+ * **年度总计不剥税** —— 预算是「每笔支出恰好计一次」的分区,同理年度报表
+ * 也要保持总额 = 实付总额;税额的拆分只发生在分类饼图那类分析视图里。
+ */
+export function baseAmount(t: TransactionLite): number {
+  return t.nativeAmount ?? t.amount
+}
+
 export function aggregate(input: AggregateInput): AnnualReportData {
   const { thisYearTxs, prevYearTxs, year, ledger } = input
 
@@ -38,8 +53,8 @@ export function aggregate(input: AggregateInput): AnnualReportData {
 
   // ===== 整体规模 =====
   const totalRecords = txs.length
-  const totalIncome = sumBy(txs, (t) => (t.txType === 'income' ? t.amount : 0))
-  const totalExpense = sumBy(txs, (t) => (t.txType === 'expense' ? t.amount : 0))
+  const totalIncome = sumBy(txs, (t) => (t.txType === 'income' ? baseAmount(t) : 0))
+  const totalExpense = sumBy(txs, (t) => (t.txType === 'expense' ? baseAmount(t) : 0))
   const netSavings = totalIncome - totalExpense
   const savingsRate = totalIncome > 0 ? (netSavings / totalIncome) * 100 : 0
 
@@ -54,10 +69,10 @@ export function aggregate(input: AggregateInput): AnnualReportData {
 
   // ===== 跟去年比 =====
   const prevYearIncome = sumBy(prevTxs, (t) =>
-    t.txType === 'income' ? t.amount : 0
+    t.txType === 'income' ? baseAmount(t) : 0
   )
   const prevYearExpense = sumBy(prevTxs, (t) =>
-    t.txType === 'expense' ? t.amount : 0
+    t.txType === 'expense' ? baseAmount(t) : 0
   )
   const prevYearRecords = prevTxs.length
 
@@ -76,8 +91,8 @@ export function aggregate(input: AggregateInput): AnnualReportData {
   for (const t of txs) {
     const m = new Date(t.happenedAt).getMonth() // 0-11
     monthlyData[m].count++
-    if (t.txType === 'income') monthlyData[m].income += t.amount
-    else if (t.txType === 'expense') monthlyData[m].expense += t.amount
+    if (t.txType === 'income') monthlyData[m].income += baseAmount(t)
+    else if (t.txType === 'expense') monthlyData[m].expense += baseAmount(t)
   }
   for (const b of monthlyData) b.netFlow = b.income - b.expense
 
@@ -111,7 +126,7 @@ export function aggregate(input: AggregateInput): AnnualReportData {
     const h = new Date(t.happenedAt).getHours()
     const idx = h < 6 ? 0 : h < 12 ? 1 : h < 18 ? 2 : 3
     hourBuckets[idx].count++
-    hourBuckets[idx].total += t.amount
+    hourBuckets[idx].total += baseAmount(t)
   }
 
   // ===== 工作日 vs 周末(只统计支出)=====
@@ -126,10 +141,10 @@ export function aggregate(input: AggregateInput): AnnualReportData {
     const isWeekend = day === 0 || day === 6
     if (isWeekend) {
       weekendDays.add(dayOfTx(t))
-      weekendExpense += t.amount
+      weekendExpense += baseAmount(t)
     } else {
       weekdayDays.add(dayOfTx(t))
-      weekdayExpense += t.amount
+      weekdayExpense += baseAmount(t)
     }
   }
   const weekdayAvgExpense =
@@ -144,10 +159,10 @@ export function aggregate(input: AggregateInput): AnnualReportData {
   const incomes = txs.filter((t) => t.txType === 'income')
 
   const largestExpense = expenses.length
-    ? expenses.reduce((max, t) => (t.amount > max.amount ? t : max))
+    ? expenses.reduce((max, t) => (baseAmount(t) > baseAmount(max) ? t : max))
     : null
   const largestIncome = incomes.length
-    ? incomes.reduce((max, t) => (t.amount > max.amount ? t : max))
+    ? incomes.reduce((max, t) => (baseAmount(t) > baseAmount(max) ? t : max))
     : null
   const firstRecord = txs.length
     ? txs.reduce((min, t) => (t.happenedAt < min.happenedAt ? t : min))
@@ -161,7 +176,7 @@ export function aggregate(input: AggregateInput): AnnualReportData {
   for (const t of expenses) {
     const d = dayOfTx(t)
     const cur = dayMap.get(d) ?? { date: d, total: 0, count: 0 }
-    cur.total += t.amount
+    cur.total += baseAmount(t)
     cur.count++
     dayMap.set(d, cur)
   }
@@ -262,12 +277,12 @@ function computeTopCategories(
   limit: number
 ): CategoryStat[] {
   const filtered = txs.filter((t) => t.txType === kind)
-  const total = sumBy(filtered, (t) => t.amount)
+  const total = sumBy(filtered, (t) => baseAmount(t))
   const map = new Map<string, { total: number; count: number }>()
   for (const t of filtered) {
     const name = t.categoryName ?? '未分类'
     const cur = map.get(name) ?? { total: 0, count: 0 }
-    cur.total += t.amount
+    cur.total += baseAmount(t)
     cur.count++
     map.set(name, cur)
   }
@@ -289,7 +304,7 @@ function computeTopTags(txs: TransactionLite[], limit: number): TagStat[] {
     for (const tag of t.tagsList) {
       const cur = map.get(tag) ?? { count: 0, total: 0 }
       cur.count++
-      cur.total += t.amount
+      cur.total += baseAmount(t)
       map.set(tag, cur)
     }
   }

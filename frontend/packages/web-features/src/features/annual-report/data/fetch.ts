@@ -76,6 +76,8 @@ function toLite(
     id: t.id,
     txType: t.tx_type,
     amount: t.amount,
+    nativeAmount: t.native_amount ?? null,
+    taxAmount: t.tax_amount ?? null,
     happenedAt: t.happened_at,
     note: t.note,
     categoryName: t.category_name,

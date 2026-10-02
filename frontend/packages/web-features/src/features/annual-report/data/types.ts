@@ -13,7 +13,13 @@
 export type TransactionLite = {
   id: string
   txType: 'expense' | 'income' | 'transfer'
+  /** 原币金额(用户输入的那个)。展示单笔时用它。 */
   amount: number
+  /** 折账本本位币的金额快照(0018)。**聚合一律用它**,否则多币种账本
+   *  会把 CNY 和 JPY 直接相加。NULL 时回退 amount,见 baseAmount()。 */
+  nativeAmount?: number | null
+  /** 消费税税额(0020,可选)。仅用于详情展示;年度总计口径不变(见 baseAmount)。 */
+  taxAmount?: number | null
   happenedAt: string // ISO 8601
   note: string | null
   categoryName: string | null
