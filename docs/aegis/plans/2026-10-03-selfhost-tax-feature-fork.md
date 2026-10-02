@@ -21,7 +21,7 @@
 | T1 | 源码安装部署到 VPS | ⏸ 待用户 | 本机无 docker；VPS/DNS/证书在用户侧 |
 | T3 | 用 MCP 建「税与保险」分类 | ⏸ 待用户（部署后） | 依赖 MCP 指向自建实例 |
 
-**最终验证**：后端 504 passed · 前端 build 通过 / 79 passed 1 failed（存量 i18n
+**最终验证**：后端 505 passed · 前端 build 通过 / 79 passed 1 failed（存量 i18n
 parity）· 真实服务上税额校验返回 **400 + 可读报错**（非 500）· CSV 导出第 13 列
 税额正确落值。
 
@@ -44,6 +44,24 @@ Y2（tx_count 重复计数）在我读码自查时已先行修掉。
 | 🟡 Y1 | MCP `get_analytics_summary` 不剥税 → MCP 报「餐饮 3280」而界面显示「餐饮 2982 + 税与保险 298」 | ✅ 已修：换算函数提到 `read/_shared.py` 两边共用同一函数对象 |
 | 🟡 Y2 | 税额分类与自身同名时 `tx_count` 被加两次 | ✅ 已修（审查期间自查先行发现） |
 | 🟡 Y3 | 「税与保险」是虚拟扇区，点进详情页合计必然小于扇区值 | ✅ 已修：标题下加说明 |
+| 🟡 Y6 | `create_transaction_with_receipt` 把 base64 解码两遍（峰值内存翻倍） | ✅ 已修：拆 `_attach_receipt_bytes` |
+| 🟡 Y7 | 历史脏数据（`/sync/push` 推入）会让整笔交易无法编辑 | ✅ 已修：降级为「剔除并告警」而非抛错 |
+| 🔵 B1/B3/B4/B5/B8/B11 | 死 i18n key、附件解析重复、`get_transaction` 冗余裸 `json.loads`、返回里的 `_meta` 噪音、迁移文件缺换行、未用变量 | ✅ 全部清理 |
+
+**刻意保留（已评估，非遗漏）**：
+
+| 项 | 理由 |
+|---|---|
+| Y4 `attach_receipt` 先上传后 PATCH | 失败会留孤儿文件。单用户自托管下 PATCH 几乎不会失败；彻底修需要 append-only 的附件端点或写前鉴权，改动面远大于收益 |
+| Y5 共享账本非所有者成员无法用 MCP 附图 | projection 的 `user_id` 是账本所有者。单用户自托管无影响，已在测试 docstring 里写明 |
+| Y8 `/sync/push` 无法清除税额 | `_merge_from_spec` 丢掉 payload 的 `None`，与 `nativeAmount` 同语义，可接受 |
+| B7 sniff 的 `"tax"` 别名可能误判英文账单为 BeeCount 格式 | 阈值 8/12 仍需命中 8 个表头，误判概率极低；改别名反而可能漏掉真导出 |
+| B9 迁移测试是弱测试 | 断言源码字符串。改为对 alembic op 打桩属另一个工作量级，当前至少锁住了「无回填」这个关键属性 |
+| B12 CSV 行用裸 `split(",")` 解析 | 仅测试代码；已在新写的测试里改用按列构造 |
+
+**R2 的守护测试自己也踩了两次坑**：第一版用「parent 在直接语句里」判定 →
+`const [x,setX]=useState()` 全是假阳性；第二版「不钻进嵌套函数」→ 恰恰漏掉
+藏在嵌套函数里的那个 bug。把 bug 放回去验证过，现在会红。
 
 **R2 的守护测试自己也踩了两次坑**：第一版用「parent 在直接语句里」判定 →
 `const [x,setX]=useState()` 全是假阳性；第二版「不钻进嵌套函数」→ 恰恰漏掉
