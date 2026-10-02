@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     attachment_storage_dir: str = "./data/attachments"
     attachment_max_upload_bytes: int = 64 * 1024 * 1024
 
+    # 消费税归属的分类名(0020)。统计时从各笔支出剥出的税额累加到这个分类名
+    # 下,与用户手动记在同一分类里的住民税/国保合并成饼图上的一个扇区(D1)。
+    # 没有税额数据时该扇区不出现,统计与升级前完全一致。
+    # env 覆盖(TAX_CATEGORY_NAME)—— 想改叫「税務」/「Taxes」不必改代码。
+    tax_category_name: str = Field(default="税与保险", alias="TAX_CATEGORY_NAME")
+
     # ===== rclone 备份模块 =====
     # rclone.conf 路径(权限 0600,只 server 进程读写)。默认 `./data/rclone.conf`
     # 配合本地开发(WORKDIR 平级 ./data)。**生产 Docker 镜像必须通过

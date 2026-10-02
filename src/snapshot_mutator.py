@@ -277,6 +277,35 @@ def _sort_transactions(snapshot: dict) -> None:
     items.sort(key=lambda item: _to_iso8601(item.get("happenedAt")), reverse=True)
 
 
+def _normalize_tax_amount(raw: object, amount: float, tx_type: str) -> float | None:
+    """校验并归一 tax_amount(消费税税额,0020)。None = 无税(合法)。
+
+    规则:
+      - 仅 expense 允许有税额 —— income / transfer 上的「税」不是消费税语义
+      - 必须 > 0
+      - 必须 < amount —— 税额不可能等于或超过实付总额
+
+    **不与 amount 联动**:税是从小票抄下来的绝对值,各家舍入方式不同
+    (1780 ÷ 1.08 = 1648.15 与收银机显示的 1649 差 1 円),等比缩放只会
+    制造出 0.5 円这种对不上账的数。所以改 amount 时 tax 保持不动,只在这里
+    校验两者是否仍然自洽。
+    """
+    if raw is None:
+        return None
+    tax = _to_optional_float(raw)
+    if tax is None:
+        return None
+    if tx_type != "expense":
+        raise ValueError(
+            "write validation failed: tax_amount is only allowed on expense transactions"
+        )
+    if tax <= 0:
+        raise ValueError("write validation failed: tax_amount must be positive")
+    if amount <= 0 or tax >= amount:
+        raise ValueError("write validation failed: tax_amount must be less than amount")
+    return tax
+
+
 def create_transaction(snapshot: dict, payload: dict) -> tuple[dict, str]:
     target = ensure_snapshot_v2(snapshot)
     tx_type = str(payload.get("tx_type") or "expense")
@@ -296,6 +325,13 @@ def create_transaction(snapshot: dict, payload: dict) -> tuple[dict, str]:
         item["currencyCode"] = str(payload.get("currency_code")).upper()
     if payload.get("native_amount") is not None:
         item["nativeAmount"] = _to_float(payload.get("native_amount"))
+    # 消费税税额(0020):显式传入才写;不传不产生 key(upsert 落 NULL = 无税)。
+    # amount 语义不变 —— 仍是实付总额,税额只是叠加维度。
+    tax = _normalize_tax_amount(
+        payload.get("tax_amount"), _to_float(item["amount"]), tx_type
+    )
+    if tax is not None:
+        item["taxAmount"] = tax
     if payload.get("note") is not None:
         item["note"] = str(payload.get("note"))
     if payload.get("category_name") is not None:
@@ -398,6 +434,28 @@ def update_transaction(snapshot: dict, tx_id: str, payload: dict) -> dict:
         item["currencyCode"] = str(payload.get("currency_code")).upper()
     if "happened_at" in payload:
         item["happenedAt"] = _to_iso8601(payload.get("happened_at"))
+
+    # 消费税税额(0020)。放在 amount / tx_type 落定**之后**:
+    #   - 显式传 null → 清除税额(patch 语义;update 端点用 exclude_unset,
+    #     所以「不传」= 键不在 payload = 不变,「传 null」= 清除)
+    #   - 只改 amount / tx_type 不碰税额时,也要校验既有税额是否仍自洽
+    #     (如把 expense 改成 transfer 却留着税)。不做联动缩放,理由见
+    #     _normalize_tax_amount 的 docstring。
+    if "tax_amount" in payload:
+        if payload.get("tax_amount") is None:
+            item.pop("taxAmount", None)
+        else:
+            item["taxAmount"] = _normalize_tax_amount(
+                payload.get("tax_amount"),
+                _to_float(item.get("amount")),
+                str(item.get("type") or "expense"),
+            )
+    if "taxAmount" in item:
+        _normalize_tax_amount(
+            item["taxAmount"],
+            _to_float(item.get("amount")),
+            str(item.get("type") or "expense"),
+        )
 
     mapping = {
         "note": "note",

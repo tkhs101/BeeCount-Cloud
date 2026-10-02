@@ -901,6 +901,12 @@ def _projection_row_to_tx_dict(row: ReadTxProjection) -> dict[str, Any]:
         item["currencyCode"] = row.currency_code
     if row.native_amount is not None:
         item["nativeAmount"] = row.native_amount
+    # 消费税税额(0020):必须带上,否则 web PATCH update_tx 快路径的 prev_item
+    # 缺这个键 → snapshot_mutator 的 `item.pop("taxAmount")` 分支被跳过/反之
+    # upsert 会把 tax_amount 写成 NULL,**用户记的税额被静默抹掉且不报错**。
+    # 同 native_amount 上一条的理由,别漏。
+    if row.tax_amount is not None:
+        item["taxAmount"] = row.tax_amount
     return item
 
 

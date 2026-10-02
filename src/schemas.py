@@ -525,6 +525,9 @@ class ReadTransactionOut(BaseModel):
     # native_amount=折账本本位币快照(null 时前端 fallback 用 amount)。
     currency_code: str | None = None
     native_amount: float | None = None
+    # 消费税税额(0020):NULL = 无税。校验 `0 < tax < amount` 且仅 expense
+    # 允许非空,由 snapshot_mutator 强制(错误文案沿用 write validation 风格)。
+    tax_amount: float | None = None
     last_change_id: int
     ledger_id: str | None = None
     ledger_name: str | None = None
@@ -813,6 +816,9 @@ class WriteTransactionCreateRequest(WriteBaseRequest):
     # 折账本本位币快照(前端按汇率算好传入)。不传 → item 不产生字段(旧行为)。
     currency_code: str | None = None
     native_amount: float | None = None
+    # 消费税税额(0020):照抄小票的「消費税等」绝对值。**amount 仍是实付总额**,
+    # 本字段只是叠加维度(统计时剥出归入「税与保险」)。不传 → 无税。
+    tax_amount: float | None = None
 
 
 class WriteTransactionUpdateRequest(WriteBaseRequest):
@@ -838,6 +844,10 @@ class WriteTransactionUpdateRequest(WriteBaseRequest):
     # 交易级多币种(0018):显式传入优先(mutator 不再联动);None = 不变。
     currency_code: str | None = None
     native_amount: float | None = None
+    # 消费税税额(0020):PATCH 语义 —— 不传 = 不变;**显式传 null = 清除税额**
+    # (依赖 update 端点的 exclude_unset:显式传的 null 会进 payload)。
+    # 与 amount 无联动:税是小票上的绝对值,等比缩放会算出 0.5 円。
+    tax_amount: float | None = None
 
 
 

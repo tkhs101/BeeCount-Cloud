@@ -268,6 +268,11 @@ def upsert_tx(
         # 插入且旧 payload 无字段 → NULL(统计端 COALESCE 回退 amount)。
         "currency_code": _as_str(payload.get("currencyCode")),
         "native_amount": _as_float_or_none(payload.get("nativeAmount")),
+        # 消费税税额(0020):只存原币。折本位币的税额由统计侧推导
+        # (`native_amount * (tax_amount / amount)`),不落库 —— 存两份额算值
+        # 就等于复制 native_amount 那个联动 bug 的温床。
+        # 缺键保留由上游 merge_with_existing 负责;首次插入 → NULL(无税)。
+        "tax_amount": _as_float_or_none(payload.get("taxAmount")),
         "source_change_id": source_change_id,
     }
 

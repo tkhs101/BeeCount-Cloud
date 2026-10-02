@@ -331,6 +331,7 @@ def list_transactions(
                 exclude_from_budget=bool(row.exclude_from_budget),
                 currency_code=row.currency_code,
                 native_amount=row.native_amount,
+                tax_amount=row.tax_amount,
                 last_change_id=source_change_id,
                 ledger_id=ledger.external_id,
                 ledger_name=ledger_name,

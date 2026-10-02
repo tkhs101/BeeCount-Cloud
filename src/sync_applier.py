@@ -207,6 +207,10 @@ _LEDGER_MERGE_SPECS: dict[str, _MergeSpec] = {
         # _sync_native_amount_after_merge。
         ("currencyCode", "currency_code"),
         ("nativeAmount", "native_amount"),
+        # 消费税税额(0020):漏登记会导致 /sync/push 增量更新时税额被 merge
+        # 丢掉 —— CLAUDE.md 点名的「漏 merge 某字段」类 bug 的标准形态
+        # (2026-04 budget 那次就是这样 500 的)。
+        ("taxAmount", "tax_amount"),
     ]),
 }
 

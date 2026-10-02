@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import false as sa_false
 
 from ._shared import *  # noqa: F401,F403 — imports + helpers + router
+from ...config import get_settings
 from ...models import ExchangeRateCache, UserExchangeRateProjection
 
 # ---------------------------------------------------------------------------
@@ -208,6 +209,7 @@ def list_workspace_transactions(
                 exclude_from_budget=bool(row.exclude_from_budget),
                 currency_code=row.currency_code,
                 native_amount=row.native_amount,
+                tax_amount=row.tax_amount,
                 last_change_id=change_id,
                 ledger_id=led_ext_id,
                 ledger_name=led_name,
@@ -966,6 +968,38 @@ def workspace_ledger_counts(
     )
 
 
+def _tax_in_base_currency(
+    tax_amount: object, raw_amount: object, base_amount: float
+) -> float:
+    """原币税额 → 折账本本位币的税额(0020)。
+
+    **比例法**:`tax / amount` 的比率与币种无关,用该笔自身的隐含汇率换算,
+    保证税额和主金额走**同一个汇率**、不会各自漂移。汇率快照本身已经存在
+    `native_amount` 里,这里只是复用,不额外存一份折算后的税额 ——
+    存两份就等于复制 native_amount 当年「改了 amount 忘了改折算值」的坑。
+
+    - `tax_amount` 为 NULL(免税 / 未记录)→ 0
+    - `raw_amount <= 0` 推不出比率 → 退化 1:1 并夹到 base_amount,与
+      native_amount 既有退化规则同口径
+    """
+    if tax_amount is None:
+        return 0.0
+    try:
+        tax = float(tax_amount)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    if tax <= 0:
+        return 0.0
+    try:
+        raw = float(raw_amount or 0.0)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raw = 0.0
+    base = float(base_amount or 0.0)
+    if raw <= 0:
+        return min(tax, base)
+    return min(base, base * (tax / raw))
+
+
 @router.get("/workspace/analytics", response_model=WorkspaceAnalyticsOut)
 def workspace_analytics(
     scope: AnalyticsScope = Query(default="month"),
@@ -1008,6 +1042,9 @@ def workspace_analytics(
     distinct_days_set: set[str] = set()
     first_tx_at: datetime | None = None
     last_tx_at: datetime | None = None
+    # 消费税归属的分类名(0020)。env TAX_CATEGORY_NAME 可改(见 config)。
+    # 空串/纯空白时退回默认,免得配错导致税额落进一个无名分类。
+    tax_bucket_name = (get_settings().tax_category_name or "").strip() or "税与保险"
 
     if ledger_internal_ids:
         tx_query = select(
@@ -1016,6 +1053,11 @@ def workspace_analytics(
             func.coalesce(ReadTxProjection.native_amount, ReadTxProjection.amount),
             ReadTxProjection.happened_at,
             ReadTxProjection.category_name,
+            # 消费税(0020):折本位币税额要按「原币税额 / 原币金额」这个与币种
+            # 无关的比率换算,所以原币 amount 也得带上(native 那列已被
+            # COALESCE 吃掉了)。
+            ReadTxProjection.amount,
+            ReadTxProjection.tax_amount,
         ).where(
             ReadTxProjection.ledger_id.in_(ledger_internal_ids),
             # exclude_from_stats=True 的交易不计入收支统计(D1);该端点所有
@@ -1033,7 +1075,7 @@ def workspace_analytics(
         # 本地 0-8 点记的笔会被算到前一天的 distinct_days,跟日历视图不一致。
         from datetime import timedelta as _td
 
-        for tx_type_val, amount, happened_at_raw, cat_name in db.execute(tx_query).all():
+        for tx_type_val, amount, happened_at_raw, cat_name, raw_amount, tax_amount in db.execute(tx_query).all():
             if happened_at_raw is None:
                 continue
             happened_at = _to_utc(happened_at_raw)
@@ -1062,10 +1104,28 @@ def workspace_analytics(
             if tx_type_val == "income":
                 category_slot["income"] += amt
             elif tx_type_val == "expense":
-                category_slot["expense"] += amt
-                # 同步累加 per-bucket category → anomaly 归因输入
+                # 消费税(0020):把税额从分类切片里剥出来,归入「税与保险」。
+                # 上面的 expense_total / slot["expense"] 已按**全额**加过,
+                # 这里只拆分类切片 —— 所以「月支出总额 = 实付金额」这个不变式
+                # 天然成立,不需要任何额外兜底。预算走独立 SQL(ledgers.py),
+                # 不受这里影响(D4:预算恒按全额)。
+                tax_native = _tax_in_base_currency(tax_amount, raw_amount, amt)
+                net = amt - tax_native
+                category_slot["expense"] += net
                 bucket_cat = category_by_bucket.setdefault(bucket, {})
-                bucket_cat[category] = bucket_cat.get(category, 0.0) + amt
+                bucket_cat[category] = bucket_cat.get(category, 0.0) + net
+                if tax_native > 0:
+                    # 累加进「税与保险」这个分类名下 —— 用户手动记在该分类下的
+                    # 住民税/国保(category_name 相同、tax_amount 为 NULL)会
+                    # 走上面那条普通分支落进同一个 map key,两者自动合并成
+                    # 饼图上的一个扇区(D1)。没有税额数据时这个 key 只在真有
+                    # 数据时才出现,统计与升级前完全一致。
+                    tax_slot = category_map.setdefault(
+                        tax_bucket_name, {"income": 0.0, "expense": 0.0, "count": 0.0})
+                    tax_slot["expense"] += tax_native
+                    tax_slot["count"] += 1.0
+                    bucket_cat[tax_bucket_name] = (
+                        bucket_cat.get(tax_bucket_name, 0.0) + tax_native)
 
     series = [
         WorkspaceAnalyticsSeriesItemOut(

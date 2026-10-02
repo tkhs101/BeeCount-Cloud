@@ -512,6 +512,12 @@ class ReadTxProjection(Base):
     # 统计端 COALESCE 回退 amount)。账本维度统计读 native_amount,账户维度仍 amount。
     currency_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
     native_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 消费税税额(0020):一笔支出中包含的税额(日本「消費税」)。NULL = 无税。
+    # **amount 语义不变,仍是实付总额** —— 税额只是叠加维度,统计时从 amount
+    # 剥出归入「税与保险」,两者相加仍等于实付。只存原币,折本位币的税额由
+    # 统计侧 `native_amount * (tax_amount / amount)` 推导,不落库(避免重演
+    # native_amount 的联动 bug)。税率不存 —— 小票只印金額,各家舍入不一。
+    tax_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 Index(
