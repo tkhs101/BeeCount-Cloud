@@ -118,3 +118,79 @@ def test_transaction_write_models_declare_tax_amount(rel: str, cls: str) -> None
         f"{rel}:{cls} 是交易类模型但没有 tax_amount —— "
         f"字段会在这个边界被静默丢弃(批量导入丢过一次)"
     )
+
+# --------------------------------------------------------------------------- #
+# 白名单式 payload 构造                                                        #
+# --------------------------------------------------------------------------- #
+#
+# 批量导入丢税额有**两个**丢失点,上一个护栏只覆盖了第一个:
+#   ① BatchTransactionItem 没有 tax_amount 字段 → pydantic 静默丢
+#   ② _build_tx_payload 是白名单式构造,schema 补上了它也没写
+#
+# 只测「schema 有没有字段」抓不到 ②。下面这条按**实际调用**逐字段核对:
+# 把 item 的每个字段都填上非空值,断言每个字段名都出现在产出的 payload 里。
+
+
+def test_batch_payload_builder_copies_every_item_field() -> None:
+    """`_build_tx_payload` 必须把 item 的**每一个**非空字段带进 payload。
+
+    白名单式构造的固有风险:schema 加了字段、这里忘了写,字段就在这个边界
+    静默消失且不报错。税额丢过一次。
+    """
+    from datetime import datetime, timezone
+
+    from src.models import User
+    from src.routers.write.transactions_batch import (
+        BatchTransactionItem,
+        _build_tx_payload,
+    )
+
+    # 每个字段都给非空值 —— 用类型对应的「合法填充值」
+    full: dict = {
+        "tx_type": "expense",
+        "amount": 3280.0,
+        "happened_at": datetime(2026, 10, 3, tzinfo=timezone.utc),
+        "note": "KING BEAR NOW",
+        "category_name": "餐饮",
+        "category_kind": "expense",
+        "account_name": "现金",
+        "from_account_name": "招行",
+        "to_account_name": "支付宝",
+        "category_id": "cat-1",
+        "account_id": "acc-1",
+        "from_account_id": "acc-from",
+        "to_account_id": "acc-to",
+        "tags": ["MCP"],
+        "currency_code": "CNY",
+        "native_amount": 3280.0,
+        "tax_amount": 298.0,
+    }
+    item = BatchTransactionItem(**full)
+    # schema 里没有的字段不许出现在 fixture 里,否则这条测试会跟着实现漂移
+    assert set(full) == set(BatchTransactionItem.model_fields), (
+        f"fixture 与 model 字段不同步: "
+        f"缺 {set(BatchTransactionItem.model_fields) - set(full)}, "
+        f"多 {set(full) - set(BatchTransactionItem.model_fields)}"
+    )
+
+    user = User(id="u1", email="a@b.com", password_hash="x", is_admin=False,
+                is_enabled=True)
+    payload = _build_tx_payload(
+        item=item, auto_tag_names=[], attachment_dict=None, actor_user=user
+    )
+
+    missing = [
+        name for name, value in full.items()
+        if value is not None and name not in payload
+    ]
+    assert not missing, (
+        f"_build_tx_payload 白名单漏掉了这些字段:{missing} —— "
+        f"它们会在这个边界被静默丢弃(批量导入的税额丢过一次)"
+    )
+
+# 注:曾写过一条「None 字段不该出现在 payload」的断言,后来删掉了 ——
+# 它测的是实现细节而非行为。`_build_tx_payload` 的初始 dict 会无条件带上
+# `note: None`,但这完全无害:`snapshot_mutator.create_transaction` 每个字段都是
+# `if payload.get(x) is not None` 才写 key,None 到那里会被跳过。
+# 「字段为 None 时会不会产生空值」这个问题由 mutator 统一保证,
+# 在 payload 构造层重复断言只会让人误以为那里也有语义。
