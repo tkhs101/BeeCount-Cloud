@@ -52,6 +52,35 @@ Y2（tx_count 重复计数）在我读码自查时已先行修掉。
 | 🔵 B12 | CSV 测试用裸 `split(",")` 解析整行 | ✅ 改用 `csv` 模块 |
 | — | **R5 饼图扇区上限（原计划标为「用户反馈后再定」）** | ✅ **发现这是会让功能目标落空的硬伤，已修** —— 见下 |
 
+### 第三轮：系统性排查「客户端重复实现 server 口径」
+
+上一轮修了 `CategoryDetailDialog.aggregate` 的**原币直接相加**。这轮用
+`grep -rn "reduce((s"` 把前端所有金额聚合点扫了一遍，发现**同一个 bug 的第二个
+副本**，以及一个更值得记的结论：
+
+| 位置 | 问题 | 状态 |
+|---|---|---|
+| `annual-report/data/aggregate.ts` | 年度总收支 / 月度趋势 / 时段分布 / 周末支出 / 分类排行 **全部**用原币 `t.amount`。单币种账本无感，一有外币交易就把 CNY 和 JPY 加在一起 | ✅ 修（15 处聚合点统一走 `baseAmount()`）|
+| `CategoryDetailDialog.aggregate` | 税额没按比率折本位币（50 CNY / 税 5 / 汇率 20 → 算出 995 而非 900）| ✅ 修 |
+| `CategoryDetailDialog.aggregate` | 不过滤 `exclude_from_stats`，笔数用 `transactions.length` | ✅ 修 |
+| `CategoryDetailDialog` / `annual-report` | **完全没有测试** —— bug 藏身之处 | ✅ 补 13 个 |
+
+**结论比单个修复更重要**：客户端重复实现 server 的金额口径，这个模式已经
+出现**三次**。前两次是修完一个才发现另一个，第三次是主动 grep 才找全。建议
+后续加聚合逻辑时，要么从 server 拿聚合结果，要么复用已抽出的
+`baseAmount` / `taxInBaseCurrency`，不要就地写 `t.amount`。
+
+配套还发现 `TransactionLite` 这个精简类型**根本没带折算字段** —— 聚合想用
+`native_amount` 也用不了，已补上。
+
+### 其余本轮修复
+
+- **i18n parity（存量失败）**：`accounts.balance.adjust.*` 8 条 + 1 条按钮文案，
+  en 和 zh-CN 都有、唯独 zh-TW 没有。它让 `pnpm test` 一直是红的 —— 意味着
+  「测试失败」这个信号被稀释,真问题混在里面容易被忽略。补齐后前端 **114 全绿**。
+
+---
+
 ### R5 · 饼图扇区上限：会让核心诉求直接落空
 
 扇区是**按金额排序**取前 N（原本 N=5），而消费税扇区的金额天然最小。真实数据
