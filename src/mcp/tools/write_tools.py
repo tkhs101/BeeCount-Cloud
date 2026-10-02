@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 from sqlalchemy import select
 
@@ -425,10 +425,40 @@ _BATCH_CHUNK = 50
 _BULK_MAX_TOTAL = 200
 
 
+class BatchTxItem(TypedDict):
+    """create_transactions 单条 item 的声明类型。
+
+    **为什么必须是 TypedDict 而不是 `list[dict[str, Any]]`**:
+    泛型 dict 生成的 JSON Schema 是 `{"type":"object","additionalProperties":true}`
+    —— 没有 properties、没有 required、amount 无类型约束。LLM 看到这种 schema
+    会照着账单/Excel 的字面值传字符串(`{"amount":"38.00"}`),而 `Any` 不做任何
+    强转,原始 str 一路带到下面 `isinstance(amount,(int,float))` 被拒,报出
+    `transactions[0]: amount must be a positive number` —— 与真实原因无关的
+    误导性错误。单条 create_transaction 不受影响,只因它的 `amount` 声明为
+    `float`,pydantic 会强转。**两条路径的唯一差别就是这里的类型声明。**
+
+    TypedDict 同时满足三点:schema 带 `"amount":{"type":"number"}` +
+    `"required":["amount"]`(给 LLM 明确指引)、`"38.00"` 被强转成 38.0、
+    validate 后仍是 plain dict(下面 normalize 循环的 `raw.get()` 一行不用改)。
+    换成 BaseModel 会让 item 变成模型实例,`raw.get()` 全部炸。
+
+    字段名沿用下面循环体已经在读的键,新增字段时两边同步。
+    """
+
+    amount: float
+    tx_type: NotRequired[str]
+    category: NotRequired[str]
+    account: NotRequired[str]
+    happened_at: NotRequired[str]
+    note: NotRequired[str]
+    tags: NotRequired[list[str]]
+    currency: NotRequired[str]
+
+
 async def create_transactions(
     user: User,
     *,
-    transactions: list[dict[str, Any]],
+    transactions: list[BatchTxItem],
     ledger_id: str | None = None,
 ) -> dict[str, Any]:
     """批量新建交易(Excel / 对账单导入等)。

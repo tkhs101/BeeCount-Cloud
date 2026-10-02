@@ -37,6 +37,7 @@ from .auth import (
     require_mcp_scope,
 )
 from .tools import read_tools, write_tools
+from .tools.write_tools import BatchTxItem
 
 logger = logging.getLogger(__name__)
 
@@ -382,7 +383,7 @@ async def create_transaction(
 @mcp.tool()
 async def create_transactions(
     ctx: Context,
-    transactions: list[dict[str, Any]],
+    transactions: list[BatchTxItem],
     ledger_id: str | None = None,
 ) -> dict[str, Any]:
     """Create many transactions at once — use this for bulk imports.
@@ -393,8 +394,9 @@ async def create_transactions(
 
     Args:
         transactions: list of objects, each like create_transaction's args —
-            {amount (>0), tx_type (expense|income|transfer, default expense),
-             category, account, happened_at (ISO, default now), note, tags,
+            {amount (>0, a NUMBER — pass 38.00 not "38.00"), tx_type
+             (expense|income|transfer, default expense), category, account,
+             happened_at (ISO, default now), note, tags,
              currency (ISO 4217, only for foreign-currency amounts)}.
             category/account must be existing names (server rejects unknown ones).
         ledger_id: Optional. If omitted and you have multiple ledgers, the tool
