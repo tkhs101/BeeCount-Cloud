@@ -3,7 +3,11 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useT, useToast } from '@beecount/ui'
 
-import { setPendingImportFile, setPendingShareText } from '../../lib/pwa-intake'
+import {
+  setPendingImportFile,
+  setPendingShareImage,
+  setPendingShareText,
+} from '../../lib/pwa-intake'
 
 type Stage = 'reading' | 'routing' | 'error'
 
@@ -99,11 +103,13 @@ export function ShareIncomingPage() {
         return
       }
 
-      // 3b) 图片 → 暂无 web 端 AI 提取能力,给用户提示后跳到「新建交易」
-      //     让用户手动填(原图保存为附件的能力等后端 attachment API 接入再加)
+      // 3b) 图片 → 暂存原图,跳「新建交易」。原图会作为**附件**跟着这笔交易
+      //     一起落库(不是当 OCR 输入)。用户在弹窗里补金额/分类后保存,
+      //     TransactionsPage 会先 upload 再带 attachments 提交。
       const imageFile = files.find((f) => IMAGE_RE.test(f.type))
       if (imageFile) {
-        toast.info(t('pwa.share.imageNotYet'))
+        setPendingShareImage(imageFile)
+        toast.info(t('pwa.share.imageReady'))
         navigate('/app/transactions?action=quick-add&source=share-image', { replace: true })
         return
       }

@@ -1079,6 +1079,10 @@ const zhTW = {
   'pagination.summary': '顯示 {start}-{end} / 共 {total} 筆',
 
   'transactions.title': '交易管理',
+  'transactions.attachments.label': '小票與照片',
+  'transactions.attachments.add': '新增附件',
+  'transactions.attachments.uploading': '上傳中…',
+  'transactions.attachments.count': '已附 {count} 個',
   'transactions.placeholder.amount': '金額',
   'transactions.tax.label': '消費稅',
   'transactions.tax.placeholder': '如 298',
@@ -1722,6 +1726,7 @@ const zhTW = {
   'pwa.share.routing': '正在開啟...',
   'pwa.share.error': '處理分享失敗:{reason}',
   'pwa.share.routedToImport': '已收到 {name},為你開啟匯入頁',
+  'pwa.share.imageReady': '小票已附上 —— 補好金額即可儲存',
   'pwa.share.imageNotYet': '圖片自動辨識暫在 mobile 端,網頁端請手動記一筆',
   'pwa.update.available': '偵測到新版本',
   'pwa.update.apply': '立即更新',

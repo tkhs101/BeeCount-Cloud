@@ -99,7 +99,7 @@ import { useAttachmentCache } from '../../context/AttachmentCacheContext'
 import { BatchDeleteDialog } from '../../components/tx-batch/BatchDeleteDialog'
 import { SelectionToolbar } from '../../components/tx-batch/SelectionToolbar'
 import { localizeError } from '../../i18n/errors'
-import { consumePendingShareText } from '../../lib/pwa-intake'
+import { consumePendingShareImage, consumePendingShareText } from '../../lib/pwa-intake'
 import { dispatchOpenDetailTx } from '../../lib/txDialogEvents'
 // AppLayout 已搬到 AppShell。
 import type { AppSection } from '../../state/router'
@@ -418,6 +418,9 @@ export function TransactionsPage() {
   // 行(panel 自己不再渲染按钮 + dialog state)。编辑流程通过 onEdit 回调
   // 设 form 后 page 这里 setOpen(true)。
   const [txDialogOpen, setTxDialogOpen] = useState(false)
+  // 分享进来的小票图,等账本 id 就绪后再上传(uploadAttachment 需要 ledger_id,
+  // 而 txWriteLedgerId 由另一个 effect 异步设置 —— 见下方 effect)。
+  const [pendingAttachmentUpload, setPendingAttachmentUpload] = useState<File | null>(null)
   // CSV 导出 in-flight 标记 — 大账本流式下载 1-3s,期间按钮 disabled + 防重复点击
   const [exportingCsv, setExportingCsv] = useState(false)
   // accountForm state 已迁到 AccountsPage。
@@ -889,6 +892,14 @@ export function TransactionsPage() {
           setTxForm((prev) => ({ ...prev, note: composed }))
         }
       }
+      // 分享进来的图片(小票照)→ 直接上传成附件并塞进表单。用户补完金额/
+      // 分类保存后,原图随这笔交易一起落库(而不是当 OCR 输入丢掉)。
+      const shareImage = consumePendingShareImage()
+      if (shareImage) {
+        // 等账本选定 —— uploadAttachment 需要 ledger_id,而 txWriteLedgerId
+        // 由另一个 effect 设置(空账本列表时这里还是空串)。
+        setPendingAttachmentUpload(shareImage)
+      }
       setTxDialogOpen(true)
       consumed.push('action')
     }
@@ -908,6 +919,7 @@ export function TransactionsPage() {
     next.delete('source')
     setSearchParams(next, { replace: true })
   }, [route.section, searchParams, canWriteTx, setSearchParams])
+
 
   // 列表类 section / admin / 设备 / 健康 页的数据加载。合并了"filter 变化
   // 刷新" + "切账本刷新" 两条触发路径 —— 原来分两个 useEffect 都调同一个
@@ -1343,6 +1355,25 @@ export function TransactionsPage() {
       setErrorNotice(renderError(err))
       return []
     }
+
+  // 分享进来的小票图:等 txWriteLedgerId 就绪(账本列表是异步的)再上传,
+  // 上传完直接并进表单附件。用户不用在弹窗里再点一次「添加附件」。
+  useEffect(() => {
+    const file = pendingAttachmentUpload
+    if (!file) return
+    const ledgerId = txWriteLedgerId.trim()
+    if (!ledgerId) return // 还没选定账本,下一轮再试
+    setPendingAttachmentUpload(null)
+    let cancelled = false
+    ;(async () => {
+      const uploaded = await onUploadTxAttachments([file])
+      if (cancelled || uploaded.length === 0) return
+      setTxForm((prev) => ({ ...prev, attachments: [...prev.attachments, ...uploaded] }))
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [pendingAttachmentUpload, txWriteLedgerId, onUploadTxAttachments])
   }
 
   // ensureCategoryIconPreview 已合并到全局 AttachmentCache.ensureLoadedMany 里,
@@ -1930,6 +1961,7 @@ export function TransactionsPage() {
               <TransactionsPanel
                 baseCurrency={txWriteLedgerCurrency}
                 currencyRates={txCurrencyRates}
+                onUploadTxAttachments={onUploadTxAttachments}
                 noteDisplayMode={profileMe?.appearance?.note_display_mode ?? 'category'}
                 selectionMode={selectionMode}
                 selectedIds={selectedTxIds}

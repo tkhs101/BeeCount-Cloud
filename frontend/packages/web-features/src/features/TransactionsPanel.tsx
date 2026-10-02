@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   Badge,
@@ -39,6 +39,9 @@ import type { TxForm } from '../forms'
 
 type TransactionsPanelProps = {
   form: TxForm
+  /** 附件上传回调(可选)。传了才渲染「附小票」按钮。选中文件后应立即上传,
+   *  返回 `AttachmentRef[]` 由组件合并进 `form.attachments`。 */
+  onUploadTxAttachments?: (files: File[]) => Promise<AttachmentRef[]>
   /** 账本本位币(大写 ISO)。币种下拉默认值;选=本位币时 form.currency 存 ''。 */
   baseCurrency?: string
   /** v30 多币种:各币种对 baseCurrency 的汇率(1 quote ≈ x base),透传币种选择弹窗展示。 */
@@ -272,10 +275,16 @@ export function TransactionsPanel({
   onToggleSelect,
   showCreator = false,
   currentUserId,
-  noteDisplayMode = 'category'
+  noteDisplayMode = 'category',
+  /** 附件上传回调(可选)。传了就渲染「附小票」按钮;不传则该区块不渲染。
+   *  选中文件后应立即上传并返回 `AttachmentRef[]`,由本组件合并进
+   *  `form.attachments`。 */
+  onUploadTxAttachments
 }: TransactionsPanelProps) {
   const t = useT()
   const open = dialogOpen
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null)
+  const [uploadingAttachments, setUploadingAttachments] = useState(false)
   const setOpen = onDialogOpenChange
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false)
   const [tagPickerOpen, setTagPickerOpen] = useState(false)
@@ -711,6 +720,62 @@ export function TransactionsPanel({
                 onChange={(e) => onFormChange({ ...form, note: e.target.value })}
               />
             </div>
+            {/* 附件(小票照)。此前表单只能*显示*已有附件、没有添加入口 ——
+                `onUploadTxAttachments` 在 TransactionsPage 定义了却从未被接上,
+                导致 Web 端根本没法给新交易附图。prop 可选:不传就不渲染这个
+                区块(详情轮播仍照常显示已有附件)。
+                选中后立即上传(服务端按 sha256 去重,同一张图不占两份空间),
+                返回的 AttachmentRef 落进 form.attachments 随交易一起提交。 */}
+            {onUploadTxAttachments ? (
+              <div className="space-y-1 md:col-span-2">
+                <Label>{t('transactions.attachments.label')}</Label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    ref={attachmentInputRef}
+                    type="file"
+                    accept="image/*,application/pdf"
+                    multiple
+                    className="hidden"
+                    onChange={async (e) => {
+                      const files = Array.from(e.target.files || [])
+                      // 立刻清空,否则连续选同一个文件不会再触发 change
+                      e.target.value = ''
+                      if (files.length === 0) return
+                      setUploadingAttachments(true)
+                      try {
+                        const uploaded = await onUploadTxAttachments(files)
+                        if (uploaded.length > 0) {
+                          onFormChange({
+                            ...form,
+                            attachments: [...form.attachments, ...uploaded]
+                          })
+                        }
+                      } finally {
+                        setUploadingAttachments(false)
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={uploadingAttachments}
+                    onClick={() => attachmentInputRef.current?.click()}
+                  >
+                    {uploadingAttachments
+                      ? t('transactions.attachments.uploading')
+                      : t('transactions.attachments.add')}
+                  </Button>
+                  {form.attachments.length > 0 ? (
+                    <span className="text-xs text-muted-foreground">
+                      {t('transactions.attachments.count', {
+                        count: form.attachments.length
+                      })}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             {/* §三 标记开关 — 按当前 type 条件显示:
                   不计入收支:income / expense(转账本就不进收支,隐藏)
                   不计入预算:仅 expense(预算只统计支出) */}

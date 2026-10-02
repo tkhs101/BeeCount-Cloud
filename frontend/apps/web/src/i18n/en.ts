@@ -1079,6 +1079,10 @@ const en = {
   'pagination.summary': 'Showing {start}-{end} of {total}',
 
   'transactions.title': 'Transactions',
+  'transactions.attachments.label': 'Receipts & photos',
+  'transactions.attachments.add': 'Attach file',
+  'transactions.attachments.uploading': 'Uploading…',
+  'transactions.attachments.count': '{count} attached',
   'transactions.placeholder.amount': 'amount',
   // 消费税(0020):日本小票印「合計 / 消費税等」两个绝对值,不印税率,
   // 各家舍入也不同(1780 ÷ 1.08 会和收银机差 1 円),所以让用户照抄。
@@ -1738,6 +1742,7 @@ const en = {
   'pwa.share.routing': 'Opening...',
   'pwa.share.error': 'Failed to handle share: {reason}',
   'pwa.share.routedToImport': 'Received {name}, opening import page',
+  'pwa.share.imageReady': 'Receipt attached — fill in the amount to save',
   'pwa.share.imageNotYet': 'Image auto-extraction is mobile-only for now. Please record manually on the web.',
   'pwa.update.available': 'New version available',
   'pwa.update.apply': 'Update now',

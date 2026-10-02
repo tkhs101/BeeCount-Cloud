@@ -1120,6 +1120,10 @@ const zhCN = {
   'pagination.summary': '显示 {start}-{end} / 共 {total} 条',
 
   'transactions.title': '交易管理',
+  'transactions.attachments.label': '小票与照片',
+  'transactions.attachments.add': '添加附件',
+  'transactions.attachments.uploading': '上传中…',
+  'transactions.attachments.count': '已附 {count} 个',
   'transactions.placeholder.amount': '金额',
   'transactions.tax.label': '消费税',
   'transactions.tax.placeholder': '如 298',
@@ -1773,6 +1777,7 @@ const zhCN = {
   'pwa.share.routing': '正在打开...',
   'pwa.share.error': '处理分享失败:{reason}',
   'pwa.share.routedToImport': '已收到 {name},为你打开导入页',
+  'pwa.share.imageReady': '小票已附上 —— 补好金额即可保存',
   'pwa.share.imageNotYet': '图片自动识别暂在 mobile 端,网页端请手动记一笔',
   'pwa.update.available': '检测到新版本',
   'pwa.update.apply': '立即更新',

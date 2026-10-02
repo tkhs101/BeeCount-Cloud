@@ -13,6 +13,9 @@
 
 let pendingImportFile: File | null = null
 let pendingShareText: { title?: string; text?: string; url?: string } | null = null
+/** 分享进来的图片(小票照)。和 pendingImportFile 一样是一次性 intent,
+ *  但走不同下游:图片不是「待导入的表格」,而是「待附到某笔交易上的附件」。 */
+let pendingShareImage: File | null = null
 
 export function setPendingImportFile(file: File | null): void {
   pendingImportFile = file
@@ -32,4 +35,14 @@ export function consumePendingShareText(): { title?: string; text?: string; url?
   const payload = pendingShareText
   pendingShareText = null
   return payload
+}
+
+export function setPendingShareImage(file: File | null): void {
+  pendingShareImage = file
+}
+
+export function consumePendingShareImage(): File | null {
+  const file = pendingShareImage
+  pendingShareImage = null
+  return file
 }
