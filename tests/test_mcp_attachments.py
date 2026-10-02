@@ -359,3 +359,33 @@ def test_serialize_tx_includes_attachments(monkeypatch) -> None:
 
     FakeRow.attachments_json = "{broken"
     assert _serialize_tx(FakeRow(), None)["attachments"] == []
+
+def test_attach_receipt_cannot_cross_users(monkeypatch) -> None:
+    """**安全锁**:`attach_receipt` 按 `user_id` 过滤交易,别人的 sync_id 一律
+    「not found」,绝不能把附件挂到不属于自己的交易上。
+
+    顺带锁住一个**功能限制**:共享账本里 projection.user_id 是**账本所有者**,
+    所以非所有者成员用 MCP 无法给共享账本的交易附图。对单用户自托管无影响
+    (user.id == ledger.user_id),但值得写进测试免得以后误以为是 bug。"""
+    client, TS = _make_client()
+    try:
+        owner = _setup(client, TS, monkeypatch, "att-owner@t.com")
+
+        # 另起一个用户,复用同一批 token 补丁但用不同账号
+        other_token = _register_and_token(
+            client, "att-other@t.com", device_id="d-app2", client_type="app")
+        with TS() as db:
+            other = db.scalar(select(User).where(User.email == "att-other@t.com"))
+            db.expunge(other)
+
+        async def boom(*a, **k):
+            raise AssertionError("不应发出 self-call —— 越权时必须在上传前就拒")
+
+        monkeypatch.setattr(write_tools, "_upload_attachment", boom)
+        with pytest.raises(ValueError, match="not found"):
+            asyncio.run(write_tools.attach_receipt(
+                other, sync_id="tx1",
+                image_base64=base64.b64encode(_PNG).decode()))
+        assert owner is not None
+    finally:
+        app.dependency_overrides.clear()
