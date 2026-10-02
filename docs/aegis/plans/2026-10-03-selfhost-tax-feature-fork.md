@@ -3,6 +3,49 @@
 - 日期：2026-10-03
 - 基线：`3d9f64b`（= tag `1.6.7`，与上游 `TNT-Likely/BeeCount-Cloud` 完全同步，0 ahead / 0 behind）
 - 目标读者：**无本仓历史上下文的工程师**
+- **执行状态：T2 / T4 / T5 / T6 已完成并验证；T1 / T3 待用户在 VPS 上执行**
+
+---
+
+## 0. 执行结果摘要
+
+| 阶段 | 内容 | 状态 | 证据 |
+|---|---|---|---|
+| T2 | MCP 批量接口修复 | ✅ 完成 | 460 → 全量 498 passed；反向验证：bug 版本下 2 个测试变红 |
+| T4 | 消费税税额（后端 11 触点 + 统计切片 + Web + MCP） | ✅ 完成 | `tests/test_tx_tax_amount.py` 25 个；反向验证：漏 `_projection_row_to_tx_dict` → R1 测试变红；不做切片 → 3 个测试变红 |
+| T5 | MCP 附件接线 | ✅ 完成 | `tests/test_mcp_attachments.py` 13 个，走真实 self-call 未打桩 |
+| T6 | 附件添加入口 + PWA 分享小票 | ✅ 完成 | `pnpm build` 通过（tsc -b） |
+| CSV | 导出/导入双向税额 | ✅ 完成 | 追加第 13 列，导入侧宽容解析 |
+| **端到端** | 真实服务 + 全新迁移的库 + 构建后的前端 | ✅ **29/29 全通过** | 见下 |
+| T1 | 源码安装部署到 VPS | ⏸ 待用户 | 本机无 docker；且 VPS/DNS/证书在用户侧 |
+| T3 | 用 MCP 建「税与保险」分类 | ⏸ 待用户（部署后） | 依赖 MCP 指向自建实例 |
+
+### 端到端验证结果（真实 uvicorn + 全新 SQLite）
+
+```
+餐饮 2982（税前） + 税与保险 298（消费税） = 3280（实付）
+```
+
+覆盖：healthz、SPA 伺服（`WEB_STATIC_DIR`）、建账本/分类、含税交易落库与读回、
+总额不变式、两切片相加=总额、`tax >= amount` 被拒、PATCH null 清除税额、
+清空后税扇区消失、附件上传 / sha256 去重 / 挂载 / 读回 / 下载、税额与附件共存、
+预算按全额（D4）。
+
+### 过程中修正的三处自身错误
+
+1. **T2**：第一版测试断言「schema 拒绝 0/负数」——实测 `float` 会放行，只有 `required`
+   生效。已改为如实锁定边界并注明正数守卫在 normalize 循环里。
+2. **计划漏项**：F3（MCP 附件）在 §1 声明为目标却没有对应任务，且 T5 错误引用
+   「T2 已实现的上传路径」。已补 T5 任务并修正引用。
+3. **调查误判**：曾记「`_self_call` 只支持 `json=`，需先加 multipart」。实测是
+   `**kwargs` 透传，httpx 原生支持 `files=`/`data=`，底层无需改动。计划已更正。
+
+### 自审中发现并修掉的真实边界
+
+**交易金额全链路没有正数校验**（只有 budget 有 `> 0`），而 `/sync/push` 不经过
+`snapshot_mutator`，负金额 + 正税额的脏数据能直接落进 projection，原换算函数会
+算出**负税额切片**。现已在 `_tax_in_base_currency` 对 `base <= 0` 返回 0，并把结果
+夹在 `[0, base]` 内。
 
 ---
 
@@ -493,8 +536,19 @@ cloudFileId, cloudSha256}`。`fileName` 存的是 `<file_id>_<原名>` 拼接形
 |---|---|
 | MCP `create_transactions` 的 `isinstance` 校验 | **保留**。TypedDict 修的是 schema/强转，校验本身是防御性边界 |
 | `/sync/push` `/sync/pull` `/sync/full` mobile 端点 | **保留不删**，本轮不测试不维护。退休动作需等确认不再使用 App 且 backup restore 已验证保真，另开任务 |
-| `CategoryDetailDialog.aggregate` 的原币口径缺陷 | T4.2 **修**（改读折本位币 + 减税）。同源的「不过滤 `exclude_from_stats`」属既有缺陷，**本轮不修**（超出范围，会动到其他口径），留 TODO |
+| `CategoryDetailDialog.aggregate` 的原币口径 | T4.3 **修**（改读折本位币 + 减税）。同源的「不过滤 `exclude_from_stats`」属既有缺陷，**本轮不修**（会动到其它口径），留 TODO |
+| `pwa.share.imageNotYet` | **保留未删** —— OCR 识别能力确实仍只在 mobile 端，现在只是至少能把原图存下来 |
 | 上游 issue #510 / #512 / #513 | 保留为需求来源。本计划不改写它们的状态 |
+
+## 11b. 已知缺口（本轮不做，明确记录）
+
+| 缺口 | 影响 | 状态 |
+|---|---|---|
+| MCP 无 `create_budget` 工具（只有 `update_budget`） | 从 MCP 只能改已存在的预算，新建预算要去 Web 或 App | 本轮未做。REST 层 `POST /write/ledgers/{id}/budgets` 已可用，接一个工具即可（约 20 行） |
+| `CategoryDetailDialog` 不过滤 `exclude_from_stats` | 分类详情里的总额含「不计入统计」的交易，与饼图口径不同 | 存量缺陷，本轮未修（会牵动其它口径，需单独评估） |
+| `CategoryDetailDialog` 1000 条截断 | 大分类的统计只算前 1000 笔 | 存量缺陷，已有 `setCategoryStatsTruncated` 提示 |
+| MCP 批量接口不支持附件 | `create_transactions` 不能带图 | 需逐笔 `attach_receipt` 或用 `create_transaction_with_receipt` |
+| i18n parity 测试存量失败 | CI 的 `pnpm test` 目前就是红的（`accounts.balance.adjust.*` 缺失，与本改动无关） | 存量，本轮未修 |
 
 ## 12. 阶段顺序与工作量
 
