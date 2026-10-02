@@ -140,6 +140,15 @@ App**。改这个仓之前先读
 3. **hook 别插进函数体** → 语法完全合法但永不可达,`tsc` 和 build 都抓不到。
    护栏 `frontend/apps/web/src/hookPlacement.test.ts`。
 
+## fork 修复:管理面板「备份」
+
+`POST /admin/backups/create` 原先去找一条 `entity_type == "ledger_snapshot"` 的
+SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,所以**对新账本必然
+失败**。已改成 `snapshot_builder.build(db, ledger)` 现场构建。
+
+其余两条备份路径(定时 rclone 的 `VACUUM INTO`、`scripts/backup_sqlite.sh`)不
+经过 snapshot,一直正常。
+
 ## 新增:MCP 附件
 
 `attach_receipt` / `create_transaction_with_receipt`。REST 层

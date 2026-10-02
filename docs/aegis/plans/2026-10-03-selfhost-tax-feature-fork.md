@@ -84,6 +84,40 @@ ALLOW 表刻意做得宽（宁可多报），代价是每加一个真实聚合�
 但它同时是一份**已复核记录**。已验证：塞一个 `reduce((s, t) => s + t.amount)`
 进去，护栏立刻变红。
 
+### 第五轮：备份/还原链路（发现一个上游缺陷）
+
+排查税额字段的备份链路时发现:管理面板的「备份」按钮**对任何方案 B 之后新建
+的账本必然 404**。
+
+`create_backup` 去 `sync_changes` 找一条 `entity_type == "ledger_snapshot"` 的
+行,但方案 B(projection-as-authority)之后 `_commit_write` 和 `/sync/push` 都
+不再写这种行(`SYNC_ARCHITECTURE.md` §1 明确说了)。实测新账本：
+
+```
+LEDGER_SNAPSHOT_ROWS=0     ALL_ENTITY_TYPES=['ledger','transaction']
+BACKUP_CREATE_STATUS=404   "No snapshot for ledger"
+```
+
+已修:改用 `snapshot_builder.build(db, ledger)` 从 projection **现场构建**
+(这才是文档指定的权威来源,`/sync/full` 走的就是它),顺带比原来更正确 ——
+旧写法读的是可能很旧的存量行,现场构建拿到的才是当前状态。
+
+只改这一处硬失败。`admin.py` 的快照信息端点有优雅降级、`sync/full` 只把旧行
+用于墓碑检测,那两处正常。
+
+**三条备份路径现在的状态**：
+
+| 路径 | 机制 | 状态 |
+|---|---|---|
+| 管理面板「备份」 | projection → snapshot | ✅ 本轮修复 |
+| 定时 rclone 备份 | SQLite `VACUUM INTO` | ✅ 不依赖 snapshot |
+| `scripts/backup_sqlite.sh` | `sqlite3 .backup` | ✅ 不依赖 snapshot |
+
+自托管最怕「以为备份了其实没有」,所以补了端到端往返测试:建备份 → 删交易 →
+还原 → 断言税额、备注、统计切片、总额全部回到原样。这条链路此前零测试。
+
+---
+
 ### 第四轮：给 fork 加维护者索引
 
 `CLAUDE.md` 追加「fork 特有改动」一节：税额字段的改动地图、三条本 fork 独有的坑
