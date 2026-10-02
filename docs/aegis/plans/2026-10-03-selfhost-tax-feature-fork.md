@@ -615,8 +615,9 @@ cloudFileId, cloudSha256}`。`fileName` 存的是 `<file_id>_<原名>` 拼接形
 
 | 缺口 | 影响 | 状态 |
 |---|---|---|
-| MCP 无 `create_budget` 工具（只有 `update_budget`） | 从 MCP 只能改已存在的预算，新建预算要去 Web 或 App | 本轮未做。REST 层 `POST /write/ledgers/{id}/budgets` 已可用，接一个工具即可（约 20 行） |
-| `CategoryDetailDialog` 不过滤 `exclude_from_stats` | 分类详情里的总额含「不计入统计」的交易，与饼图口径不同 | 存量缺陷，本轮未修（会牵动其它口径，需单独评估） |
+| ~~MCP 无 `create_budget` 工具~~ | — | ✅ 本轮已补（MCP 工具 20 → 21） |
+| **分类预算看不到被剥走的消费税** | 饼图「税与保险」= 1298（住民税 1000 + 消费税 298），分类预算 used = 1000 | **刻意保留**的语义边界，已用测试锁死。理由：预算是「每笔支出恰好计一次」的分区（餐饮 3280 + 税与保险 1000 = 4280 = 真实总支出）；让预算也吃那 298 会让同一笔被计两次，总额变 4578，分区性质被破坏。想要「本月税务支出」这个数字应看饼图或 MCP 的 `tax_total`，不是分类预算 |
+| ~~`CategoryDetailDialog` 不过滤 `exclude_from_stats`~~ | 分类详情合计含「不计入统计」的交易，与饼图对不上 | ✅ 本轮已修（顺带修了外币税额未折本位币的 bug） |
 | `CategoryDetailDialog` 1000 条截断 | 大分类的统计只算前 1000 笔 | 存量缺陷，已有 `setCategoryStatsTruncated` 提示 |
 | MCP 批量接口不支持附件 | `create_transactions` 不能带图 | 需逐笔 `attach_receipt` 或用 `create_transaction_with_receipt` |
 | i18n parity 测试存量失败 | CI 的 `pnpm test` 目前就是红的（`accounts.balance.adjust.*` 缺失，与本改动无关） | 存量，本轮未修 |

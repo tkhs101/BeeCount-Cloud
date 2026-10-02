@@ -1059,3 +1059,66 @@ def test_tax_conversion_defensive_branches():
     ]:
         got = conv(tax, raw, base)
         assert 0.0 <= got <= max(0.0, base), (tax, raw, base, got)
+
+
+def test_category_budget_on_tax_category_excludes_extracted_tax():
+    """**语义边界** —— 给「税与保险」设分类预算时,从其他分类剥出来的消费税
+    **不计入**预算用量。
+
+        饼图 税与保险 = 1298   (住民税 1000 + 从餐饮剥出的消费税 298)
+        预算 used    = 1000   (只有手动记在分类下的那笔)
+
+    这是**刻意保留**的边界,不是 bug,理由是另一条性质更值钱:
+
+    预算口径(D4)是「每笔实际支出恰好被计一次」。餐饮预算看到 3280(全额)、
+    税与保险预算看到 1000(手动记的税),两者相加 = 4280 = 真实总支出,
+    是一个干净的分区。如果让税与保险预算把 298 也算进去,同一个 298 就被
+    餐饮(全额)和税与保险(抽取)**各计一次**,总额变成 4578 —— 分区性质被
+    破坏,两个预算都不可信了。
+
+    代价:用户在饼图和预算页会看到两个不同的「税与保险」数字。饼图是**分析
+    视角**(回答「我交了多少钱税」),预算是**记账口径**(回答「我按分类承诺了
+    多少」)。这里把行为锁死,免得以后被无意改掉。
+
+    想要「本月税务支出上限」这个数字,正确做法是看饼图 / MCP 的
+    `get_analytics_summary().tax_total`,不是分类预算。"""
+    client, TS = _make_client()
+    try:
+        token = _register_and_token(client, "tax-budget@t.com", device_id="d-web",
+                                    client_type="web")
+        hdr = {"Authorization": f"Bearer {token}", "X-Device-ID": "web"}
+        J = {**hdr, "Content-Type": "application/json"}
+        base = _web_ledger(client, hdr)
+        for name in ("餐饮", TAX_BUCKET):
+            client.post("/api/v1/write/ledgers/lg1/categories", headers=J,
+                        json={"base_change_id": base, "name": name, "kind": "expense"})
+        cats = client.get("/api/v1/read/workspace/categories", headers=hdr).json()
+        tax_id = next(c["id"] for c in cats if c["name"] == TAX_BUCKET)
+
+        # 餐饮含税 3280(298 消费税)+ 税与保险下的住民税 1000
+        client.post("/api/v1/write/ledgers/lg1/transactions", headers=J, json={
+            "base_change_id": base, "tx_type": "expense", "amount": 3280.0,
+            "happened_at": _iso(), "category_name": "餐饮",
+            "category_kind": "expense", "tax_amount": 298.0})
+        client.post("/api/v1/write/ledgers/lg1/transactions", headers=J, json={
+            "base_change_id": base, "tx_type": "expense", "amount": 1000.0,
+            "happened_at": _iso(), "category_name": TAX_BUCKET,
+            "category_id": tax_id, "category_kind": "expense"})
+
+        client.post("/api/v1/write/ledgers/lg1/budgets", headers=J, json={
+            "base_change_id": base, "type": "category", "category_id": tax_id,
+            "amount": 50000.0, "period": "monthly", "enabled": True})
+
+        usage = client.get("/api/v1/read/ledgers/lg1/budgets/usage", headers=hdr).json()
+        used = {x["budget_id"]: x["used"] for x in usage["items"]}
+        body = _analytics(client, hdr)
+        pie = {r["category_name"]: r["total"] for r in body["category_ranks"]}
+
+        # 预算只看到手动记在分类下的 1000
+        assert list(used.values()) == [1000.0], used
+        # 饼图看到 1298(含剥出来的 298)
+        assert abs(pie[TAX_BUCKET] - 1298.0) < 1e-6, pie
+        # 差额正好是那笔被剥走的消费税 —— 两边都没算错,只是口径不同
+        assert abs((pie[TAX_BUCKET] - 1000.0) - 298.0) < 1e-6
+    finally:
+        app.dependency_overrides.clear()
