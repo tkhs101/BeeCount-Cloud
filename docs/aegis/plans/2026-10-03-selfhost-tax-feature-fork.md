@@ -151,33 +151,80 @@ FastAPI + SQLAlchemy + alembic（SQLite/PG 双方言）· React 18 + Vite 5 + pn
 
 ---
 
-### T1 · 自托管基线（0.5 天）
+### T1 · 自托管基线（0.5 天，**源码安装，不用 Docker**）
 
-**Change Necessity**：无业务代码改动，纯部署配置。
+**Change Necessity**：无业务代码改动，纯部署。用户明确不使用 Docker，VPS 直接源码安装。
 
-- `docker-compose.yml`：把 `image: sunxiao0721/beecount-cloud:latest` 改为 `build: .`
-- 新建 `.env`：至少设 `JWT_SECRET`（32+ 字节随机串，否则首启自动生成到 `/data/.jwt_secret`）
-- VPS 前置 Caddy：`your-domain.com` → `127.0.0.1:8869`，自动 TLS
-- 首次注册管理员（`REGISTRATION_ENABLED` 默认 `false`，需临时置 `true` 建号后改回）
-- Web 端 `设置 → 开发者` 建 PAT，scope 勾 `mcp:read + mcp:write`，有效期选「永不」
-- MCP 客户端改指 `https://your-domain.com/api/v1/mcp`
+`Dockerfile` 只是打包便利 —— `src/main.py:223-244` 自带静态文件伺服，
+`WEB_STATIC_DIR` 指到 `pnpm build` 产物即可，完全不需要容器。
+
+**安装步骤（VPS）**：
+
+```bash
+# 1. 系统依赖
+apt install -y python3.12 python3.12-venv nodejs npm   # node 20+ 供 pnpm 构建
+
+# 2. 源码 + Python 依赖
+git clone <你的 fork> /opt/beecount && cd /opt/beecount
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# 3. 前端构建（产物给 FastAPI 伺服）
+cd frontend && corepack enable && pnpm -C apps/web build && cd ..
+#   → 产物在 frontend/apps/web/dist
+
+# 4. 配置
+cat > .env <<EOF
+JWT_SECRET=<32+ 字节随机串>          # 必填，否则首启自动生成到 data/.jwt_secret
+DATABASE_URL=sqlite:////opt/beecount/data/beecount.db
+WEB_STATIC_DIR=/opt/beecount/frontend/apps/web/dist   # ← 指向 dist，不是 /app/static
+DATA_DIR=/opt/beecount/data
+ATTACHMENT_STORAGE_DIR=/opt/beecount/data/attachments
+BACKUP_STORAGE_DIR=/opt/beecount/data/backups
+REGISTRATION_ENABLED=false
+EOF
+
+# 5. 迁移 + 启动
+.venv/bin/alembic upgrade head      # 期望停在 0019_account_hidden
+.venv/bin/uvicorn server:app --host 127.0.0.1 --port 8869
+```
+
+**systemd 单元**（`/etc/systemd/system/beecount.service`）：
+`ExecStart=/opt/beecount/.venv/bin/uvicorn server:app --host 127.0.0.1 --port 8869`、
+`WorkingDirectory=/opt/beecount`、`Restart=always`、`Environment=TZ=Asia/Tokyo`。
+
+**注意 `WEB_STATIC_DIR`**：`config.py:19` 默认是 `/app/static`（Docker 路径），
+源码安装**必须**改指向 `frontend/apps/web/dist`，否则 Web 面板 404。
+
+**前置动作**：临时置 `REGISTRATION_ENABLED=true` 注册首个账号，建完改回 `false`
+（单用户自托管的默认姿态）。
+
+**反代**：Caddy（或 Nginx + certbot）终止 TLS 后反代到 `127.0.0.1:8869`。
+**MCP 必须走 HTTPS** —— PAT 是 Bearer token，明文传输等于裸奔。
+
+**MCP 切换**：Web 端 `设置 → 开发者` 建 PAT（scope 勾 `mcp:read + mcp:write`，
+有效期「永不」），客户端改指 `https://your-domain.com/api/v1/mcp`。
+明文 PAT 只显示一次，关闭后只剩 prefix。
 
 **Commands**：
 ```bash
-docker compose up -d --build
-docker compose exec beecount-cloud alembic current     # 期望 0019_account_hidden
-curl -fsS https://your-domain.com/healthz
-docker compose exec beecount-cloud ./scripts/backup_sqlite.sh /data/beecount.db /data/backups/sqlite
+.venv/bin/alembic current                        # 0019_account_hidden
+curl -fsS http://127.0.0.1:8869/healthz
+curl -fsS https://your-domain.com/               # 应返回 SPA HTML（验证 WEB_STATIC_DIR）
+scripts/backup_sqlite.sh /opt/beecount/data/beecount.db ./backups/sqlite
 ```
 
 **Acceptance**：
 - Web 能登录、能建账本、能记一笔
 - MCP `list_ledgers` 返回自建账本
-- 备份脚本产出单文件（**不能用 `cp`** —— WAL 模式，见脚本头注释）
+- 备份脚本产出单文件（**不能用 `cp`** —— WAL 模式未提交写入会丢，见脚本头注释）
 
-**Risk**：Caddy 证书、DNS、firewalld/云安全组 443 —— 与代码无关，但阻塞验收。
+**Rollback**：`systemctl stop` + 切回上一个 commit + 重新 `pip install`/`pnpm build`。
+数据在 `data/`，不受影响。
 
-**Rollback**：镜像 tag 回退 + `docker compose down`（数据在 volume，不受影响）。
+**Risk**：Caddy 证书、DNS、宿主防火墙/云安全组 443 —— 与代码无关，但阻塞验收。
+升级路径是 `git pull && pip install && pnpm build && systemctl restart`（无镜像 tag 可回滚，
+靠 git commit 回退）。
 
 ---
 
