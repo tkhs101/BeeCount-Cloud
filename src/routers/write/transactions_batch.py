@@ -76,6 +76,11 @@ class BatchTransactionItem(BaseModel):
     # v30 交易级多币种:调用方(MCP)按账户/主币种定好并折算后传入
     currency_code: str | None = None
     native_amount: float | None = None
+    # 消费税税额(0020)。**漏了这个字段会让 MCP 批量导入的税额静默全丢** ——
+    # pydantic 默认 `extra='ignore'`,MCP 明明传了 `tax_amount`,到
+    # `req.model_dump()` 时已经被丢掉,后面所有环节都拿不到,而且不报错。
+    # 这正是 issue #513 那类「穿过 pydantic 边界丢字段」的 bug。
+    tax_amount: float | None = None
 
 
 class BatchCreateTxRequest(BaseModel):
@@ -391,6 +396,11 @@ def _build_tx_payload(
         payload["currency_code"] = item.currency_code
     if item.native_amount is not None:
         payload["native_amount"] = item.native_amount
+    # 消费税(0020):同样要显式透传。上面那个 dict 是**白名单式**构造的 ——
+    # schema 加了字段但这里不写,一样会静默丢。批量导入的税额曾因此全部消失,
+    # 而报错为零:单条路径正常,只有批量丢。
+    if item.tax_amount is not None:
+        payload["tax_amount"] = item.tax_amount
     # 合并 auto_tag(LLM 已识别的 tags + 自动加的 AI 记账 / 图片记账)
     user_tags = list(item.tags or [])
     merged_tags = user_tags + [t for t in auto_tag_names if t and t not in user_tags]

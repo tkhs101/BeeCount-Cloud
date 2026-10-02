@@ -1188,3 +1188,82 @@ def test_admin_backup_restore_preserves_tax(monkeypatch):
         assert tx["note"] == "KING BEAR NOW"
     finally:
         app.dependency_overrides.clear()
+
+
+def test_mcp_batch_import_keeps_tax(monkeypatch) -> None:
+    """**批量导入的税额不能被 pydantic 边界吃掉。**
+
+    `BatchTransactionItem` 原本没有 `tax_amount` 字段,而 pydantic 默认
+    `extra='ignore'` —— MCP 明明在 body 里传了 `tax_amount`,到
+    `req.model_dump()` 就已经被丢掉,后面所有环节都拿不到,**且不报错**。
+    单条 `create_transaction` 走的是另一个 schema(`WriteTransactionCreateRequest`,
+    我加了字段),所以只有批量这条路会丢 —— 很难靠「测单条能不能记」发现。
+
+    这与 issue #513 那类「穿过 pydantic 边界静默丢字段」是同一个 bug 形态。
+    """
+    from datetime import timedelta
+
+    from src.mcp.tools import write_tools
+    from src.security import SCOPE_APP_WRITE, SCOPE_WEB_WRITE, _create_token
+
+    client, TS = _make_client()
+    monkeypatch.setattr(write_tools, "SessionLocal", TS)
+    monkeypatch.setattr(
+        write_tools, "_internal_token",
+        lambda u: _create_token(
+            sub=u.id, token_type="access", expires_delta=timedelta(seconds=60),
+            scopes=[SCOPE_APP_WRITE, SCOPE_WEB_WRITE], client_type="app",
+        ),
+    )
+    try:
+        token = _register_and_token(client, "batch-tax@t.com", device_id="d-app",
+                                    client_type="web")
+        hdr = {"Authorization": f"Bearer {token}", "X-Device-ID": "web"}
+        J = {**hdr, "Content-Type": "application/json"}
+        _web_ledger(client, hdr)
+        client.post("/api/v1/write/ledgers/lg1/categories", headers=J,
+                    json={"base_change_id": 0, "name": "餐饮", "kind": "expense"})
+        user = _fetch_user(TS, "batch-tax@t.com")
+
+        import asyncio
+
+        out = asyncio.run(write_tools.create_transactions(
+            user,
+            transactions=[
+                {"amount": 3280.0, "category": "餐饮", "tax_amount": 298.0,
+                 "happened_at": _iso(), "note": "含税"},
+                {"amount": 100.0, "category": "餐饮", "happened_at": _iso()},
+            ],
+        ))
+        assert out, out
+
+        items = client.get("/api/v1/read/workspace/transactions",
+                           headers=hdr).json()["items"]
+        assert len(items) == 2, items
+        taxed = next(t for t in items if t["amount"] == 3280.0)
+        plain = next(t for t in items if t["amount"] == 100.0)
+        assert taxed["tax_amount"] == 298.0, (
+            f"批量导入的税额丢了(实际 {taxed['tax_amount']!r}) —— "
+            f"检查 BatchTransactionItem 有没有 tax_amount 字段"
+        )
+        assert plain["tax_amount"] is None
+
+        # 统计切片也要跟着对
+        ranks = {r["category_name"]: r["total"] for r in _analytics(client, hdr)["category_ranks"]}
+        assert abs(ranks["餐饮"] - (2982 + 100)) < 1e-6, ranks
+        assert abs(ranks[TAX_BUCKET] - 298.0) < 1e-6, ranks
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_batch_transaction_item_keeps_tax_field() -> None:
+    """直接锁 schema:pydantic 不许把 tax_amount 当未知字段丢掉。"""
+    from src.routers.write.transactions_batch import BatchTransactionItem
+
+    item = BatchTransactionItem(
+        tx_type="expense", amount=3280.0, happened_at=_iso(), tax_amount=298.0)
+    assert item.model_dump(mode="json")["tax_amount"] == 298.0
+    # 不传时是 None,不是被丢掉的缺失键
+    assert BatchTransactionItem(
+        tx_type="expense", amount=1.0, happened_at=_iso()
+    ).model_dump(mode="json")["tax_amount"] is None
