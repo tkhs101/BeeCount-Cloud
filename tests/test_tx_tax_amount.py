@@ -125,6 +125,15 @@ def _fetch_user(TS, email):
         return row
 
 
+def _web_create_expect(client, hdr, ledger_id, base, payload):
+    """建账本后发一笔可能非法的交易,返回原始 response(不做 200 断言)。"""
+    return client.post(
+        f"/api/v1/write/ledgers/{ledger_id}/transactions",
+        headers={**hdr, "Content-Type": "application/json"},
+        json={"base_change_id": base, **payload},
+    )
+
+
 def _web_create(client, hdr, ledger_id, *, base, payload):
     r = client.post(
         f"/api/v1/write/ledgers/{ledger_id}/transactions",
@@ -777,5 +786,73 @@ def test_tax_category_self_count_not_double():
         assert rows[TAX_BUCKET]["tx_count"] == 1, (
             f"一笔不能被算成两笔,got {rows[TAX_BUCKET]['tx_count']}"
         )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_web_invalid_tax_returns_400_not_500(monkeypatch) -> None:
+    """**R1 回归锁** —— 税额校验失败必须是 400,不是 500。
+
+    两个 write 快路径(`_commit_create_tx_fast` / `_commit_write_fast_tx`)原先
+    直接调 mutator,没有慢路径 `_commit_write` 那层
+    `ValueError → HTTPException(400)` 包装。这个缺口一直存在但不显形:mutator
+    原先唯一的 ValueError(invalid tx_type)被 pydantic 的 Literal 以 422 挡在
+    外面;0020 的税额校验是第一条能真正穿透到快路径的 ValueError。
+
+    前端刻意不做客户端校验(parseTaxAmount 只解析不拦),所以这条路径就是
+    Web 录入的主路径 —— 不包装的话用户抄错税额只会看到泛泛的「内部错误」,
+    WRITE_VALIDATION_FAILED 那条错误码链路一次都不触发。
+    """
+    client, TS = _make_client()
+    try:
+        token = _register_and_token(client, "tax-400@t.com", device_id="d-web",
+                                    client_type="web")
+        hdr = {"Authorization": f"Bearer {token}", "X-Device-ID": "web"}
+        base = _web_ledger(client, hdr)
+
+        # 1) create: tax >= amount
+        r = _web_create_expect(client, hdr, "lg1", base, {
+            "tx_type": "expense", "amount": 100.0, "happened_at": _iso(),
+            "category_name": "餐饮", "tax_amount": 100.0,
+        })
+        assert r.status_code == 400, f"create 应 400,got {r.status_code}: {r.text[:200]}"
+        assert "tax_amount" in r.text
+
+        # 2) create: 负数税
+        r = _web_create_expect(client, hdr, "lg1", base, {
+            "tx_type": "expense", "amount": 100.0, "happened_at": _iso(),
+            "category_name": "餐饮", "tax_amount": -5.0,
+        })
+        assert r.status_code == 400, r.status_code
+
+        # 3) create: income 上带税
+        r = _web_create_expect(client, hdr, "lg1", base, {
+            "tx_type": "income", "amount": 100.0, "happened_at": _iso(),
+            "category_name": "工资", "tax_amount": 10.0,
+        })
+        assert r.status_code == 400, r.status_code
+
+        # 4) PATCH: 把税改成超过金额
+        res = _web_create(client, hdr, "lg1", base=base, payload={
+            "tx_type": "expense", "amount": 3280.0, "happened_at": _iso(),
+            "category_name": "餐饮", "tax_amount": 298.0,
+        })
+        tx_id = res["entity_id"]
+        r = client.patch(f"/api/v1/write/ledgers/lg1/transactions/{tx_id}",
+                         headers={**hdr, "Content-Type": "application/json"},
+                         json={"base_change_id": base, "tax_amount": 9999.0})
+        assert r.status_code == 400, f"PATCH 应 400,got {r.status_code}: {r.text[:200]}"
+
+        # 5) PATCH: expense → income 但留着税(既有税不自洽)
+        r = client.patch(f"/api/v1/write/ledgers/lg1/transactions/{tx_id}",
+                         headers={**hdr, "Content-Type": "application/json"},
+                         json={"base_change_id": base, "tx_type": "income"})
+        assert r.status_code == 400, r.status_code
+
+        # 6) 合法路径仍然 200
+        r = client.patch(f"/api/v1/write/ledgers/lg1/transactions/{tx_id}",
+                         headers={**hdr, "Content-Type": "application/json"},
+                         json={"base_change_id": base, "tax_amount": 350.0})
+        assert r.status_code == 200, r.text[:200]
     finally:
         app.dependency_overrides.clear()

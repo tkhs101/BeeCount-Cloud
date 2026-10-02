@@ -24,14 +24,12 @@ from ...database import get_db
 from ...deps import get_current_user
 from ...models import AuditLog, Ledger, User
 from ...routers.write._shared import (
-    _TRANSACTION_WRITE_ROLES,
     _WRITE_SCOPE_DEP,
     _emit_entity_diffs,
     _payload_with_actor,
     get_accessible_ledger_by_external_id,
 )
 from ...services.import_data import (
-    ImportError as ImpError,
     ImportFieldMapping,
     apply_mapping,
     cancel_token,
@@ -74,6 +72,9 @@ class FieldMappingPayload(BaseModel):
     note: str | None = None
     # v30 多币种:币种列(可选)
     currency: str | None = None
+    # 消费税税额列(0020,可选)。**必须双向透传** —— 前端映射编辑器会把整个
+    # mapping 原样回传,这里少一个字段就等于用户点一次「应用」把税额全丢掉。
+    tax_amount: str | None = None
     tags: list[str] = Field(default_factory=list)
     datetime_format: str | None = None
     strip_currency_symbols: bool = True
@@ -94,6 +95,7 @@ class FieldMappingPayload(BaseModel):
             to_account_name=self.to_account_name,
             note=self.note,
             currency=self.currency,
+            tax_amount=self.tax_amount,
             tags=list(self.tags),
             datetime_format=self.datetime_format,
             strip_currency_symbols=self.strip_currency_symbols,
@@ -114,6 +116,7 @@ def _mapping_to_payload(m: ImportFieldMapping) -> dict:
         "to_account_name": m.to_account_name,
         "note": m.note,
         "currency": m.currency,
+        "tax_amount": m.tax_amount,
         "tags": list(m.tags),
         "datetime_format": m.datetime_format,
         "strip_currency_symbols": m.strip_currency_symbols,
@@ -629,7 +632,7 @@ class _ImportFailed(Exception):
 
 def _sse_event(event: str, data: dict[str, Any]) -> bytes:
     """SSE wire format。`bytes` 让 StreamingResponse 直传不再 encode。"""
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 
 
 def _deep_copy_snapshot(snapshot: dict) -> dict:

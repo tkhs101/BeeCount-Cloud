@@ -15,6 +15,8 @@ export type ImportSourceFormat = 'beecount' | 'alipay' | 'wechat' | 'generic'
 export type ImportFieldMapping = {
   /** v30 多币种:币种列(可选,值须像 ISO code)。 */
   currency?: string | null
+  /** 消费税税额列(0020,可选)。导出 CSV 的第 13 列;不传 = 不导入税额。 */
+  tax_amount?: string | null
   tx_type: string | null
   amount: string | null
   happened_at: string | null

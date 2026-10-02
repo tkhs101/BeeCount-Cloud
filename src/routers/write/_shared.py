@@ -560,7 +560,23 @@ async def _commit_create_tx_fast(
         lock_ledger_for_materialize(db, ledger.id)
         now = _utcnow()
         # 空 snapshot 跑 mutator —— 只为复用其字段规范化 + actor 标记逻辑。
-        _snap, tx_id = _mutate_create_tx({"items": [], "count": 0}, mutate_payload)
+        # 异常口径必须与慢路径 `_commit_write` 一致(见下方 KeyError/PermissionError
+        # /ValueError 三段):mutator 抛的 ValueError 是**校验失败**,应当是 400
+        # 而不是 500。这个缺口一直存在但不显形 —— mutator 原先唯一的 ValueError
+        # (invalid tx_type)会被 pydantic 的 Literal 以 422 挡在外面;0020 的税额
+        # 校验(_normalize_tax_amount)是第一条能真正走到这里的 ValueError。
+        try:
+            _snap, tx_id = _mutate_create_tx({"items": [], "count": 0}, mutate_payload)
+        except KeyError:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found"
+            ) from None
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
         new_item = _snap["items"][0]
 
         change_row = SyncChange(
@@ -735,7 +751,22 @@ async def _commit_write_fast_tx(
             from ...snapshot_mutator import update_transaction
             # 构造最小 snapshot 让 mutator 跑逻辑(只有 1 个 item)
             minimal_snap = {"items": [prev_item], "count": 1}
-            minimal_snap = update_transaction(minimal_snap, tx_id, mutate_payload)
+            # 同 create 快路径:mutator 的 ValueError = 校验失败 → 400,
+            # 不是 500。税额校验就靠这层包装才有个能读的错误。
+            try:
+                minimal_snap = update_transaction(minimal_snap, tx_id, mutate_payload)
+            except KeyError:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found"
+                ) from None
+            except PermissionError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+                ) from exc
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+                ) from exc
             new_item = minimal_snap["items"][0]
 
             change_row = SyncChange(

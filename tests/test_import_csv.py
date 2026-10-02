@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import io
 import json
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -24,9 +23,7 @@ from src.services.import_data import (
     parse_csv_text,
 )
 from src.services.import_data.cache import clear_all
-from src.services.import_data.parsers.beecount import BeeCountParser
 from src.services.import_data.parsers.generic import GenericParser
-
 
 # ──────────────────── infra ────────────────────
 
@@ -264,8 +261,9 @@ def test_expense_is_negative_option():
 
 def test_xlsx_parse():
     """openpyxl 解析 .xlsx → 跟 CSV 走同一条路径,headers + rows 等价。"""
-    from openpyxl import Workbook
     import io as _io
+
+    from openpyxl import Workbook
 
     wb = Workbook()
     ws = wb.active
@@ -626,3 +624,107 @@ def _iter_sse(resp):
         except json.JSONDecodeError:
             parsed = {"raw": data}
         yield {"event": event, "data": parsed}
+
+
+# --------------------------------------------------------------------------- #
+# 消费税税额(0020)端点级往返                                                   #
+# --------------------------------------------------------------------------- #
+
+
+def _tax_csv() -> str:
+    """12 列 + 第 13 列「税额」,列名/顺序对齐导出端。
+
+    按列构造而不是手写逗号串 —— 手数逗号很容易少一个,少一个不会报错,
+    只会让所有列左移:备注落到「转出账户」、时间落到「备注」,最终
+    happened_at 变空、整行被 PARSE_MISSING_REQUIRED 丢掉(只报 warning,
+    看起来像「数据有问题」,其实是测试数据列数不对)。
+    """
+    header = ["类型", "分类", "二级分类", "金额", "币种", "账户", "转出账户",
+              "转入账户", "备注", "时间", "标签", "附件", "税额"]
+    rows = [
+        ["支出", "餐饮", "", "3280.00", "", "", "", "",
+         "KING BEAR NOW", "2026-05-01 12:30:00", "", "", "298.00"],
+        ["支出", "餐饮", "", "100.00", "", "", "", "",
+         "无税", "2026-05-02 09:15:00", "", "", ""],
+    ]
+    lines = [",".join(header)]
+    for row in rows:
+        assert len(row) == len(header), (len(row), len(header))
+        lines.append(",".join(row))
+    return "\n".join(lines)
+
+
+def test_import_preview_mapping_exposes_tax_column():
+    """upload 响应里的 mapping 必须带 tax_amount —— 前端要靠它显示
+    「这个文件有税额列」,否则用户看不到、也没法回传。"""
+    client = _make_client()
+    try:
+        token = _login(client, "imptax1@test.com")
+        ledger_id = _make_ledger(client, token)
+        r = client.post(
+            "/api/v1/import/upload",
+            files={"file": ("t.csv", _tax_csv().encode("utf-8"), "text/csv")},
+            data={"target_ledger_id": ledger_id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        # upload / preview 共用 ImportSummary:mapping 字段叫
+        # suggested_mapping(建议)与 current_mapping(当前生效)
+        for key in ("suggested_mapping", "current_mapping"):
+            assert r.json()[key].get("tax_amount") == "税额", (key, r.json()[key])
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_import_mapping_roundtrip_keeps_tax():
+    """**R3 回归锁** —— 客户端把 mapping 原样回传(前端映射编辑器一定会这么做),
+    税额不能丢。
+
+    之前只测了 parse_csv_text + _transform_row 两个内部函数,没走端点,于是
+    `FieldMappingPayload.to_internal()` 漏了 tax_amount 这条路径完全没被发现 ——
+    用户只要在导入页点一次「应用」,整份导入的税额就静默消失。
+    """
+    client = _make_client()
+    try:
+        token = _login(client, "imptax2@test.com")
+        ledger_id = _make_ledger(client, token)
+        hdr = {"Authorization": f"Bearer {token}"}
+
+        up = client.post(
+            "/api/v1/import/upload",
+            files={"file": ("t.csv", _tax_csv().encode("utf-8"), "text/csv")},
+            data={"target_ledger_id": ledger_id},
+            headers=hdr,
+        )
+        assert up.status_code == 200, up.text
+        token_key = up.json()["import_token"]
+
+        # 模拟前端「用户确认映射」:把 mapping 原样回传
+        mapping = dict(up.json()["current_mapping"])
+        prev = client.post(
+            f"/api/v1/import/{token_key}/preview",
+            json={"mapping": mapping, "target_ledger_id": ledger_id},
+            headers=hdr,
+        )
+        assert prev.status_code == 200, prev.text
+        for key in ("suggested_mapping", "current_mapping"):
+            assert prev.json()[key].get("tax_amount") == "税额", (
+                key, prev.json()[key])
+
+        exe = client.post(
+            f"/api/v1/import/{token_key}/execute",
+            json={"target_ledger_id": ledger_id},
+            headers=hdr,
+        )
+        assert exe.status_code == 200, exe.text
+
+        # 落库校验:走真实读端点(不直接开 session,免得依赖测试夹具细节)
+        r = client.get("/api/v1/read/workspace/transactions", headers=hdr)
+        assert r.status_code == 200, r.text
+        items = r.json()["items"]
+        assert len(items) == 2, items
+        taxes = sorted(float(i.get("tax_amount") or 0) for i in items)
+        assert taxes == [0.0, 298.0], f"税额在 mapping 往返中丢了:{taxes}"
+        assert sorted(float(i["amount"]) for i in items) == [100.0, 3280.0]
+    finally:
+        app.dependency_overrides.clear()

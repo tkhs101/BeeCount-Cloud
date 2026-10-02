@@ -1355,9 +1355,16 @@ export function TransactionsPage() {
       setErrorNotice(renderError(err))
       return []
     }
+  }
 
   // 分享进来的小票图:等 txWriteLedgerId 就绪(账本列表是异步的)再上传,
   // 上传完直接并进表单附件。用户不用在弹窗里再点一次「添加附件」。
+  //
+  // **必须位于组件顶层** —— 之前它被误插在 `onUploadTxAttachments` 的函数体
+  // 内(那个箭头函数的 try / catch 都 return,effect 成了不可达语句)。
+  // tsc 和 vite build 都抓不到这类花括号错位:调用表达式语法完全合法,只是
+  // 永远不执行。后果是 ShareIncomingPage 已经 toast「小票已附上」,附件却
+  // 从未挂上,小票静默丢失。
   useEffect(() => {
     const file = pendingAttachmentUpload
     if (!file) return
@@ -1374,7 +1381,6 @@ export function TransactionsPage() {
       cancelled = true
     }
   }, [pendingAttachmentUpload, txWriteLedgerId, onUploadTxAttachments])
-  }
 
   // ensureCategoryIconPreview 已合并到全局 AttachmentCache.ensureLoadedMany 里,
   // 不再每个页面手动维护 inflight 去重。下面这个 noop 只是为了向下兼容
