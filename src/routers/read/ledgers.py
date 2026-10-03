@@ -288,6 +288,9 @@ def list_transactions(
     ).offset(offset).limit(limit)
     rows = db.scalars(query).all()
 
+    # 组合支付(0021):一次查完这一页的腿,避免逐行 N+1。
+    splits_by_tx = load_tx_splits(db, ledger.id, [r.sync_id for r in rows])
+
     results: list[ReadTransactionOut] = []
     for row in rows:
         tag_ids: list[str] = []
@@ -327,6 +330,8 @@ def list_transactions(
                 tags_list=_tags_list(row.tags_csv),
                 tag_ids=tag_ids,
                 attachments=attachments,
+                splits=[TxSplit(account_id=l["account_id"], amount=l["amount"])
+                        for l in splits_by_tx.get(row.sync_id, [])],
                 exclude_from_stats=bool(row.exclude_from_stats),
                 exclude_from_budget=bool(row.exclude_from_budget),
                 currency_code=row.currency_code,

@@ -570,7 +570,11 @@ def update_transaction(snapshot: dict, tx_id: str, payload: dict) -> dict:
     if "splits" in payload:
         raw_splits = payload.get("splits")
         if raw_splits is None or (isinstance(raw_splits, list) and not raw_splits):
-            item.pop("splits", None)
+            # **写空 list 而不是 pop** —— projection 侧的 `upsert_tx` 用
+            # `if "splits" in payload` 决定动不动腿(pop 掉键 = 键不存在 = 不动),
+            # 所以「清除」必须留一个空 list 当信号,否则 PATCH `splits: []`
+            # 会看起来成功、实际腿一条没删。
+            item["splits"] = []
             # 清空腿之后父账户字段本来就没有意义,但如果之前是有腿的状态,
             # 这里不主动恢复 —— 调用方若要变回单账户交易应显式传 account_id。
         elif isinstance(raw_splits, list):
@@ -597,7 +601,9 @@ def update_transaction(snapshot: dict, tx_id: str, payload: dict) -> dict:
                 "legs=%r amount=%r type=%r",
                 tx_id, item.get("splits"), item.get("amount"), item.get("type"),
             )
-            item.pop("splits", None)
+            # 同样写空 list(见上面「清除」处的注释):键必须留着,
+            # 否则 projection 收不到信号,脏腿会留在库里。
+            item["splits"] = []
             # 腿丢了但父账户字段已被清空 → 这笔会变成「无账户的支出」。
             # 回填不了(不知道原来该挂哪),所以只告警;账本总额仍正确。
     mapping = {
@@ -768,6 +774,17 @@ def delete_account(snapshot: dict, account_id: str, payload: dict | None = None)
                 tx.get("accountName") == old_name
                 or tx.get("fromAccountName") == old_name
                 or tx.get("toAccountName") == old_name
+                # 组合支付(0021):拆分父交易的 accountName **被强制清空**
+                # (否则余额双倍扣),所以上面三个条件全不命中 → 这个账户
+                # 会被判定成「无关联交易」而放行删除 → 子表留下悬空引用 →
+                # 余额永久漂移。`data_cleanup` 的孤儿扫描也只扫父表,
+                # 全程零报错。必须显式检查腿。
+                or any(
+                    str(leg.get("accountName") or "") == old_name
+                    or str(leg.get("accountId") or "") == account_id
+                    for leg in (tx.get("splits") or [])
+                    if isinstance(leg, dict)
+                )
             )
         )
         if linked > 0:

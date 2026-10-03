@@ -57,6 +57,7 @@ from ...schemas import (
     ReadSummaryOut,
     ReadTagOut,
     ReadTransactionOut,
+    TxSplit,
     WorkspaceAccountOut,
     WorkspaceAnalyticsAnomalyAttributionOut,
     WorkspaceAnalyticsAnomalyMonthOut,
@@ -521,6 +522,39 @@ def account_balance_stats(
     return stats
 
 
+def load_tx_splits(
+    db: Session, ledger_id: str, tx_sync_ids: Sequence[str]
+) -> dict[str, list[dict[str, Any]]]:
+    """批量读一批交易的拆分腿(0021) → `{tx_sync_id: [腿, ...]}`。
+
+    **一次查询 + 分组**,不按行查 —— 交易列表一页 20 条,逐行查就是 N+1。
+
+    只返回有腿的交易;调用方 `splits_by_tx.get(row.sync_id)` 拿不到就是无腿。
+    """
+    if not tx_sync_ids:
+        return {}
+    from ...models import ReadTxSplitProjection
+
+    out: dict[str, list[dict[str, Any]]] = {}
+    for r in db.execute(
+        select(
+            ReadTxSplitProjection.tx_sync_id,
+            ReadTxSplitProjection.account_sync_id,
+            ReadTxSplitProjection.amount,
+        )
+        .where(
+            ReadTxSplitProjection.ledger_id == ledger_id,
+            ReadTxSplitProjection.tx_sync_id.in_(list(tx_sync_ids)),
+        )
+        .order_by(
+            ReadTxSplitProjection.tx_sync_id.asc(),
+            ReadTxSplitProjection.seq.asc(),
+        )
+    ).all():
+        out.setdefault(r[0], []).append({"account_id": r[1], "amount": float(r[2])})
+    return out
+
+
 def _split_legs(db: Session, ledger_internal_ids: Sequence[str]):
     """组合支付的腿按账户聚合 (account_sync_id, count, amount)。"""
     return db.execute(
@@ -857,6 +891,7 @@ __all__ = [
     'ReadSummaryOut',
     'ReadTagOut',
     'ReadTransactionOut',
+    'TxSplit',
     'WorkspaceAccountOut',
     'WorkspaceAnalyticsAnomalyAttributionOut',
     'WorkspaceAnalyticsAnomalyMonthOut',
@@ -893,6 +928,7 @@ __all__ = [
     '_tags_list',
     '_to_utc',
     'account_balance_delta',
+    'load_tx_splits',
     'account_balance_from_stats',
     'account_balance_stats',
     '_projection_totals',

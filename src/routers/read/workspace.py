@@ -159,6 +159,25 @@ def list_workspace_transactions(
             actor_user_ids.add(owner_uid)
     user_info_map = _user_info_map(db, actor_user_ids)
 
+    # 组合支付(0021):跨账本,按 ledger 分组各查一次(ledger 数量很少)。
+    splits_by_tx: dict[str, list[dict[str, Any]]] = {}
+    for lrow in db.execute(
+        select(
+            ReadTxSplitProjection.ledger_id,
+            ReadTxSplitProjection.tx_sync_id,
+            ReadTxSplitProjection.account_sync_id,
+            ReadTxSplitProjection.amount,
+        ).where(ReadTxSplitProjection.ledger_id.in_(
+            [l.id for l in ledgers] if ledgers else []
+        )).order_by(
+            ReadTxSplitProjection.tx_sync_id.asc(),
+            ReadTxSplitProjection.seq.asc(),
+        )
+    ).all() if ledgers else []:
+        splits_by_tx.setdefault(f"{lrow[0]}::{lrow[1]}", []).append(
+            {"account_id": lrow[2], "amount": float(lrow[3])}
+        )
+
     out_items: list[WorkspaceTransactionOut] = []
     for row in rows:
         led_ext_id, led_name = ledger_meta.get(row.ledger_id, ("", ""))
@@ -210,6 +229,8 @@ def list_workspace_transactions(
                 tags_list=_tags_list(row.tags_csv),
                 tag_ids=tag_ids,
                 attachments=attachments,
+                splits=[TxSplit(account_id=l["account_id"], amount=l["amount"])
+                        for l in splits_by_tx.get(f"{row.ledger_id}::{row.sync_id}", [])],
                 exclude_from_stats=bool(row.exclude_from_stats),
                 exclude_from_budget=bool(row.exclude_from_budget),
                 currency_code=row.currency_code,
