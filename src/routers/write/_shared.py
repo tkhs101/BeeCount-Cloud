@@ -715,7 +715,12 @@ async def _commit_write_fast_tx(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
 
         # 2. 把 projection row → dict(mutator 认的 snapshot item 格式)
-        prev_item = _projection_row_to_tx_dict(tx_row)
+        # splits 在子表里(0021),单独查后传入 —— 漏了这一步会让任意
+        # PATCH 静默清空这笔的拆分腿。
+        prev_item = _projection_row_to_tx_dict(
+            tx_row,
+            splits=_tx_splits_for(db, tx_row.ledger_id, tx_row.sync_id),
+        )
 
         # 3. actor 权限检查(复用现有逻辑)
         from ...snapshot_mutator import _assert_actor_can_modify  # 延迟 import 避免循环
@@ -870,8 +875,46 @@ async def _commit_write_fast_tx(
     return response
 
 
-def _projection_row_to_tx_dict(row: ReadTxProjection) -> dict[str, Any]:
-    """projection row → snapshot item dict,跟 snapshot_builder.build 的格式一致。"""
+def _tx_splits_for(db, ledger_id: str, tx_sync_id: str) -> list[dict[str, Any]]:
+    """读一笔交易的拆分腿(0021),按 seq 还原成 snapshot item 的 camelCase 形状。"""
+    from ...models import ReadTxSplitProjection
+
+    rows = db.scalars(
+        select(ReadTxSplitProjection)
+        .where(
+            ReadTxSplitProjection.ledger_id == ledger_id,
+            ReadTxSplitProjection.tx_sync_id == tx_sync_id,
+        )
+        .order_by(ReadTxSplitProjection.seq.asc())
+    ).all()
+    return [
+        {"accountId": r.account_sync_id, "amount": float(r.amount)}
+        for r in rows
+    ]
+
+
+def _projection_row_to_tx_dict(
+    row: ReadTxProjection, splits: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """projection row → snapshot item dict,跟 snapshot_builder.build 的格式一致。
+
+    ⚠️ **全仓库最危险的函数** —— 漏一个字段,web PATCH 会**静默抹掉它**,
+    HTTP 200,不报错。
+
+    为什么危险:`_commit_write_fast_tx` 里 `prev_item = _projection_row_to_tx_dict(row)`
+    是这次 PATCH 的**唯一世界模型**。这里少了 key → mutator 看不到旧值 →
+    `upsert_tx` 把它写成 NULL → 用户数据消失。
+
+    上游 nativeAmount 当年就踩过(注释还在),0020 的 taxAmount 又踩过一次。
+
+    **`splits`(0021)特别容易漏**:它不在 `ReadTxProjection` 行上,在子表里。
+    漏了的话,用户对一笔组合支付交易改个备注 → snapshot items 被替换成
+    「无 splits」版本 → `replace_tx_splits` 收到 None → 全删 → **余额永久漂移**。
+    """
+    if splits:
+        item_splits = splits
+    else:
+        item_splits = None
     from ...snapshot_builder import _to_iso_utc
     item: dict[str, Any] = {
         "syncId": row.sync_id,
@@ -915,6 +958,9 @@ def _projection_row_to_tx_dict(row: ReadTxProjection) -> dict[str, Any]:
                 item["attachments"] = atts
         except json.JSONDecodeError:
             pass
+    if item_splits:
+        # 见上面 docstring 的警告 —— 这行不能少。
+        item["splits"] = item_splits
     if row.tx_index:
         item["txIndex"] = row.tx_index
     if row.created_by_user_id:

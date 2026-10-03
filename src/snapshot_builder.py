@@ -78,6 +78,28 @@ def build(db: Session, ledger: Ledger) -> dict[str, Any]:
         ReadTxProjection.happened_at.desc(),
         ReadTxProjection.tx_index.desc(),
     )
+    # 组合支付(0021)的腿 —— **单独一次查询**,不 JOIN。
+    # JOIN + GROUP BY 的聚合写法在 SQLite 和 PostgreSQL 上语法不同(本仓双方言),
+    # 而「一次查全、按 tx_sync_id 分组」两个方言行为一致,代价是多一遍扫描。
+    from .models import ReadTxSplitProjection
+
+    splits_by_tx: dict[str, list[dict[str, Any]]] = {}
+    for srow in db.execute(
+        select(
+            ReadTxSplitProjection.tx_sync_id,
+            ReadTxSplitProjection.account_sync_id,
+            ReadTxSplitProjection.amount,
+        )
+        .where(ReadTxSplitProjection.ledger_id == ledger_id)
+        .order_by(
+            ReadTxSplitProjection.tx_sync_id.asc(),
+            ReadTxSplitProjection.seq.asc(),
+        )
+    ).all():
+        splits_by_tx.setdefault(srow[0], []).append(
+            {"accountId": srow[1], "amount": float(srow[2])}
+        )
+
     for row in db.execute(tx_stmt).all():
         (sync_id, tx_type, amount, happened_at, note,
          cat_sid, cat_name, cat_kind,
@@ -140,6 +162,11 @@ def build(db: Session, ledger: Ledger) -> dict[str, Any]:
             item["nativeAmount"] = native_amount
         if tax_amount is not None:
             item["taxAmount"] = tax_amount
+        # 组合支付腿(0021)。和 tax_amount 一样是「有才写」—— 快照里不带
+        # splits 的交易,mutator 看到键不存在 = 不动,旧行为不变。
+        tx_splits = splits_by_tx.get(sync_id)
+        if tx_splits:
+            item["splits"] = tx_splits
         items.append(item)
 
     # Accounts —— user-global per-user 表,按 user_id 取。snapshot 内仍把全用户

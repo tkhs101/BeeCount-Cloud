@@ -216,6 +216,13 @@ _LEDGER_MERGE_SPECS: dict[str, _MergeSpec] = {
         # 所以 push `taxAmount: null` 会保留旧值。这与 nativeAmount 完全同
         # 语义,可接受;要清除税额走 Web/MCP(PATCH 显式 null)。
         ("taxAmount", "tax_amount"),
+        # 组合支付(0021)。**随父交易 payload 走,不开新 entity_type**:
+        # splits 没有独立生命周期,LWW 决胜权完全属于父 tx;开新类型会在
+        # append-only 的 sync_changes 里留下永远清不掉的孤儿历史
+        # (_compact_entity_upsert_events 只清自己的 entity_type)。
+        #
+        # merge 语义的同一取舍:push `splits: null` 会**保留旧值**(和
+        # taxAmount 一样)—— 要清除走 Web/MCP(PATCH 显式 null / [])。
     ]),
 }
 
@@ -474,6 +481,58 @@ def _sync_native_amount_after_merge(existing, payload: dict, merged: dict) -> di
     return merged
 
 
+def _merge_tx_splits_after_merge(db, ledger_id: str, sync_id: str,
+                                 payload: dict, merged: dict) -> dict:
+    """组合支付(0021)的 merge 后处理。
+
+    **splits 不能进 `_LEDGER_MERGE_SPECS`** —— 那张表按 `getattr(existing,
+    db_attr)` 读**模型列**,而 splits 在子表里没有列。所以走这里。
+
+    语义与 taxAmount 那一族一致,只是载体不同:
+
+    - payload 带 `splits` → 推什么就是什么(老客户端不认识这个键,推了也没用)
+    - payload **不带** → 带上现有腿。否则 upsert_tx 的 `replace_tx_splits`
+      收到 None 会把腿全删掉 —— 而一次「只改备注」的 push 就会踩到。
+    """
+    from .models import ReadTxSplitProjection
+
+    if "splits" in payload:
+        raw = payload.get("splits")
+        if isinstance(raw, list) and raw:
+            out: list[dict[str, Any]] = []
+            for leg in raw:
+                if not isinstance(leg, dict) or leg.get("amount") is None:
+                    continue
+                sid = _as_str_id(leg.get("accountId"))
+                if not sid:
+                    continue
+                out.append({"accountId": sid, "amount": float(leg["amount"])})
+            merged["splits"] = out
+            return merged
+        if isinstance(raw, list) and not raw:
+            merged.pop("splits", None)      # 显式清空
+            return merged
+
+    rows = db.scalars(
+        select(ReadTxSplitProjection)
+        .where(
+            ReadTxSplitProjection.ledger_id == ledger_id,
+            ReadTxSplitProjection.tx_sync_id == sync_id,
+        )
+        .order_by(ReadTxSplitProjection.seq.asc())
+    ).all()
+    if rows:
+        merged["splits"] = [
+            {"accountId": r.account_sync_id, "amount": float(r.amount)} for r in rows
+        ]
+    return merged
+
+
+def _as_str_id(value: Any) -> str | None:
+    s = str(value).strip() if value is not None else ""
+    return s or None
+
+
 def merge_with_existing(
     db: Session,
     entity_type: str,
@@ -498,6 +557,7 @@ def merge_with_existing(
     merged = _merge_from_spec(spec, existing, payload)
     if entity_type == "transaction":
         merged = _sync_native_amount_after_merge(existing, payload, merged)
+        merged = _merge_tx_splits_after_merge(db, ledger_id, sync_id, payload, merged)
     return merged
 
 

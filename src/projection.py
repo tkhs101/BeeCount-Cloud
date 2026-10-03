@@ -25,6 +25,7 @@ from .models import (
     Ledger,
     ReadBudgetProjection,
     ReadTxProjection,
+    ReadTxSplitProjection,
     UserAccountProjection,
     UserCategoryProjection,
     UserExchangeRateProjection,
@@ -296,6 +297,71 @@ def upsert_tx(
     removed = prev_file_ids - new_file_ids
     if removed:
         gc_orphan_attachments(db, user_id=user_id, file_ids=removed)
+
+    # 组合支付(0021):legs 是全量替换,不是逐行 upsert。
+    # 用 delete-all + bulk insert,而不是逐条 _upsert —— 腿数会变
+    # (2 → 3 / 2 → 清除),逐条 upsert 会在「腿变少」时留下孤儿行。
+    # **只在 payload 带 `splits` 键时才动腿**。不带 = 不动,而不是清空:
+    # `/sync/push` 的部分更新若漏了这一项,会把用户拆好的分摊额抹掉。
+    # 带空 list 才是显式「清除全部」。
+    if "splits" in payload:
+        replace_tx_splits(
+            db,
+            ledger_id=ledger_id,
+            tx_sync_id=_as_str(payload.get("syncId")) or "",
+            legs=payload.get("splits"),
+        )
+
+
+def replace_tx_splits(
+    db: Session,
+    *,
+    ledger_id: str,
+    tx_sync_id: str,
+    legs: object,
+) -> None:
+    """全量替换一笔交易的拆分腿(0021)。
+
+    `legs` 为 None / 非 list / 空 → 清空。调用点:`upsert_tx` 末尾。
+
+    **必须 delete-all 再 insert**,不能逐行 upsert:腿数会变,少一条时
+    旧行会变成永远没人读的孤儿,而 `_truncate_ledger` / rebuild 都不会
+    清它。
+    """
+    db.query(ReadTxSplitProjection).filter(
+        ReadTxSplitProjection.ledger_id == ledger_id,
+        ReadTxSplitProjection.tx_sync_id == tx_sync_id,
+    ).delete(synchronize_session=False)
+    if not isinstance(legs, list):
+        return
+    rows = []
+    for seq, leg in enumerate(legs):
+        if not isinstance(leg, dict):
+            continue
+        account_sync_id = _as_str(
+            leg.get("accountId") if "accountId" in leg else leg.get("account_id")
+        )
+        amount = _as_float(leg.get("amount"))
+        if not account_sync_id or amount is None or amount <= 0:
+            continue          # 形状不合法的腿在 mutator 就被拒了;这里是兜底
+        rows.append(ReadTxSplitProjection(
+            ledger_id=ledger_id, tx_sync_id=tx_sync_id, seq=seq,
+            account_sync_id=account_sync_id, amount=amount,
+        ))
+    if rows:
+        db.add_all(rows)
+
+
+def delete_tx_splits(db: Session, *, ledger_id: str, tx_sync_id: str) -> None:
+    """删掉一笔交易的全部腿。
+
+    父行通常靠 FK `ON DELETE CASCADE` 带走腿,但 SQLite 默认**不开外键约束**
+    (需 `PRAGMA foreign_keys=ON`),所以不能指望级联。显式删一遍。
+    """
+    db.query(ReadTxSplitProjection).filter(
+        ReadTxSplitProjection.ledger_id == ledger_id,
+        ReadTxSplitProjection.tx_sync_id == tx_sync_id,
+    ).delete(synchronize_session=False)
 
 
 def upsert_account(
@@ -643,7 +709,10 @@ def rename_cascade_tag(
 def _truncate_ledger(db: Session, ledger_id: str) -> None:
     """清掉该 ledger 的 ledger-scoped projection。user-global(account/
     category/tag)是 per-user 表,不按 ledger 清,**不在此处处理**。"""
-    for model in (ReadTxProjection, ReadBudgetProjection):
+    # ⚠️ splits 子表(0021)必须在这里 —— 漏了的话 rebuild_from_snapshot /
+    # 备份还原会把父交易重建成没有腿的样子,而旧腿还留着,于是余额
+    # 出现「凭空多出来」的分摊额,而且不报任何错。
+    for model in (ReadTxProjection, ReadTxSplitProjection, ReadBudgetProjection):
         db.execute(delete(model).where(model.ledger_id == ledger_id))
 
 
