@@ -128,6 +128,12 @@ _USER_MERGE_SPECS: dict[str, _MergeSpec] = {
         ("creditLimit", "credit_limit"),
         ("billingDay", "billing_day"),
         ("paymentDueDay", "payment_due_day"),
+        # 信用卡自动还款(0022)。**必须登记** —— 漏了的话 mobile 侧改了配置
+        # push 上来会被静默丢弃,server 仍按旧配置扣钱。本 fork 不用官方 App,
+        # 但 Web 端 / MCP 也走这条 merge 契约。
+        ("autorepayEnabled", "autorepay_enabled"),
+        ("autorepayFromAccountSyncId", "autorepay_from_account_sync_id"),
+        ("autorepayLastPeriod", "autorepay_last_period"),
         ("bankName", "bank_name"),
         ("cardLastFour", "card_last_four"),
         # 账户隐藏(issue #240):payload 键 hidden(camelCase 同名,跟 App

@@ -435,6 +435,11 @@ def upsert_account(
         "credit_limit": _opt_float(payload.get("creditLimit")),
         "billing_day": _opt_int(payload.get("billingDay")),
         "payment_due_day": _opt_int(payload.get("paymentDueDay")),
+        "autorepay_enabled": _as_bool(payload.get("autorepayEnabled"), default=False),
+        "autorepay_from_account_sync_id": _as_str(
+            payload.get("autorepayFromAccountSyncId")),
+        "autorepay_last_period": _as_str(
+            payload.get("autorepayLastPeriod")),
         "bank_name": _as_str(payload.get("bankName")),
         "card_last_four": _as_str(payload.get("cardLastFour")),
         # 账户隐藏(issue #240)。merge_with_existing_user 已把缺键的 hidden

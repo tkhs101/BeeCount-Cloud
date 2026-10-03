@@ -102,6 +102,13 @@ _ACCOUNT_OPTIONAL_FIELD_MAP: tuple[tuple[str, str, str], ...] = (
     ("payment_due_day", "paymentDueDay", "int"),
     ("bank_name", "bankName", "str"),
     ("card_last_four", "cardLastFour", "str"),
+    # ---- 信用卡自动还款(0022)-------------------------------------------- #
+    # 走同一张表 = 自动获得「缺键保留」语义(update 不传就不动)。
+    # 这一点很重要:Web 编辑账户表单一次提交全部字段,若改成无脑覆盖,
+    # 任何一次没带 `autorepay_enabled` 的更新都会把用户的配置静默清掉。
+    ("autorepay_enabled", "autorepayEnabled", "bool"),
+    ("autorepay_from_account_id", "autorepayFromAccountSyncId", "str"),
+    ("autorepay_last_period", "autorepayLastPeriod", "str"),
     # 账户隐藏(issue #240):Web create/update 请求体带 hidden(bool)时才写;
     # 不带 key → 保留原值(不冲掉已有隐藏标记,契约对齐 mobile push 的 merge
     # 缺键保留语义)。

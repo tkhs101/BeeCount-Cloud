@@ -639,6 +639,25 @@ class UserAccountProjection(Base):
     credit_limit: Mapped[float | None] = mapped_column(Float, nullable=True)
     billing_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
     payment_due_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # ---- 信用卡自动还款配置(0022)-------------------------------------- #
+    # 一张卡最多一条规则,与账号 1:1,所以加列而不是新建规则表 —— 直接复用
+    # 已有的 merge 登记 / rename cascade / 孤儿扫描四套机制。
+    #
+    # 「暂停」用 enabled=false 表示,配置保留 —— 用户「这个月先不还」时
+    # 期望的是关掉而不是删掉重填。
+    autorepay_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    # 扣款来源账户。**存 sync_id 不存名字** —— 账户改名会让按名定位静默
+    # 失效,详见 0022 迁移的说明。
+    autorepay_from_account_sync_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    # 上次已自动还款的账期 `YYYY-MM`。恰好一次守卫;Idempotency-Key 的
+    # TTL 只有 24h(`write/_shared.py:636`),跨月补跑必然失效。
+    autorepay_last_period: Mapped[str | None] = mapped_column(
+        String(7), nullable=True
+    )
     bank_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     card_last_four: Mapped[str | None] = mapped_column(String(8), nullable=True)
     source_change_id: Mapped[int] = mapped_column(BigInteger, default=0)
