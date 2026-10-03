@@ -288,6 +288,41 @@ async def _stop_backup_scheduler() -> None:  # noqa: B008
     except Exception:
         logging.getLogger(__name__).exception("scheduler shutdown failed")
 
+# ============================================================================
+# 信用卡自动还款 —— 每天扫一遍启用自动还款的卡,到还款日生成一笔转账。
+#
+# 复用 `services/backup/scheduler.py` 的 APScheduler 基建(时区解析 /
+# coalesce / max_instances 都已解决)。每天一个 job 而不是每张卡一个 cron ——
+# 短月顺延(账单日 31 遇 2 月 → 28)写不进 cron 表达式,判断必须在代码里。
+#
+# **多进程部署会自动禁用**并打 error 日志:`get_scheduler()` 是进程内单例,
+# 内存 jobstore 无跨进程锁,`--workers 4` 会让每张卡被扣 4 次钱。检测逻辑
+# 见 `credit_card/scheduler.py::detect_multi_process`。
+# ============================================================================
+
+
+@app.on_event("startup")
+async def _start_autorepay_scheduler() -> None:  # noqa: B008
+    try:
+        from .services.credit_card.scheduler import get_scheduler
+
+        get_scheduler().start()
+    except Exception:
+        # 不阻塞启动 —— 自动还款挂掉不该让整个服务起不来。
+        logging.getLogger(__name__).warning(
+            "autorepay scheduler did not start", exc_info=True)
+
+
+@app.on_event("shutdown")
+async def _stop_autorepay_scheduler() -> None:  # noqa: B008
+    try:
+        from .services.credit_card.scheduler import get_scheduler
+
+        get_scheduler().shutdown()
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "autorepay scheduler shutdown failed")
+
 
 # ============================================================================
 # MCP Streamable HTTP — session manager 生命周期。Starlette 的 Mount 不传播
