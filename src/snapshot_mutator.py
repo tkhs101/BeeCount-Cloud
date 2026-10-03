@@ -433,6 +433,17 @@ def create_transaction(snapshot: dict, payload: dict) -> tuple[dict, str]:
         item["toAccountName"] = str(payload.get("to_account_name"))
     if payload.get("to_account_id") is not None:
         item["toAccountId"] = str(payload.get("to_account_id"))
+    # 组合支付(0021):有腿时**父交易的账户字段必须为空** —— 否则余额聚合里
+    # 父行会再动一次账户,两处叠加双倍扣。所以在这里强制 pop,而不是信任
+    # 调用方不传(前端表单很容易两个都填上)。
+    splits = _normalize_splits(
+        payload.get("splits"),
+        amount=_to_float(item["amount"]), tx_type=tx_type,
+    )
+    if splits is not None:
+        item["splits"] = splits
+        item.pop("accountName", None)
+        item.pop("accountId", None)
     tags = _normalize_tx_tags(payload.get("tags"))
     if tags is not None:
         item["tags"] = tags
@@ -554,6 +565,41 @@ def update_transaction(snapshot: dict, tx_id: str, payload: dict) -> dict:
             )
             item.pop("taxAmount", None)
 
+    # 组合支付(0021)。三种语义与 attachments 一致:
+    #   键不存在 = 不动;传 [] = 清空全部腿;传 N 条 = 替换。
+    if "splits" in payload:
+        raw_splits = payload.get("splits")
+        if raw_splits is None or (isinstance(raw_splits, list) and not raw_splits):
+            item.pop("splits", None)
+            # 清空腿之后父账户字段本来就没有意义,但如果之前是有腿的状态,
+            # 这里不主动恢复 —— 调用方若要变回单账户交易应显式传 account_id。
+        elif isinstance(raw_splits, list):
+            item["splits"] = _normalize_splits(
+                raw_splits,
+                amount=_to_float(item.get("amount")),
+                tx_type=str(item.get("type") or "expense"),
+            )
+            item.pop("accountName", None)
+            item.pop("accountId", None)
+    if "splits" in item:
+        # 对**既有**legs 只做自洽性检查,不抛 —— 和上面 taxAmount 同样的理由:
+        # `/sync/push` 不经过本 mutator,merge 也不校验,脏数据真实可达。
+        # 用户改个备注不该因为一笔历史脏 splits(和 != amount)就打不开它。
+        try:
+            _normalize_splits(
+                item["splits"],
+                amount=_to_float(item.get("amount")),
+                tx_type=str(item.get("type") or "expense"),
+            )
+        except ValueError:
+            logger.warning(
+                "update_transaction: dropping inconsistent splits tx_id=%s "
+                "legs=%r amount=%r type=%r",
+                tx_id, item.get("splits"), item.get("amount"), item.get("type"),
+            )
+            item.pop("splits", None)
+            # 腿丢了但父账户字段已被清空 → 这笔会变成「无账户的支出」。
+            # 回填不了(不知道原来该挂哪),所以只告警;账本总额仍正确。
     mapping = {
         "note": "note",
         "category_name": "categoryName",
