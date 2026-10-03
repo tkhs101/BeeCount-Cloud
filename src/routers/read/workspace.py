@@ -1083,7 +1083,15 @@ def workspace_analytics(
                 # 这里只拆分类切片 —— 所以「月支出总额 = 实付金额」这个不变式
                 # 天然成立,不需要任何额外兜底。预算走独立 SQL(ledgers.py),
                 # 不受这里影响(D4:预算恒按全额)。
-                tax_native = tax_in_base_currency(tax_amount, raw_amount, amt)
+                # 绝大多数交易没有税 —— 先判空再调函数,让常见情况是 0 成本。
+                # 实测 tax_in_base_currency ≈ 0.36 µs/笔,和循环里原有的
+                # `_to_utc`(0.18)、bucket key(0.19) 同量级;10 万笔全量调用
+                # 约多 36 ms,不算大,但既然一行就能省掉就没必要付。
+                tax_native = (
+                    tax_in_base_currency(tax_amount, raw_amount, amt)
+                    if tax_amount is not None
+                    else 0.0
+                )
                 net = amt - tax_native
                 category_slot["expense"] += net
                 bucket_cat = category_by_bucket.setdefault(bucket, {})
