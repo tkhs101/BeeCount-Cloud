@@ -433,6 +433,37 @@ def create_transaction(snapshot: dict, payload: dict) -> tuple[dict, str]:
         item["toAccountName"] = str(payload.get("to_account_name"))
     if payload.get("to_account_id") is not None:
         item["toAccountId"] = str(payload.get("to_account_id"))
+    # 转账两端齐备(阶段 0,自动还款的前置修复)。
+    #
+    # 为什么必须在这里挡:transfer 的余额影响是 `_transfer_legs(from)` 减、
+    # `_transfer_legs(to)` 加(`read/_shared.py:494-506`)。两端不齐时只有
+    # 一端生效 —— **钱凭空消失,且没有任何异常**。
+    #
+    # 这不是新引入的缺陷:`projection.py:280-290` 三组账户字段**各自独立**按名
+    # 反查,「from 命中 / to 没命中」(账户改名、同名多账户)完全可能发生。
+    # 自动还款每期产生一笔 transfer,会把这个既有缺陷**每期触发一次**,
+    # 所以在 mutator 层正面挡掉。
+    #
+    # 名字或 id 任一存在即可(后续按名反查会补 sync_id),但**两端都必须有**。
+    if tx_type == "transfer":
+        has_from = bool(
+            payload.get("from_account_id") or payload.get("from_account_name")
+        )
+        has_to = bool(
+            payload.get("to_account_id") or payload.get("to_account_name")
+        )
+        if not (has_from and has_to):
+            raise ValueError(
+                "write validation failed: transfer requires both from_account "
+                "and to_account; a one-sided transfer would deduct from one "
+                "account without crediting the other (money vanishes silently)"
+            )
+        # **刻意不拦「转出 == 转入」**。自转账是退化 no-op:`_transfer_legs`
+        # 对同一账户减 800 又加 800,净 0,只是 count 虚增 2。既有测试
+        # `test_account_balance_paths.py` 把它当边界用例钉住了(「应净 0」),
+        # 它不是丢钱的 bug,拦它属于越界。
+        # 真正要拦的场景是**自动还款把扣款账户配成这张卡自己** —— 那属于
+        # 配置错误,拦在自动还款的配置校验层,不摊到所有交易写入上。
     # 组合支付(0021):有腿时**父交易的账户字段必须为空** —— 否则余额聚合里
     # 父行会再动一次账户,两处叠加双倍扣。所以在这里强制 pop,而不是信任
     # 调用方不传(前端表单很容易两个都填上)。

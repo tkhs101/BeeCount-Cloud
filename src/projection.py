@@ -279,15 +279,45 @@ def upsert_tx(
 
     # #41:payload 只带名不带 id 时(老 web / 前端映射 miss),按名唯一反查补全。
     # 三组 account 字段各自独立处理;同名多账户保持 NULL,宁缺勿错。
+    #
+    # **transfer 例外 —— 两端必须「全有或全无」**(阶段 0):余额影响是
+    # `_transfer_legs(from)` 减、`_transfer_legs(to)` 加(`read/_shared.py:494-506`)。
+    # 只解析出一端 → 钱从一个账户扣掉却不入另一个账户 —— **凭空消失,
+    # 无异常、无日志、余额永久漂移**。
+    #
+    # mutator 已经要求 transfer 两端字段齐备,但**挡不住「按名反查失败」**:
+    # 用户改过账户名、或存在同名账户时,一端能查到另一端查不到。
+    #
+    # 所以:先各自解析,transfer 若恰有一端解析失败,**把另一端也一并撤回**。
+    # 宁可整笔漏算(data_cleanup 的孤儿扫描 / 对账能兜住),不可单边扣钱。
+    resolved: dict[str, str | None] = {}
     for id_key, name_key in (
         ("account_sync_id", "account_name"),
         ("from_account_sync_id", "from_account_name"),
         ("to_account_sync_id", "to_account_name"),
     ):
         if values[id_key] is None and values[name_key]:
-            values[id_key] = _resolve_account_sync_id_by_name(
+            resolved[id_key] = _resolve_account_sync_id_by_name(
                 db, user_id=user_id, name=values[name_key]
             )
+        else:
+            resolved[id_key] = values[id_key]
+
+    if str(payload.get("type") or payload.get("tx_type") or "") == "transfer":
+        f_id, t_id = resolved["from_account_sync_id"], resolved["to_account_sync_id"]
+        if bool(f_id) != bool(t_id):
+            logger.warning(
+                "upsert_tx: dropping one-sided transfer resolution tx=%s "
+                "from=%r to=%r — only one side resolved; half a transfer "
+                "moves money with no counterparty",
+                payload.get("syncId") or payload.get("sync_id"), f_id, t_id,
+            )
+            resolved["from_account_sync_id"] = None
+            resolved["to_account_sync_id"] = None
+
+    values["account_sync_id"] = resolved["account_sync_id"]
+    values["from_account_sync_id"] = resolved["from_account_sync_id"]
+    values["to_account_sync_id"] = resolved["to_account_sync_id"]
 
     _upsert(db, ReadTxProjection, ("ledger_id", "sync_id"), values)
 
