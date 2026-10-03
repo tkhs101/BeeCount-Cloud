@@ -1300,7 +1300,11 @@ export function TransactionsPage() {
     }
   }
 
-  const onUploadTxAttachments = async (files: File[]): Promise<AttachmentRef[]> => {
+  // **必须是 useCallback** —— 它在下面那个 effect 的依赖数组里。不稳定
+  // 的话每次渲染身份都变 → effect 重跑 → cleanup 把 cancelled 置 true,
+  // 而且同一次上传会被触发多次。
+  const onUploadTxAttachments = useCallback(
+    async (files: File[]): Promise<AttachmentRef[]> => {
     const ledgerId = txWriteLedgerId.trim()
     if (!ledgerId) {
       setErrorNotice(t('transactions.error.ledgerRequired'))
@@ -1351,11 +1355,13 @@ export function TransactionsPage() {
         })
       }
       return out
-    } catch (err) {
-      setErrorNotice(renderError(err))
-      return []
-    }
-  }
+      } catch (err) {
+        setErrorNotice(renderError(err))
+        return []
+      }
+    },
+    [txWriteLedgerId, token, t, setErrorNotice]
+  )
 
   // 分享进来的小票图:等 txWriteLedgerId 就绪(账本列表是异步的)再上传,
   // 上传完直接并进表单附件。用户不用在弹窗里再点一次「添加附件」。
@@ -1370,12 +1376,18 @@ export function TransactionsPage() {
     if (!file) return
     const ledgerId = txWriteLedgerId.trim()
     if (!ledgerId) return // 还没选定账本,下一轮再试
-    setPendingAttachmentUpload(null)
     let cancelled = false
     ;(async () => {
       const uploaded = await onUploadTxAttachments([file])
-      if (cancelled || uploaded.length === 0) return
+      if (cancelled) return
+      // **顺序很要紧:先并进表单,再消费掉待上传标记。**
+      //
+      // 反过来写(先 setPendingAttachmentUpload(null))会让本 effect 立刻重跑,
+      // cleanup 把 cancelled 置 true,于是下面这行 setTxForm 永远执行不到 ——
+      // 附件已经传到服务器了,却没进表单。症状是「分享的小票静默消失」,
+      // 服务器上还留了个没人引用的孤儿文件。浏览器冒烟实测到的就是这个。
       setTxForm((prev) => ({ ...prev, attachments: [...prev.attachments, ...uploaded] }))
+      setPendingAttachmentUpload(null)
     })()
     return () => {
       cancelled = true

@@ -91,10 +91,13 @@ await dialog.getByRole('button', { name: /新建交易|保存交易|Save/ }).las
 await page.waitForTimeout(2500)
 const res = await page.request.get(`${BASE}/api/v1/read/workspace/transactions`, {
   headers: { Authorization: `Bearer ${TOKEN}` },
+  params: { limit: 200 },
 })
 const body = await res.json()
 const created = (body.items || []).find((t) => t.amount === 3280)
 ok('服务端能读到这笔', !!created)
+// 记下这本账本 —— 饼图播种要用它,见 seedPieData 里的说明
+const usedLedgerId = created?.ledger_id || ''
 ok('税额已落库 = 298', created?.tax_amount === 298, `got ${created?.tax_amount}`)
 
 const a = await page.request.get(`${BASE}/api/v1/read/workspace/analytics`, {
@@ -134,8 +137,45 @@ ok('页面无未捕获异常', jsErrors.length === 0, jsErrors.join(' | '))
  * 数据前提:构造若干大额分类 + 一笔小额含税,让税额排在最后一位。
  * 数据由调用方准备好(见文件头的跑法),这里只断言渲染结果。
  */
+/** 给饼图检查铺数据:若干大额分类 + 一笔小额含税,让税额排在最后一位。 */
+async function seedPieData(page, token, lid) {
+  const H = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
+              'X-Device-ID': 'smoke' }
+  // 播种进**同一个账本** —— 必须是第 1 步实际用到的那本。
+  //   - 新建账本:概览页默认展示的是活动账本,数据撒在别处饼图看不到
+  //   - 取 ledgers[0]:「第一个」未必是活动账本(重跑时列表顺序会变)
+  // 两种都让断言落到一个空账本上,给出「图例里找不到税与保险」这种
+  // 完全看不出原因���失败。
+  const catRes = await page.request.get(`${BASE}/api/v1/read/workspace/categories`, { headers: H })
+  const existing = new Set(((await catRes.json()) || []).map((c) => c.name))
+  for (const cat of ['住房', '交通', '购物', '日用', '通讯']) {
+    if (existing.has(cat)) continue
+    await page.request.post(`${BASE}/api/v1/write/ledgers/${lid}/categories`, {
+      headers: H, data: { base_change_id: 0, name: cat, kind: 'expense' },
+    })
+  }
+  // 税额必须是最小的一项 —— 这样「按金额取前 N」的实现必然丢它,
+  // 只有「钉住」才留得住,这条断言才有意义。
+  const rows = [['住房', 95000, null], ['餐饮', 52000, null], ['交通', 14000, null],
+                ['购物', 9000, null], ['日用', 5000, null], ['通讯', 3000, null],
+                ['餐饮', 3280, 298]]
+  for (const [cat, amount, tax] of rows) {
+    await page.request.post(`${BASE}/api/v1/write/ledgers/${lid}/transactions`, {
+      headers: H,
+      data: {
+        base_change_id: 0, tx_type: 'expense', amount,
+        happened_at: new Date().toISOString(),
+        category_name: cat, category_kind: 'expense',
+        ...(tax ? { tax_amount: tax } : {}),
+      },
+    })
+  }
+}
+
 async function checkPie(page, token) {
   console.log('\n=== 5. 首页饼图必须显示「税与保险」切片 ===')
+  await seedPieData(page, token, usedLedgerId)
+  if (!usedLedgerId) { ok('拿到活动账本 id', false, '无法播种饼图数据'); return }
   await page.goto(`${BASE}/app/overview`, { waitUntil: 'networkidle' })
   await page.waitForTimeout(2500)
 
@@ -158,14 +198,23 @@ async function checkPie(page, token) {
   ok('图例里出现「税与保险」', (legend || []).some((t) => t.includes('税与保险')), '未找到')
   ok('其余分类都在(未被 Top-N 挤掉)',
      ['住房', '交通', '购物'].every((n) => (legend || []).some((t) => t.includes(n))))
+  ok('切片数 = 播种的分类数(未触发 Top-N 合并)',
+     (legend || []).length === 7, `实际 ${(legend || []).length}`)
   const taxItem = (legend || []).find((t) => t.includes('税与保险')) || ''
-  ok('税额切片百分比 <1%(确实是最小的一项)', /0\.\d%/.test(taxItem), taxItem)
+  // 898 / 177379 ≈ 0.51% —— 断言「小于 1%」而不是写死 0.5%:
+  // 播种数据一旦调整,写死的百分比会给出误导性的失败。
+  const pct = Number((taxItem.match(/([\d.]+)%/) || [])[1])
+  ok('税额切片是最小的一项(百分比 <1%)', pct > 0 && pct < 1, taxItem)
 
   // 排行榜用完整数字,顺便确认它显示的是**税前**值。
   // 期望值从服务端算,不写死 —— 本脚本第 3 步也会建一笔含税交易,写死的数字
   // 会在重跑时给出误导性的失败(第一版就踩了这个)。
+  // **必须给 limit** —— 该端点默认只返回 20 条。播种会写 7 笔,加上脚本
+  // 前面步骤建的几笔,一旦累计超过 20,期望值就会按「前 20 笔」算小,
+  // 然后给出「排行榜没找到该行」这种完全误导性的失败(第一版就踩了)。
   const txRes = await page.request.get(`${BASE}/api/v1/read/workspace/transactions`, {
     headers: { Authorization: `Bearer ${token}` },
+    params: { limit: 200 },
   })
   const txs = (await txRes.json()).items || []
   const netOf = (cat) => txs
@@ -191,6 +240,58 @@ async function checkPie(page, token) {
 }
 
 await checkPie(page, TOKEN)
+await checkShare(page)
+/**
+ * PWA「分享小票」端到端:相册分享 → SW 缓存 → 自动挂成附件。
+ *
+ * 为什么必须验:这条链路里有�� **React 异步 effect 的经典陷阱**,单测和 tsc
+ * 全都抓不到 —— 见 `checkShare` 里 effect 那段注释。
+ */
+async function checkShare(page) {
+  console.log('\n=== 6. PWA 分享小票 → 自动挂成附件 ===')
+  console.log('\n=== 1. 加载应用让 service worker 接管 ===')
+  await page.goto(`${BASE}/app/overview`,{waitUntil:'networkidle'})
+  // SW 首次注册后需要一次 reload 才进入 controlling 状态
+  await page.waitForTimeout(1500)
+  await page.reload({waitUntil:'networkidle'})
+  await page.waitForTimeout(1500)
+  const swState = await page.evaluate(async () => {
+    const reg = await navigator.serviceWorker.getRegistration()
+    return { has: !!reg, active: !!reg?.active, controls: !!navigator.serviceWorker.controller }
+  })
+  console.log('  SW:', JSON.stringify(swState))
+  ok('service worker 处于 active 且已接管页面', swState.active && swState.controls, JSON.stringify(swState))
+
+  console.log('\n=== 2. 模拟 PWA 分享:POST /share-receive ===')
+  const png = fs.readFileSync('./receipt.png').toString('base64')
+  const resp = await page.evaluate(async (b64) => {
+    const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
+    const fd = new FormData()
+    fd.append('files', new File([bin], 'receipt.png', { type: 'image/png' }))
+    fd.append('title', '')
+    fd.append('text', '')
+    fd.append('url', '')
+    const r = await fetch('/share-receive', { method: 'POST', body: fd, redirect: 'follow' })
+    return { status: r.status, url: r.url, redirected: r.redirected }
+  }, png)
+  console.log('  POST 结果:', JSON.stringify(resp))
+  ok('分享请求被 SW 接住并 303 跳到处理页', resp.url.includes('/app/share-incoming'), resp.url)
+
+  console.log('\n=== 3. 跳到分享处理页 ===')
+  await page.goto(`${BASE}/app/share-incoming`,{waitUntil:'networkidle'})
+  await page.waitForTimeout(2000)
+  ok('页面最终落到交易页并打开快速新建', page.url().includes('/app/transactions'), page.url())
+  ok('出现快速新建对话框', (await page.getByRole('dialog').count()) > 0)
+
+  console.log('\n=== 4. 分享的小票应已挂在表单上 ===')
+  const dlg = page.getByRole('dialog')
+  const attachCount = await dlg.locator('input[type="file"]').count()
+  ok('表单里有附件选择器', attachCount > 0)
+  const badge = await dlg.getByText(/已附\s*\d+\s*个|1\s*attached/).count()
+  ok('附件计数显示已挂 1 个', badge > 0, `badge=${badge}`)
+
+}
+
 await browser.close()
 console.log('\n' + (fails.length ? `FAILED: ${fails.join('; ')}` : 'UI SMOKE ALL PASSED'))
 process.exit(fails.length ? 1 : 0)
