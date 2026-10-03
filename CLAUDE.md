@@ -161,10 +161,10 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | 594 passed |
+| `pytest -q` | 绿 | **绿** | 742 passed |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
-| 前端 `build` + `test` | 绿 | **绿** | 140 passed |
+| 前端 `build` + `test` | 绿 | **绿** | 160 passed |
 
 mypy 那边本 fork 用 `TypedDict` 声明各工具的 kwargs（`kw = dict(...)` 会让
 `**kw` 展开每一行都报 arg-type，上游 `parse_and_create_from_text` 就是这么
