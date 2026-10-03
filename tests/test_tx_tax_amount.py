@@ -1344,3 +1344,109 @@ def test_mcp_create_tax_category_hierarchy(monkeypatch) -> None:
         assert list(used.values()) == [1000.0], used
     finally:
         app.dependency_overrides.clear()
+
+
+def test_tax_aggregates_across_ledgers():
+    """**多账本场景** —— CLAUDE.md 明确要求「多账本场景至少有一个测试覆盖」。
+
+    税额切片是按**分类名字符串**合并的,而不是按 sync_id。所以两本账本各自的
+    消费税会汇进同一个「税与保险」扇区 —— 这是 D1 想要的效果(看的是
+    「今年一共交了多少钱税」,不是「每本账各交多少」)。
+
+    但也正因按名字合并,得确认它**不会重复计数**:workspace 的跨账本查询走
+    `ledger_id IN (...)`,同一笔交易只会被查一次。
+    """
+    client, TS = _make_client()
+    try:
+        token = _register_and_token(client, "tax-multi@t.com", device_id="d-web",
+                                    client_type="web")
+        hdr = {"Authorization": f"Bearer {token}", "X-Device-ID": "web"}
+        J = {**hdr, "Content-Type": "application/json"}
+
+        # 两本账,各有分类
+        bases = {}
+        for name in ("ledger-alpha", "ledger-beta"):
+            r = client.post("/api/v1/write/ledgers", headers=J,
+                            json={"ledger_id": name, "ledger_name": name,
+                                  "currency": "JPY"})
+            assert r.status_code == 200, r.text[:200]
+            bases[name] = r.json()["new_change_id"]
+            client.post(f"/api/v1/write/ledgers/{name}/categories", headers=J,
+                        json={"base_change_id": bases[name],
+                              "name": "餐饮", "kind": "expense"})
+
+        # A 账:3280/298 ; B 账:1000/100
+        for name, amt, tax in (("ledger-alpha", 3280.0, 298.0), ("ledger-beta", 1000.0, 100.0)):
+            client.post(f"/api/v1/write/ledgers/{name}/transactions", headers=J, json={
+                "base_change_id": bases[name], "tx_type": "expense", "amount": amt,
+                "happened_at": _iso(), "category_name": "餐饮",
+                "category_kind": "expense", "tax_amount": tax})
+
+        # 跨账本聚合(workspace 口径,不加 ledger_id = 全部可见账本)
+        body = client.get("/api/v1/read/workspace/analytics", headers=hdr,
+                          params={"scope": "all", "metric": "expense"}).json()
+        ranks = {r["category_name"]: r["total"] for r in body["category_ranks"]}
+
+        assert abs(body["summary"]["expense_total"] - 4280.0) < 1e-6, body["summary"]
+        # 两本账的消费税汇进同一个扇区
+        assert abs(ranks[TAX_BUCKET] - 398.0) < 1e-6, ranks
+        # 餐饮 = 两笔税前
+        assert abs(ranks["餐饮"] - (2982 + 900)) < 1e-6, ranks
+        assert abs(sum(ranks.values()) - 4280.0) < 1e-6, ranks
+
+        # 单账本视图各自只看到自己那份
+        one = client.get("/api/v1/read/workspace/analytics", headers=hdr,
+                         params={"scope": "all", "metric": "expense",
+                                 "ledger_id": "ledger-alpha"}).json()
+        one_ranks = {r["category_name"]: r["total"] for r in one["category_ranks"]}
+        assert abs(one["summary"]["expense_total"] - 3280.0) < 1e-6, one["summary"]
+        assert abs(one_ranks[TAX_BUCKET] - 298.0) < 1e-6, one_ranks
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_tax_category_name_env_override(monkeypatch):
+    """`TAX_CATEGORY_NAME` env 必须真的改变税额归属的分类名。
+
+    这是文档承诺的可配置项。若哪天统计端点不小心写死默认值,这条会红 ——
+    而症状很隐蔽:税额跑进了另一个分类,饼图多出一块,界面不报错。
+
+    注意 `get_settings` 是 `lru_cache`,所以测试里要清缓存 —— 改 env 之后
+    不清的话读到的还是旧值。
+    """
+    from src.config import get_settings
+
+    client, TS = _make_client()
+    try:
+        token = _register_and_token(client, "tax-env@t.com", device_id="d-web",
+                                    client_type="web")
+        hdr = {"Authorization": f"Bearer {token}", "X-Device-ID": "web"}
+        J = {**hdr, "Content-Type": "application/json"}
+        base = _web_ledger(client, hdr)
+        client.post("/api/v1/write/ledgers/lg1/categories", headers=J,
+                    json={"base_change_id": base, "name": "餐饮", "kind": "expense"})
+        client.post("/api/v1/write/ledgers/lg1/transactions", headers=J, json={
+            "base_change_id": base, "tx_type": "expense", "amount": 3280.0,
+            "happened_at": _iso(), "category_name": "餐饮",
+            "category_kind": "expense", "tax_amount": 298.0})
+
+        # 默认
+        default_ranks = {r["category_name"]: r["total"]
+                         for r in _analytics(client, hdr)["category_ranks"]}
+        assert TAX_BUCKET in default_ranks, default_ranks
+
+        # 改成日文名
+        monkeypatch.setenv("TAX_CATEGORY_NAME", "税務")
+        get_settings.cache_clear()
+        try:
+            renamed = {r["category_name"]: r["total"]
+                       for r in _analytics(client, hdr)["category_ranks"]}
+        finally:
+            monkeypatch.delenv("TAX_CATEGORY_NAME", raising=False)
+            get_settings.cache_clear()
+
+        assert "税務" in renamed, renamed
+        assert TAX_BUCKET not in renamed, "改名后旧名不该再出现"
+        assert abs(renamed["税務"] - 298.0) < 1e-6, renamed
+    finally:
+        app.dependency_overrides.clear()
