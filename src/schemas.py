@@ -497,6 +497,18 @@ class ReadLedgerDetailOut(ReadLedgerOut):
     source_change_id: int
 
 
+class TxSplit(BaseModel):
+    """组合支付的一条腿(0021)。
+
+    金额是**原币**,与父交易的 `amount` 同一币种 —— 跨币种拆分要引入汇率时点
+    问题,由 `snapshot_mutator._normalize_splits` 拒绝。
+    """
+
+    account_id: str = Field(min_length=1, max_length=255)
+    account_name: str | None = Field(default=None, max_length=255)
+    amount: float
+
+
 class ReadTransactionOut(BaseModel):
     id: str
     tx_index: int
@@ -528,6 +540,9 @@ class ReadTransactionOut(BaseModel):
     # 消费税税额(0020):NULL = 无税。校验 `0 < tax < amount` 且仅 expense
     # 允许非空,由 snapshot_mutator 强制(错误文案沿用 write validation 风格)。
     tax_amount: float | None = None
+    # 组合支付(0021):为空 = 普通交易(主账户字段有效);≥2 条 = 这笔是拆分的,
+    # 此时 `account_id` / `account_name` 为空,金额按腿分摊。
+    splits: list[TxSplit] = []
     last_change_id: int
     ledger_id: str | None = None
     ledger_name: str | None = None
@@ -809,6 +824,9 @@ class WriteTransactionCreateRequest(WriteBaseRequest):
     tags: str | list[str] | None = None
     tag_ids: list[str] | None = None
     attachments: list[dict[str, Any]] | None = None
+    # 组合支付(0021):给了 >=2 条腿时,父交易的 account_* 会被清空,
+    # 金额按腿分摊。校验在 snapshot_mutator(这里只做形状/类型)。
+    splits: list[TxSplit] | None = None
     # 账单标记(.docs/transaction-flags)。新建默认 False。
     exclude_from_stats: bool = False
     exclude_from_budget: bool = False
@@ -838,6 +856,9 @@ class WriteTransactionUpdateRequest(WriteBaseRequest):
     tags: str | list[str] | None = None
     tag_ids: list[str] | None = None
     attachments: list[dict[str, Any]] | None = None
+    # 组合支付(0021)。三种语义与 attachments 一致:
+    #   不传(键不存在) = 不动;传 [] = 清空全部腿;传 N 条 = 替换。
+    splits: list[TxSplit] | None = None
     # 账单标记(.docs/transaction-flags)。None = 不变(沿用 update 其它字段语义)。
     exclude_from_stats: bool | None = None
     exclude_from_budget: bool | None = None

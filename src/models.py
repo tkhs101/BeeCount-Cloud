@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -518,6 +519,46 @@ class ReadTxProjection(Base):
     # 统计侧 `native_amount * (tax_amount / amount)` 推导,不落库(避免重演
     # native_amount 的联动 bug)。税率不存 —— 小票只印金額,各家舍入不一。
     tax_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class ReadTxSplitProjection(Base):
+    """组合支付的一条腿(0021)。
+
+    一笔订单用多个支付方式时,父交易(`ReadTxProjection`)仍是**一条**,
+    `amount` 仍是实付总额,`account_*` 为空;拆分金额按 `seq` 落在这里。
+
+    **只存 account_sync_id,不存名字** —— 存名字就要维护账户改名时的
+    cascade,漏一处就是「余额对但展示显示旧名」。
+
+    `sum(amount) == 父.amount` 与「有腿时父.account_sync_id 必须为 NULL」
+    两条不变式由 `snapshot_mutator._normalize_splits` 强制。
+    """
+
+    __tablename__ = "read_tx_split_projection"
+
+    ledger_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tx_sync_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_sync_id: Mapped[str] = mapped_column(String(255))
+    amount: Mapped[float] = mapped_column(Float)
+
+    # 复合外键 (ledger_id, tx_sync_id) -> read_tx_projection 的复合主键。
+    # 必须写在 __table_args__ 里 —— 列级 ForeignKey 只能指向单列主键,而这里
+    # 父表的 PK 是 (ledger_id, sync_id) 两列。父交易删掉,腿跟着删。
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["ledger_id", "tx_sync_id"],
+            ["read_tx_projection.ledger_id", "read_tx_projection.sync_id"],
+            ondelete="CASCADE",
+        ),
+    )
+
+
+Index(
+    "ix_read_tx_split_account",
+    ReadTxSplitProjection.ledger_id,
+    ReadTxSplitProjection.account_sync_id,
+)
 
 
 Index(

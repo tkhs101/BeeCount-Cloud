@@ -4,6 +4,7 @@ import logging
 import re
 from copy import deepcopy
 from datetime import datetime, timezone
+from typing import Any
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -304,6 +305,86 @@ def _normalize_tax_amount(raw: object, amount: float, tx_type: str) -> float | N
     if amount <= 0 or tax >= amount:
         raise ValueError("write validation failed: tax_amount must be less than amount")
     return tax
+
+
+# 拆分金额求和的容差。JPY 没有小数,CNY/USD 有 —— 各腿四舍五入后与总额
+# 可能有分位误差,但绝不允许到「差 1 円」那种对不上账的程度。
+_SPLIT_SUM_TOLERANCE = 1e-6
+
+
+def _normalize_splits(
+    raw: object,
+    *,
+    amount: float,
+    tx_type: str,
+) -> list[dict[str, Any]] | None:
+    """校验并归一 splits(组合支付,0021)。返回 None = 不是拆分交易。
+
+    四条不变式:
+
+    1. `None` 或 `[]` → 不是拆分(返回 None)
+    2. 至少 **2** 条腿 —— 1 条等于没拆,应当走普通单账户路径
+    3. `sum(leg.amount) == amount`,容差 1e-6
+    4. 每条腿 `amount > 0`,且 `account_id` 非空
+
+    为什么第 3 条要报错而不自动补差:5000 拆成 3000 + 1999 时,差的那 1 円
+    补到哪条腿都是猜的,补错了用户要自己发现。宁可写不进去。
+
+    **不与 amount 联动**:和 `_normalize_tax_amount` 同样的理由 —— 不等就拒绝,
+    不按比例缩放。改 amount 而 splits 不变时,mutator 会按现有腿数重新校验,
+    不自洽就整体丢弃 splits(见 update 路径的降级块),而不是悄悄改用户填的数字。
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ValueError("write validation failed: splits must be a list")
+    if len(raw) < 2:
+        if not raw:
+            return None
+        raise ValueError(
+            "write validation failed: splits needs at least 2 legs "
+            "(a single leg is a normal transaction)"
+        )
+    if tx_type != "expense":
+        raise ValueError(
+            "write validation failed: splits is only allowed on expense transactions"
+        )
+    if amount <= 0:
+        raise ValueError(
+            "write validation failed: split transaction needs a positive amount"
+        )
+
+    legs: list[dict[str, Any]] = []
+    total = 0.0
+    for i, raw_leg in enumerate(raw):
+        if not isinstance(raw_leg, dict):
+            raise ValueError(f"write validation failed: splits[{i}] must be an object")
+        account_id = str(
+            raw_leg.get("account_id") or raw_leg.get("accountId") or ""
+        ).strip()
+        if not account_id:
+            raise ValueError(
+                f"write validation failed: splits[{i}] is missing account_id"
+            )
+        leg_amount = _to_optional_float(raw_leg.get("amount"))
+        if leg_amount is None or leg_amount <= 0:
+            raise ValueError(
+                f"write validation failed: splits[{i}] amount must be positive"
+            )
+        name = raw_leg.get("account_name") or raw_leg.get("accountName")
+        legs.append({
+            "accountId": account_id,
+            "accountName": str(name).strip() if name else None,
+            "amount": leg_amount,
+        })
+        total += leg_amount
+
+    if abs(total - amount) > _SPLIT_SUM_TOLERANCE:
+        raise ValueError(
+            "write validation failed: splits must sum to the transaction amount "
+            f"(legs={total:g}, amount={amount:g})"
+        )
+    return legs
 
 
 def create_transaction(snapshot: dict, payload: dict) -> tuple[dict, str]:
