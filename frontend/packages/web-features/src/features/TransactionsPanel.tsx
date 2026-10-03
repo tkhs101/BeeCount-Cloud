@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { X } from 'lucide-react'
 
 import {
   Badge,
@@ -35,6 +36,7 @@ import { TagPickerDialog } from '../components/TagPickerDialog'
 import { TransactionList } from '../components/TransactionList'
 import { useSingleFlight } from '../lib/singleFlight'
 import { tagTextColorOn } from '../lib/tagColorPalette'
+import { splitsRemainder } from '../lib/txSplits'
 import type { TxForm } from '../forms'
 
 type TransactionsPanelProps = {
@@ -381,7 +383,12 @@ export function TransactionsPanel({
         category_name: '',
         category_kind: 'transfer',
         exclude_from_stats: false,
-        exclude_from_budget: false
+        exclude_from_budget: false,
+        // 组合支付(0021):转账没有「一个订单两个支付方式」的语义,
+        // 控件隐藏 → 一起清掉。**和 currency 同一个坑**:不清理的话
+        // 残留的 legs 会跟着 payload 上行,server 侧 expense-only 校验
+        // 会拒一笔转账,用户看到的是「改个交易类型报 400」这种莫名其妙的错。
+        splits: []
       })
       return
     }
@@ -394,7 +401,9 @@ export function TransactionsPanel({
       from_account_name: '',
       to_account_name: '',
       // 不计入预算仅 expense 显示;切到 income 时清掉
-      exclude_from_budget: nextType === 'expense' ? form.exclude_from_budget : false
+      exclude_from_budget: nextType === 'expense' ? form.exclude_from_budget : false,
+      // 组合支付仅 expense 有意义 —— 切到 income 时同样清掉
+      splits: nextType === 'expense' ? form.splits : []
     })
   }
 
@@ -544,6 +553,106 @@ export function TransactionsPanel({
                 }
               />
             </div>
+            {!isTransfer ? (
+              <div className="space-y-1 md:col-span-2">
+                <div className="flex items-center justify-between">
+                  <Label>{t('transactions.splits.title')}</Label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() =>
+                      onFormChange({
+                        ...form,
+                        splits: [...form.splits, { accountId: '', accountName: '', amount: '' }]
+                      })
+                    }
+                  >
+                    + {t('transactions.splits.add')}
+                  </Button>
+                </div>
+                {form.splits.length > 0 ? (
+                  <div className="space-y-2">
+                    {form.splits.map((leg, i) => (
+                      <div key={i} className="flex items-end gap-2">
+                        <div className="flex-1 space-y-1">
+                          <Select
+                            value={leg.accountId}
+                            onValueChange={(v) => {
+                              const next = [...form.splits]
+                              const acc = accounts.find((a) => a.id === v)
+                              next[i] = {
+                                ...leg,
+                                accountId: v,
+                                accountName: acc?.name || leg.accountName
+                              }
+                              onFormChange({ ...form, splits: next })
+                            }}
+                          >
+                            <SelectTrigger className="h-10">
+                              <SelectValue
+                                placeholder={t('transactions.splits.accountPlaceholder')}
+                              />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {accounts.map((a) => (
+                                <SelectItem key={a.id} value={a.id}>
+                                  {a.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="w-28 space-y-1">
+                          <Input
+                            inputMode="decimal"
+                            placeholder={t('transactions.splits.amountPlaceholder')}
+                            value={leg.amount}
+                            onChange={(e) => {
+                              const next = [...form.splits]
+                              next[i] = { ...leg, amount: e.target.value }
+                              onFormChange({ ...form, splits: next })
+                            }}
+                          />
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-10 w-10 shrink-0"
+                          aria-label={t('transactions.splits.remove')}
+                          onClick={() =>
+                            onFormChange({
+                              ...form,
+                              splits: form.splits.filter((_, k) => k !== i)
+                            })
+                          }
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    {(() => {
+                      // 「还差多少」纯展示,真正校验在 server —— 与
+                      // taxNetPreview 同一个骨架(不自洽就不显示提示)。
+                      const rem = splitsRemainder(form.amount, form.splits)
+                      if (rem === null) return null
+                      return (
+                        <p className="text-xs text-muted-foreground">
+                          {t('transactions.splits.remainder', {
+                            amount: String(Math.abs(rem))
+                          })}
+                        </p>
+                      )
+                    })()}
+                    <p className="text-xs text-muted-foreground">
+                      {t('transactions.splits.hint')}
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             <div className="space-y-1">
               <Label>{t('transactions.table.category')}</Label>
               {isTransfer ? (

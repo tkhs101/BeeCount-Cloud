@@ -198,6 +198,9 @@ export type ReadTransaction = {
   /** 消费税税额(0020):一笔支出中包含的税(日本「消費税」)。null = 无税。
    *  amount 仍是实付总额,税前 = amount - tax_amount。 */
   tax_amount?: number | null
+  /** 组合支付拆分腿(0021)。≥2 条时这笔是拆分的:父交易的 `account_id` /
+   *  `account_name` 为空,金额按腿分摊。空数组 = 普通交易。 */
+  splits?: TransactionSplit[]
   last_change_id: number
   ledger_id?: string | null
   ledger_name?: string | null
@@ -597,6 +600,23 @@ export type TxPayload = {
    *  本字段只是叠加维度 —— 统计时剥出归入「税与保险」。不传 = 无税。
    *  仅 expense 有意义。 */
   tax_amount?: number | null
+  /** 组合支付(0021)。≥2 条腿时 account_* 会被 server 清空,金额按腿分摊。
+   *  **不传 = 不动**(PATCH 语义);传 `[]` = 清除全部腿。 */
+  splits?: TransactionSplitPayload[] | null
+}
+
+/** 组合支付的一条腿(0021)。金额是原币,与父交易 amount 同币种。 */
+export type TransactionSplit = {
+  account_id: string
+  account_name?: string | null
+  amount: number
+}
+
+/** 写路径的腿:snake_case,与 TransactionSplit 对应。 */
+export type TransactionSplitPayload = {
+  account_id: string
+  account_name?: string | null
+  amount: number
 }
 
 export type BudgetCreatePayload = {

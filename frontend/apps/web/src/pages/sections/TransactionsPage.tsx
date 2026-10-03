@@ -91,6 +91,9 @@ import {
   canWriteTransactions,
   txDefaults,
   parseTaxAmount,
+  splitsToInput,
+  isSplitPayment,
+  parseSplits,
   taxAmountToInput,
   type TxForm
 } from '@beecount/web-features'
@@ -1531,6 +1534,10 @@ export function TransactionsPage() {
           !isTransfer && txForm.tx_type === 'expense'
             ? parseTaxAmount(txForm.tax_amount)
             : null,
+        // 组合支付(0021):≥2 条有效腿才发,否则发 null(= 普通交易)。
+        // ⚠️ 这条提交路径和 GlobalEditDialogs 那条是复制粘贴关系,
+        // 改一处漏一处会**静默清空**腿 —— 余额漂移且不报错。
+        splits: isSplitPayment(txForm.splits) ? parseSplits(txForm.splits) : null,
         ...currencyFields
       }
       // eslint-disable-next-line no-console
@@ -2049,6 +2056,9 @@ export function TransactionsPage() {
                       ? ''
                       : (tx.currency_code || '').toUpperCase(),
                     tax_amount: taxAmountToInput(tx.tax_amount),
+        // 组合支付(0021):回显拆分腿。漏了这一条 → 编辑一笔组合支付
+        // 后提交,腿会被 payload 里的空数组清掉,余额漂移且不报错。
+        splits: splitsToInput(tx.splits as never),
                     tags:
                       tx.tags_list && tx.tags_list.length > 0
                         ? tx.tags_list

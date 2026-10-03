@@ -43,6 +43,11 @@ const WEB_FEATURES = path.resolve(WEB_SRC, '../../../packages/web-features/src')
  * 聚合点都可能需要往这里补一条 —— 但总比第四个 bug 悄悄溜过去强。
  */
 const ALLOW: Record<string, string> = {
+  'lib/txSplits.ts':
+    'splitsRemainder 做的是**同币种内**的运算:表单里用户输入的总额 vs 用户输入的'
+    + '各腿之和,两者都是原币,不涉及折算(拆分腿结构上就没有 currency 字段 —— '
+    + 'currency 只有父交易有)。它算的是「还差多少没分配」的提示值,不是聚合'
+    + '多笔交易。真正的校验在 server 的 snapshot_mutator._normalize_splits。',
   'components/dashboard/BudgetUsagePanel.tsx':
     '预算额度与用量都是服务端按本位币算好的聚合结果,前端只做减法比较,不聚合交易',
   'pages/sections/BudgetsPage.tsx':

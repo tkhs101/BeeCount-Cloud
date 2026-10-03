@@ -24,6 +24,9 @@ import {
   type CategoryForm,
   type TxForm,
   parseTaxAmount,
+  isSplitPayment,
+  parseSplits,
+  splitsToInput,
   taxAmountToInput,
 } from '@beecount/web-features'
 
@@ -148,6 +151,9 @@ export function GlobalEditDialogs() {
         currency: (tx.currency_code || '').toUpperCase(),
         original_currency: (tx.currency_code || '').toUpperCase(),
         tax_amount: taxAmountToInput(tx.tax_amount),
+        // 组合支付(0021):回显拆分腿。漏了这一条 → 编辑一笔组合支付
+        // 后提交,腿会被 payload 里的空数组清掉,余额漂移且不报错。
+        splits: splitsToInput(tx.splits as never),
         note: tx.note || '',
         category_name: tx.category_name || '',
         category_kind: (tx.category_kind as TxForm['category_kind']) || 'expense',
@@ -304,6 +310,9 @@ export function GlobalEditDialogs() {
       // 提交路径和上面那条是复制粘贴关系(R3:改一处漏一处会静默丢字段)。
       tax_amount:
         editTxForm.tx_type === 'expense' ? parseTaxAmount(editTxForm.tax_amount) : null,
+      // 组合支付(0021):与 TransactionsPage 同一套 parseSplits(复制粘贴关系,
+      // 漏改会静默清空腿)。
+      splits: isSplitPayment(editTxForm.splits) ? parseSplits(editTxForm.splits) : null,
       ...currencyFields
     }
 

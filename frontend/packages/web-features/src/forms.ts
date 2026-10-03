@@ -1,5 +1,7 @@
 import type { AttachmentRef } from '@beecount/api-client'
 
+import type { SplitForm } from './lib/txSplits'
+
 export type TxForm = {
   editingId: string | null
   editingOwnerUserId: string
@@ -28,6 +30,11 @@ export type TxForm = {
    *  amount 仍是实付总额,税额只是叠加维度 —— 统计时从分类切片剥出归入
    *  「税与保险」,两块相加仍等于实付。仅 expense 有意义。 */
   tax_amount: string
+  /** 组合支付拆分(0021):一笔订单多个支付方式。
+   *  **≥2 条有效腿才算拆分**,此时 server 会清空 `account_name` 并把金额
+   *  按腿分摊 —— 所以有腿时表单里的主账户字段会被忽略,别两边都填。
+   *  见 lib/txSplits.ts(parse 只归一化,求和校验在 server)。 */
+  splits: SplitForm[]
 }
 
 export type AccountForm = {
@@ -133,7 +140,8 @@ export const txDefaults = (): TxForm => ({
   original_currency: '',
   exclude_from_stats: false,
   exclude_from_budget: false,
-  tax_amount: ''
+  tax_amount: '',
+  splits: []
 })
 
 export const accountDefaults = (): AccountForm => ({
