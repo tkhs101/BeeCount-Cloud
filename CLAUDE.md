@@ -161,7 +161,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | 742 passed |
+| `pytest -q` | 绿 | **绿** | 743 passed |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | 160 passed |
@@ -288,8 +288,9 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 
 1. 账期查重(`outstanding == 0` 就跳过 —— 这一条顺带满足「手动已还过就跳过」)
 2. `autorepay_last_period`(恰好一次)
-3. `Idempotency-Key: auto-repay:{card}:{YYYY-MM}`(TTL 只有 24h,
-   **不能**作唯一保障)
+3. `Idempotency-Key: auto-repay:{card}:{YYYY-MM}:{amount}`(TTL 只有
+   24h,**不能**作唯一保障;**必须带金额** —— 服务端会把 payload 一起
+   hash,同键不同金额 → 409 把这一期卡死)
 4. 数据库条件更新抢锁(`get_scheduler()` 是进程内单例,多 worker 会重复扣钱)
 
 ### 三个会烧钱的配置陷阱
