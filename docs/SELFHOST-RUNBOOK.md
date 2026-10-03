@@ -136,8 +136,16 @@ claude mcp add --transport http beecount https://your-domain.com/api/v1/mcp \
 Token 在 Web 控制台 → 设置 → 开发者 → 新建，勾 `mcp:read` + `mcp:write`，
 有效期选「永不」。**明文只显示一次。**
 
-本 fork 的 MCP 有 **31 个 tool**（官方 18 个）：在官方基础上补了消费税税额字段、
-MCP 附件、预算增删、**账户 / 标签的完整增删改**、账户余额查询。
+本 fork 的 MCP 有 **36 个 tool**（官方 18 个）。补的 18 个按用途分三块：
+
+| 类别 | 工具 |
+|---|---|
+| **实体管理**（官方只读/半残） | `create/update/delete_account`、`create/update/delete_tag`、`update/delete_category`、`delete_budget` |
+| **分析**（官方完全答不了） | `get_account_balance`、`compare_periods`（环比/同比）、`get_spending_breakdown`（商户/标签/账户维度）、`get_spending_pattern`（星期/时段/金额分布） |
+| **批量与导出** | `delete_transactions_batch`、`export_transactions_csv` |
+| 消费税 / 附件（issue #510 / #513） | 各工具的 `tax_amount`、`attach_receipt`、`create_transaction_with_receipt`、`create_budget` |
+
+所有删除类工具都是**两阶段确认**（先返 `confirmation_required`，确认后再调）。
 
 ## 6. 记一笔含税的，验收
 

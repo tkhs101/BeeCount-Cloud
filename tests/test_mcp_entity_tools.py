@@ -20,10 +20,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.database import Base, get_db
-from src.models import User
 from src.main import app
 from src.mcp.tools import entity_tools, write_tools
-from src.security import SCOPE_APP_WRITE, SCOPE_WEB_READ, SCOPE_WEB_WRITE, _create_token
+from src.models import User
+from src.security import SCOPE_APP_WRITE, SCOPE_WEB_WRITE, _create_token
 
 
 def _make_client():

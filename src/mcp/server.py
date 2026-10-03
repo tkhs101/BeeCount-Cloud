@@ -20,8 +20,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, TypedDict
+from typing import Any, TypedDict
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.fastmcp.server import StreamableHTTPASGIApp
@@ -36,7 +37,13 @@ from .auth import (
     get_mcp_user_from_context,
     require_mcp_scope,
 )
-from .tools import entity_tools, read_tools, write_tools
+from .tools import (
+    analytics_tools,
+    bulk_tools,
+    entity_tools,
+    read_tools,
+    write_tools,
+)
 from .tools.write_tools import BatchTxItem
 
 logger = logging.getLogger(__name__)
@@ -1121,4 +1128,226 @@ async def delete_budget(
     return await _logged_call(
         ctx, name="delete_budget", scope=SCOPE_MCP_WRITE, kwargs=dict(kw),
         body=lambda user: entity_tools.delete_budget(user, **kw),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 分析与批量操作                                                                #
+# --------------------------------------------------------------------------- #
+# 官方 18 个 tool 能回答的都是「某笔是多少」,答不上来的是「钱去哪了、变了没」
+# —— 而这才是问 AI 记账 App 的理由。实现见 tools/{analytics,bulk}_tools.py。
+
+class _ComparePeriodsKw(TypedDict):
+    scope: str
+    period: str | None
+    compare: str
+    ledger_id: str | None
+    top: int
+
+
+class _SpendingBreakdownKw(TypedDict):
+    by: str
+    scope: str
+    period: str | None
+    limit: int
+    min_amount: float | None
+    q: str | None
+    ledger_id: str | None
+
+
+class _SpendingPatternKw(TypedDict):
+    scope: str
+    period: str | None
+    ledger_id: str | None
+
+
+class _BatchDeleteKw(TypedDict):
+    tx_ids: list[str]
+    confirm: bool
+    ledger_id: str | None
+
+
+class _ExportCsvKw(TypedDict):
+    date_from: str | None
+    date_to: str | None
+    tx_type: str | None
+    category: str | None
+    account: str | None
+    q: str | None
+    min_amount: float | None
+    max_amount: float | None
+    lang: str
+    ledger_id: str | None
+
+
+@mcp.tool()
+async def compare_periods(
+    ctx: Context,
+    scope: str = "month",
+    period: str | None = None,
+    compare: str = "previous",
+    ledger_id: str | None = None,
+    top: int = 5,
+) -> dict[str, Any]:
+    """Compare spending against a baseline period — month-over-month or year-over-year.
+
+    `get_analytics_summary` only shows one period, so "how much more did I
+    spend this month?", "did dining out go up year over year?" cannot be
+    answered. This is the question people ask when reviewing spending.
+
+    Args:
+        scope: `month` | `year` | `all` (`all` has no baseline and errors).
+        period: Baseline period, e.g. '2026-10' for month, '2026' for year.
+            Defaults to the current period.
+        compare: `previous` for the preceding period, `last_year` for the same
+            period a year ago.
+        ledger_id: Optional.
+        top: How many largest movers to report per category.
+    """
+    kw: _ComparePeriodsKw = {
+        "scope": scope, "period": period, "compare": compare,
+        "ledger_id": ledger_id, "top": top,
+    }
+    return await _logged_call(
+        ctx, name="compare_periods", scope=SCOPE_MCP_READ, kwargs=dict(kw),
+        body=lambda user: asyncio.to_thread(analytics_tools.compare_periods, user, **kw),
+    )
+
+
+@mcp.tool()
+async def get_spending_breakdown(
+    ctx: Context,
+    by: str = "merchant",
+    scope: str = "month",
+    period: str | None = None,
+    limit: int = 10,
+    min_amount: float | None = None,
+    q: str | None = None,
+    ledger_id: str | None = None,
+) -> dict[str, Any]:
+    """Break spending down by merchant, tag, account or category.
+
+    `search` can FIND "Starbucks" transactions but cannot SUM them. This tool
+    answers "how much did I spend at Starbucks in total?".
+
+    Args:
+        by: `merchant` (groups by the note field — that is where most people
+            write the merchant), `tag`, `account`, or `category`.
+        scope: `month` | `year` | `all`.
+        period: e.g. '2026-10' for month, '2026' for year.
+        limit: How many groups to return.
+        min_amount: Only count expenses at or above this amount — handy for
+            "where does the big money go".
+        q: Substring filter on the group name.
+        ledger_id: Optional.
+    """
+    kw: _SpendingBreakdownKw = {
+        "by": by, "scope": scope, "period": period, "limit": limit,
+        "min_amount": min_amount, "q": q, "ledger_id": ledger_id,
+    }
+    return await _logged_call(
+        ctx, name="get_spending_breakdown", scope=SCOPE_MCP_READ, kwargs=dict(kw),
+        body=lambda user: asyncio.to_thread(analytics_tools.get_spending_breakdown, user, **kw),
+    )
+
+
+@mcp.tool()
+async def get_spending_pattern(
+    ctx: Context,
+    scope: str = "year",
+    period: str | None = None,
+    ledger_id: str | None = None,
+) -> dict[str, Any]:
+    """Spending habits: distribution by weekday, hour of day and amount band.
+
+    Answers "do I spend more on weekends?", "am I a night owl spender?", "is
+    my spending many small things or few big ones?" — none of which the other
+    tools can.
+
+    Args:
+        scope: `month` | `year` | `all`.
+        period: e.g. '2026-10' for month, '2026' for year.
+        ledger_id: Optional.
+    """
+    kw: _SpendingPatternKw = {
+        "scope": scope, "period": period, "ledger_id": ledger_id,
+    }
+    return await _logged_call(
+        ctx, name="get_spending_pattern", scope=SCOPE_MCP_READ, kwargs=dict(kw),
+        body=lambda user: asyncio.to_thread(analytics_tools.get_spending_pattern, user, **kw),
+    )
+
+
+@mcp.tool()
+async def delete_transactions_batch(
+    ctx: Context,
+    tx_ids: list[str],
+    confirm: bool = False,
+    ledger_id: str | None = None,
+) -> dict[str, Any]:
+    """Delete many transactions at once. **Destructive — two-step confirmation
+    required**, same as delete_transaction.
+
+    For real workloads: after importing a statement you discover duplicates and
+    need to clear them in one go — delete_transaction only handles one id at a
+    time. Server cap is 200 ids per call.
+
+    NOT atomic: ids that could not be deleted come back under `failed` with a
+    reason (not_found / permission_denied / conflict). Report those.
+
+    Args:
+        tx_ids: Transaction sync_ids to delete, 1-200 of them.
+        confirm: Must be true for the delete to actually happen.
+        ledger_id: Optional.
+    """
+    kw: _BatchDeleteKw = {
+        "tx_ids": tx_ids, "confirm": confirm, "ledger_id": ledger_id,
+    }
+    return await _logged_call(
+        ctx, name="delete_transactions_batch", scope=SCOPE_MCP_WRITE,
+        kwargs=dict(kw),
+        body=lambda user: bulk_tools.delete_transactions_batch(user, **kw),
+    )
+
+
+@mcp.tool()
+async def export_transactions_csv(
+    ctx: Context,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    tx_type: str | None = None,
+    category: str | None = None,
+    account: str | None = None,
+    q: str | None = None,
+    min_amount: float | None = None,
+    max_amount: float | None = None,
+    lang: str = "en",
+    ledger_id: str | None = None,
+) -> dict[str, Any]:
+    """Export transactions as CSV text (nothing is written to disk).
+
+    For opening in Excel / Numbers, or piping into other tooling.
+
+    The export includes a `Tax` column (consumption tax) and the importer
+    understands it again — so "export → edit in a spreadsheet → re-import"
+    round-trips without losing tax amounts.
+
+    Args:
+        date_from / date_to: ISO date bounds, inclusive.
+        tx_type: expense / income / transfer.
+        category / account: Filter by name.
+        q: Keyword match against note / category / account.
+        min_amount / max_amount: Amount range.
+        lang: Header language: `en` / `zh-CN` / `zh-TW`.
+        ledger_id: Optional.
+    """
+    kw: _ExportCsvKw = {
+        "date_from": date_from, "date_to": date_to, "tx_type": tx_type,
+        "category": category, "account": account, "q": q,
+        "min_amount": min_amount, "max_amount": max_amount,
+        "lang": lang, "ledger_id": ledger_id,
+    }
+    return await _logged_call(
+        ctx, name="export_transactions_csv", scope=SCOPE_MCP_READ, kwargs=dict(kw),
+        body=lambda user: bulk_tools.export_transactions_csv(user, **kw),
     )
