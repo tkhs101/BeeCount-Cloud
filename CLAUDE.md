@@ -204,3 +204,44 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 - 播撒规则:**每个用户只播撒一次**(他一个分类都没有时)。按名字判幂等做不到
   尊重用户改名。
 - 开关:`SEED_DEFAULT_CATEGORIES=false`。
+
+## 新增:组合支付(alembic `0021`,`read_tx_split_projection`)
+
+一笔订单多个支付方式:5000 円 = 招行卡 3000 + 现金 2000。**父交易仍是一条**,
+`amount` 仍是 5000(实付总额),`account_*` 被强制清空;拆分金额落子表。
+
+| 要改的地方 | 文件 |
+|---|---|
+| 校验 + 写入 | `src/snapshot_mutator.py` `_normalize_splits` / `create_transaction` / `update_transaction` |
+| 落库 | `src/projection.py` `replace_tx_splits`(delete-all + bulk insert) |
+| **反向桥(最易漏)** | `src/routers/write/_shared.py` `_projection_row_to_tx_dict` + `_tx_splits_for` |
+| 同步 merge | `src/sync_applier.py` `_merge_tx_splits_after_merge`(**不能**进 `_MERGE_SPECS`) |
+| 余额聚合 | `src/routers/read/_shared.py` `_split_legs`(SQL) |
+| 余额逐笔 | `src/routers/read/_shared.py` `account_balance_delta(splits=…)` |
+| 读端返回 | `read/ledgers.py` / `read/workspace.py` / MCP `_serialize_tx` |
+| CSV | 导出 `_splits_cell`;导入 `_parse_splits`(对称) |
+| 前端 | `lib/txSplits.ts` + `TransactionsPanel.tsx` 拆分编辑器 |
+
+### 四个必守的不变式(有护栏)
+
+1. `sum(legs) == 父.amount`,容差 1e-6,**不等就 400**(不自动补差)
+2. 有腿时父 `account_sync_id`/`account_name` **必须为空**(否则余额双倍扣)
+3. 只支持 `tx_type == 'expense'`(收入拆分本质是转账)
+4. 至少 **2** 条腿(1 条等于没拆,走普通单账户路径)
+
+### 五个静默丢失的坑(都踩过,都有测试)
+
+| 坑 | 后果 |
+|---|---|
+| `upsert_tx` 无条件 `replace_tx_splits(None)` | `/sync/push` 部分更新把腿全删 → 改成 `if "splits" in payload` |
+| mutator 用 `pop("splits")` 表示清除 | 键消失 = projection 的「不动」→ `splits: []` **清不掉**。改写空 list 当信号 |
+| `delete_account` 守卫只数父交易三列 | 有腿时那三列是空的 → 守卫失效 → 账户可删 → 子表悬空 → 余额永久漂移 |
+| `_truncate_ledger` 漏子表 | rebuild / 还原后父交易没腿、旧腿还在 → 余额「凭空多出来」 |
+| CSV 不导出 Splits 列 | 导出→导入后组合支付变「无账户的支出」,账户余额全错 |
+
+护栏:`tests/test_tx_split_invariants.py`(20 条)、
+`tests/test_account_balance_paths.py`(两条余额路径必须一致)、
+`frontend/apps/web/src/txSplitsParity.test.ts`(两条提交路径不许只改一处)。
+
+**腿没有 currency 字段** —— 与父交易同币种是**结构保证**,不是运行时校验。
+别加「跨币种拆分」检查:那无法表达,只会给出虚假的安全感。
