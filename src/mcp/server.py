@@ -36,7 +36,7 @@ from .auth import (
     get_mcp_user_from_context,
     require_mcp_scope,
 )
-from .tools import read_tools, write_tools
+from .tools import entity_tools, read_tools, write_tools
 from .tools.write_tools import BatchTxItem
 
 logger = logging.getLogger(__name__)
@@ -246,6 +246,91 @@ class _CreateTxsKw(TypedDict):
 
     transactions: list[BatchTxItem]
     ledger_id: str | None
+
+class _CreateAccountKw(TypedDict):
+    """`create_account` 的 kwargs。TypedDict 而非 dict(...) —— 否则 mypy 只会看到
+    `dict[str, object]`,`**kw` 展开的每一行都报 arg-type。"""
+
+    name: str
+    account_type: str
+    currency: str | None
+    initial_balance: float | None
+    note: str | None
+    credit_limit: float | None
+    billing_day: int | None
+    payment_due_day: int | None
+    bank_name: str | None
+    card_last_four: str | None
+    ledger_id: str | None
+
+
+class _UpdateAccountKw(TypedDict):
+    account_id: str | None
+    account: str | None
+    name: str | None
+    currency: str | None
+    initial_balance: float | None
+    note: str | None
+    credit_limit: float | None
+    ledger_id: str | None
+
+
+class _DeleteAccountKw(TypedDict):
+    account_id: str | None
+    account: str | None
+    confirm: bool
+    ledger_id: str | None
+
+
+class _GetBalanceKw(TypedDict):
+    account_id: str | None
+    account: str | None
+    ledger_id: str | None
+
+
+class _CreateTagKw(TypedDict):
+    name: str
+    color: str | None
+    ledger_id: str | None
+
+
+class _UpdateTagKw(TypedDict):
+    tag_id: str | None
+    tag: str | None
+    name: str | None
+    color: str | None
+    ledger_id: str | None
+
+
+class _DeleteTagKw(TypedDict):
+    tag_id: str | None
+    tag: str | None
+    confirm: bool
+    ledger_id: str | None
+
+
+class _UpdateCategoryKw(TypedDict):
+    category_id: str | None
+    category: str | None
+    name: str | None
+    kind: str | None
+    icon: str | None
+    parent_name: str | None
+    ledger_id: str | None
+
+
+class _DeleteCategoryKw(TypedDict):
+    category_id: str | None
+    category: str | None
+    confirm: bool
+    ledger_id: str | None
+
+
+class _DeleteBudgetKw(TypedDict):
+    budget_id: str
+    confirm: bool
+    ledger_id: str | None
+
 
 @mcp.tool()
 async def list_ledgers(ctx: Context) -> list[dict[str, Any]]:
@@ -734,3 +819,306 @@ def _build_app():
 # 模块级 ASGI app:`src.main` 直接 `app.mount(prefix, mcp_server.app)`。
 app = _build_app()
 # reload trigger
+# --------------------------------------------------------------------------- #
+# 实体管理:账户 / 标签 / 分类 / 预算                                            #
+# --------------------------------------------------------------------------- #
+# 官方 18 个 tool 里账户和标签只有读、没有写 —— 转账必须选账户,打标签是分析
+# 的常规操作,缺了这两个用户只能先去 Web 手建。服务端的写端点本来就齐,这里只
+# 补 MCP 接线。实现见 tools/entity_tools.py。
+
+
+@mcp.tool()
+async def create_account(
+    ctx: Context,
+    name: str,
+    account_type: str = "cash",
+    currency: str | None = None,
+    initial_balance: float | None = None,
+    note: str | None = None,
+    credit_limit: float | None = None,
+    billing_day: int | None = None,
+    payment_due_day: int | None = None,
+    bank_name: str | None = None,
+    card_last_four: str | None = None,
+    ledger_id: str | None = None,
+) -> dict[str, Any]:
+    """Create a bank/cash/credit-card account.
+
+    Transfers need an account, so without this the user has to leave the chat
+    and create one in the web UI first.
+
+    Args:
+        name: Account name, unique within the ledger.
+        account_type: cash / bank_card / credit_card / alipay / wechat /
+            loan / investment / insurance / social_fund / vehicle /
+            real_estate / other_account.
+        currency: ISO code. **Set it explicitly for foreign-currency
+            accounts** (e.g. a CNY salary card in a JPY ledger) — otherwise
+            amounts get booked in the ledger's base currency.
+        initial_balance: One-off opening balance, booked as a transaction.
+        note: Free-form memo.
+        credit_limit: Credit limit, for credit cards.
+        billing_day / payment_due_day: Statement / payment day, 1-31.
+        bank_name / card_last_four: Issuer name / last four digits.
+        ledger_id: Optional; omitted when you have several ledgers returns a
+            clarification request instead of guessing.
+    """
+    kw: _CreateAccountKw = {
+        "name": name, "account_type": account_type, "currency": currency,
+        "initial_balance": initial_balance, "note": note,
+        "credit_limit": credit_limit, "billing_day": billing_day,
+        "payment_due_day": payment_due_day, "bank_name": bank_name,
+        "card_last_four": card_last_four, "ledger_id": ledger_id,
+    }
+    return await _logged_call(
+        ctx, name="create_account", scope=SCOPE_MCP_WRITE, kwargs=dict(kw),
+        body=lambda user: entity_tools.create_account(user, **kw),
+    )
+
+
+@mcp.tool()
+async def update_account(
+    ctx: Context,
+    account_id: str | None = None,
+    account: str | None = None,
+    name: str | None = None,
+    currency: str | None = None,
+    initial_balance: float | None = None,
+    note: str | None = None,
+    credit_limit: float | None = None,
+    ledger_id: str | None = None,
+) -> dict[str, Any]:
+    """Update an account. Only the fields you pass are changed.
+
+    Args:
+        account_id: Account sync_id; omit and use `account` instead.
+        account: Account **name** — usually all you have from the user.
+        name / currency / initial_balance / note / credit_limit: Fields to
+            change; pass at least one.
+        ledger_id: Optional.
+    """
+    kw: _UpdateAccountKw = {
+        "account_id": account_id, "account": account, "name": name,
+        "currency": currency, "initial_balance": initial_balance,
+        "note": note, "credit_limit": credit_limit, "ledger_id": ledger_id,
+    }
+    return await _logged_call(
+        ctx, name="update_account", scope=SCOPE_MCP_WRITE, kwargs=dict(kw),
+        body=lambda user: entity_tools.update_account(user, **kw),
+    )
+
+
+@mcp.tool()
+async def delete_account(
+    ctx: Context,
+    account_id: str | None = None,
+    account: str | None = None,
+    confirm: bool = False,
+    ledger_id: str | None = None,
+) -> dict[str, Any]:
+    """Delete an account. **Destructive — two-step confirmation required.**
+
+    Calling with confirm=false returns a `confirmation_required` placeholder;
+    you must then confirm with the user and call again with confirm=true.
+    The server refuses while transactions still reference the account.
+
+    Args:
+        account_id: Account sync_id; omit and use `account` instead.
+        account: Account **name**.
+        confirm: Must be true for the delete to actually happen.
+        ledger_id: Optional.
+    """
+    kw: _DeleteAccountKw = {
+        "account_id": account_id, "account": account,
+        "confirm": confirm, "ledger_id": ledger_id,
+    }
+    return await _logged_call(
+        ctx, name="delete_account", scope=SCOPE_MCP_WRITE, kwargs=dict(kw),
+        body=lambda user: entity_tools.delete_account(user, **kw),
+    )
+
+
+@mcp.tool()
+async def get_account_balance(
+    ctx: Context,
+    account_id: str | None = None,
+    account: str | None = None,
+    ledger_id: str | None = None,
+) -> dict[str, Any]:
+    """Account balances, plus the total across all accounts.
+
+    The only way to answer "how much do I have left" or "how much do I owe
+    on this card" — `list_accounts` carries metadata but no balances.
+
+    Computed as: opening balance + income − expense − transfers out +
+    transfers in. Credit cards go negative when you owe money.
+
+    Args:
+        account_id / account: Narrow to one account; omit both for all.
+        ledger_id: Optional.
+    """
+    kw: _GetBalanceKw = {
+        "account_id": account_id, "account": account, "ledger_id": ledger_id,
+    }
+    return await _logged_call(
+        ctx, name="get_account_balance", scope=SCOPE_MCP_READ, kwargs=dict(kw),
+        body=lambda user: entity_tools.get_account_balance(user, **kw),
+    )
+
+
+@mcp.tool()
+async def create_tag(
+    ctx: Context, name: str, color: str | None = None, ledger_id: str | None = None
+) -> dict[str, Any]:
+    """Create a tag (#coffee, #travel …). Tags are user-level, shared across ledgers.
+
+    Args:
+        name: Tag name.
+        color: Hex colour such as '#3B82F6'; a default is used when omitted.
+        ledger_id: Optional.
+    """
+    kw: _CreateTagKw = {"name": name, "color": color, "ledger_id": ledger_id}
+    return await _logged_call(
+        ctx, name="create_tag", scope=SCOPE_MCP_WRITE, kwargs=dict(kw),
+        body=lambda user: entity_tools.create_tag(user, **kw),
+    )
+
+
+@mcp.tool()
+async def update_tag(
+    ctx: Context,
+    tag_id: str | None = None,
+    tag: str | None = None,
+    name: str | None = None,
+    color: str | None = None,
+    ledger_id: str | None = None,
+) -> dict[str, Any]:
+    """Rename a tag or change its colour. Only the fields you pass are changed.
+
+    Args:
+        tag_id: Tag sync_id; omit and use `tag` instead.
+        tag: Tag **name** — usually all you have from the user.
+        name / color: What to change; pass at least one.
+        ledger_id: Optional.
+    """
+    kw: _UpdateTagKw = {
+        "tag_id": tag_id, "tag": tag, "name": name, "color": color,
+        "ledger_id": ledger_id,
+    }
+    return await _logged_call(
+        ctx, name="update_tag", scope=SCOPE_MCP_WRITE, kwargs=dict(kw),
+        body=lambda user: entity_tools.update_tag(user, **kw),
+    )
+
+
+@mcp.tool()
+async def delete_tag(
+    ctx: Context,
+    tag_id: str | None = None,
+    tag: str | None = None,
+    confirm: bool = False,
+    ledger_id: str | None = None,
+) -> dict[str, Any]:
+    """Delete a tag. **Destructive — two-step confirmation required**, same as
+    delete_transaction.
+
+    Args:
+        tag_id: Tag sync_id; omit and use `tag` instead.
+        tag: Tag **name**.
+        confirm: Must be true for the delete to actually happen.
+        ledger_id: Optional.
+    """
+    kw: _DeleteTagKw = {
+        "tag_id": tag_id, "tag": tag, "confirm": confirm, "ledger_id": ledger_id,
+    }
+    return await _logged_call(
+        ctx, name="delete_tag", scope=SCOPE_MCP_WRITE, kwargs=dict(kw),
+        body=lambda user: entity_tools.delete_tag(user, **kw),
+    )
+
+
+@mcp.tool()
+async def update_category(
+    ctx: Context,
+    category_id: str | None = None,
+    category: str | None = None,
+    name: str | None = None,
+    kind: str | None = None,
+    icon: str | None = None,
+    parent_name: str | None = None,
+    ledger_id: str | None = None,
+) -> dict[str, Any]:
+    """Rename a category, change its type or icon, or move it under a parent.
+
+    Renaming cascades to the category's existing transactions server-side.
+
+    Args:
+        category_id: Category sync_id; omit and use `category` instead.
+        category: Category **name** — usually all you have from the user.
+        name: New name.
+        kind: expense / income / transfer.
+        icon: Material icon name, e.g. 'restaurant'.
+        parent_name: Move under this parent; pass an empty string to promote
+            back to top level.
+        ledger_id: Optional.
+    """
+    kw: _UpdateCategoryKw = {
+        "category_id": category_id, "category": category, "name": name,
+        "kind": kind, "icon": icon, "parent_name": parent_name,
+        "ledger_id": ledger_id,
+    }
+    return await _logged_call(
+        ctx, name="update_category", scope=SCOPE_MCP_WRITE, kwargs=dict(kw),
+        body=lambda user: entity_tools.update_category(user, **kw),
+    )
+
+
+@mcp.tool()
+async def delete_category(
+    ctx: Context,
+    category_id: str | None = None,
+    category: str | None = None,
+    confirm: bool = False,
+    ledger_id: str | None = None,
+) -> dict[str, Any]:
+    """Delete a category. **Destructive — two-step confirmation required.**
+
+    The server refuses while transactions or child categories still reference
+    it; the error is passed back verbatim.
+
+    Args:
+        category_id: Category sync_id; omit and use `category` instead.
+        category: Category **name**.
+        confirm: Must be true for the delete to actually happen.
+        ledger_id: Optional.
+    """
+    kw: _DeleteCategoryKw = {
+        "category_id": category_id, "category": category,
+        "confirm": confirm, "ledger_id": ledger_id,
+    }
+    return await _logged_call(
+        ctx, name="delete_category", scope=SCOPE_MCP_WRITE, kwargs=dict(kw),
+        body=lambda user: entity_tools.delete_category(user, **kw),
+    )
+
+
+@mcp.tool()
+async def delete_budget(
+    ctx: Context,
+    budget_id: str,
+    confirm: bool = False,
+    ledger_id: str | None = None,
+) -> dict[str, Any]:
+    """Delete a budget. **Destructive — two-step confirmation required.**
+
+    Args:
+        budget_id: Budget sync_id — use list_budgets to look it up.
+        confirm: Must be true for the delete to actually happen.
+        ledger_id: Optional.
+    """
+    kw: _DeleteBudgetKw = {"budget_id": budget_id, "confirm": confirm,
+                          "ledger_id": ledger_id}
+    return await _logged_call(
+        ctx, name="delete_budget", scope=SCOPE_MCP_WRITE, kwargs=dict(kw),
+        body=lambda user: entity_tools.delete_budget(user, **kw),
+    )

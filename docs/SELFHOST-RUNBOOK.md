@@ -136,6 +136,9 @@ claude mcp add --transport http beecount https://your-domain.com/api/v1/mcp \
 Token 在 Web 控制台 → 设置 → 开发者 → 新建，勾 `mcp:read` + `mcp:write`，
 有效期选「永不」。**明文只显示一次。**
 
+本 fork 的 MCP 有 **31 个 tool**（官方 18 个）：在官方基础上补了消费税税额字段、
+MCP 附件、预算增删、**账户 / 标签的完整增删改**、账户余额查询。
+
 ## 6. 记一笔含税的，验收
 
 ```
