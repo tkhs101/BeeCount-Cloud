@@ -1267,3 +1267,80 @@ def test_batch_transaction_item_keeps_tax_field() -> None:
     assert BatchTransactionItem(
         tx_type="expense", amount=1.0, happened_at=_iso()
     ).model_dump(mode="json")["tax_amount"] is None
+
+
+def test_mcp_create_tax_category_hierarchy(monkeypatch) -> None:
+    """**T3 的前置验证** —— 用户部署后要手动用 MCP 建「税与保险」两级结构。
+
+    这条链路从没被端到端跑过:`create_category` 的 `parent_name` 解析、
+    父子 sync_id 的建立、以及**二级分类能不能被 `category_id` 引用**(预算是
+    按 sync_id 匹配的)—— 任一环断了,用户照着计划走就会卡住。
+
+    跑通后可以确认:建一级 → 建三个二级 → 用二级建预算 → 预算按该分类统计。
+    """
+    from datetime import timedelta
+
+    from src.mcp.tools import write_tools
+    from src.security import SCOPE_APP_WRITE, SCOPE_WEB_WRITE, _create_token
+
+    client, TS = _make_client()
+    monkeypatch.setattr(write_tools, "SessionLocal", TS)
+    monkeypatch.setattr(
+        write_tools, "_internal_token",
+        lambda u: _create_token(
+            sub=u.id, token_type="access", expires_delta=timedelta(seconds=60),
+            scopes=[SCOPE_APP_WRITE, SCOPE_WEB_WRITE], client_type="app",
+        ),
+    )
+    try:
+        token = _register_and_token(client, "tax-hier@t.com", device_id="d-web",
+                                    client_type="web")
+        hdr = {"Authorization": f"Bearer {token}", "X-Device-ID": "web"}
+        J = {**hdr, "Content-Type": "application/json"}
+        _web_ledger(client, hdr)
+        user = _fetch_user(TS, "tax-hier@t.com")
+
+        import asyncio
+
+        # 1) 一级
+        parent = asyncio.run(write_tools.create_category(user, name=TAX_BUCKET))
+        assert parent.get("sync_id"), parent
+        parent_id = parent["sync_id"]
+
+        # 2) 三个二级,靠 **名字** 挂到父级下
+        child_ids = {}
+        for name in ("消费税", "所得税", "社会保险"):
+            out = asyncio.run(write_tools.create_category(
+                user, name=name, parent_name=TAX_BUCKET))
+            assert out.get("sync_id"), out
+            child_ids[name] = out["sync_id"]
+
+        # 3) 父子关系真的建立了(不能只是两个平级分类)
+        cats = client.get("/api/v1/read/workspace/categories", headers=hdr).json()
+        by_name = {c["name"]: c for c in cats}
+        assert TAX_BUCKET in by_name
+        for name in ("消费税", "所得税", "社会保险"):
+            assert name in by_name, sorted(by_name)
+        # 子分类的 parent 指向一级(读端点用 parent_name 暴露)
+        assert by_name["消费税"].get("parent_name") == TAX_BUCKET, by_name["消费税"]
+
+        # 4) 记一笔挂到「消费税」下 —— 一级分类不该被选中记账
+        base = 0
+        r = client.post("/api/v1/write/ledgers/lg1/transactions", headers=J, json={
+            "base_change_id": base, "tx_type": "expense", "amount": 1000.0,
+            "happened_at": _iso(), "category_id": child_ids["消费税"],
+            "category_name": "消费税", "category_kind": "expense",
+            "note": "住民税"})
+        assert r.status_code == 200, r.text[:200]
+
+        # 5) 给二级建预算 —— 验证 sync_id 可被预算引用
+        r = asyncio.run(write_tools.create_budget(
+            user, amount=50000.0, budget_type="category",
+            category="消费税", period="monthly"))
+        assert r.get("sync_id"), r
+
+        usage = client.get("/api/v1/read/ledgers/lg1/budgets/usage", headers=hdr).json()
+        used = {x["budget_id"]: x["used"] for x in usage["items"]}
+        assert list(used.values()) == [1000.0], used
+    finally:
+        app.dependency_overrides.clear()
