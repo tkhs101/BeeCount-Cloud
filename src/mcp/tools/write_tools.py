@@ -280,6 +280,7 @@ async def create_transaction(
     ledger_id: str | None = None,
     currency: str | None = None,
     tax_amount: float | None = None,
+    splits: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """新建一笔交易。category / account 用名字。happened_at 不传 = 当前时间。
 
@@ -291,7 +292,8 @@ async def create_transaction(
     1648.15,收银机显示的是 1649,差 1 円)。不传 = 无税。仅 expense 有效。
     amount 仍是**实付总额**,税额只是叠加维度:统计时从分类里剥出归入
     「税与保险」,两块相加仍等于实付。
-    例:合計 3280 / 消費税 298 → amount=3280, tax_amount=298。"""
+    例:合計 3280 / 消費税 298 → amount=3280, tax_amount=298。
+    """
     if tx_type not in {"expense", "income", "transfer"}:
         raise ValueError(f"Invalid tx_type: {tx_type}")
     if amount <= 0:
@@ -349,6 +351,38 @@ async def create_transaction(
         if tx_type != "expense":
             raise ValueError("tax_amount is only allowed on expense transactions")
         body["tax_amount"] = float(tax_amount)
+    # 组合支付(0021):≥2 条腿。求和校验在 server(snapshot_mutator),这里只挡
+    # 「一条腿」这种必错的情况,好让 LLM 拿到可读报错而不是 400。
+    if splits:
+        if len(splits) < 2:
+            raise ValueError(
+                "splits needs at least 2 legs; a single leg is a normal "
+                "transaction - just use `account` instead"
+            )
+        if tx_type != "expense":
+            raise ValueError("splits is only allowed on expense transactions")
+        legs = []
+        for i, leg in enumerate(splits):
+            if not isinstance(leg, dict):
+                raise ValueError(f"splits[{i}] must be an object")
+            raw_leg_amount = leg.get("amount")
+            if raw_leg_amount is None:
+                raise ValueError(f"splits[{i}] is missing `amount`")
+            try:
+                leg_amount = float(raw_leg_amount)
+            except (TypeError, ValueError):
+                raise ValueError(f"splits[{i}] amount must be a number") from None
+            if leg_amount <= 0:
+                raise ValueError(f"splits[{i}] amount must be positive")
+            leg_account = leg.get("account") or leg.get("account_id")
+            if not leg_account:
+                raise ValueError(f"splits[{i}] is missing `account`")
+            entry: dict[str, Any] = {"account_id": str(leg_account),
+                                     "amount": leg_amount}
+            if leg.get("account_name"):
+                entry["account_name"] = str(leg["account_name"])
+            legs.append(entry)
+        body["splits"] = legs
     # 始终注入 MCP 默认标签;跟 LLM 传的 tags 并集去重,顺序保持 LLM 给的在前
     final_tags = _merge_default_tag(tags)
     body["tags"] = final_tags

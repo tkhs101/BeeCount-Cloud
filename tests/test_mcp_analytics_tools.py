@@ -340,9 +340,14 @@ def test_export_csv_includes_tax_column(monkeypatch) -> None:
         out = asyncio.run(bulk_tools.export_transactions_csv(
             user, date_from="2026-10-01", date_to="2026-10-31", lang="en"))
         assert out["row_count"] == 1, out
-        assert out["columns"][-1] == "Tax", out["columns"]
+        # 0021 在 Tax 之后追加了 Splits(拆分)列
+        assert out["columns"][-2] == "Tax", out["columns"]
+        assert out["columns"][-1] == "Splits", out["columns"]
         line = out["csv"].splitlines()[1]
-        assert line.endswith(",298.00"), line
+        # 税额列后面还有一列 Splits(0021 追加),所以不是最后一个字段
+        assert ",298.00," in line, line
+        # 无腿时 Splits 单元格为空
+        assert line.endswith(","), line
     finally:
         app.dependency_overrides.clear()
 

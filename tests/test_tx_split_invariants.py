@@ -350,3 +350,75 @@ def test_patch_amount_invalidates_splits() -> None:
         assert abs(a["summary"]["expense_total"] - 6000.0) < 1e-6, a["summary"]
     finally:
         app.dependency_overrides.clear()
+
+
+# --------------------------------------------------------------------------- #
+# CSV 往返                                                                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_csv_split_cell_format():
+    """导出格式 `招行卡:3000.00|现金:2000.00` —— 导入侧是对称解析。"""
+    from src.routers.read.workspace import _splits_cell
+
+    cell = _splits_cell(
+        [{"account_id": "a1", "amount": 3000.0}, {"account_id": "b2", "amount": 2000.0}],
+        {"a1": "招行卡", "b2": "现金"},
+    )
+    assert cell == "招行卡:3000.00|现金:2000.00", cell
+    # 找不到账户名时原样用 sync_id(不截断 —— 截断会让导入侧对不上号)
+    assert _splits_cell([{"account_id": "zzz", "amount": 1.0}], {}) == "zzz:1.00"
+    assert _splits_cell([], {}) == ""
+
+
+def test_csv_splits_parse_is_symmetric():
+    """导出格式必须能被导入解析器读回去 —— 否则往返即丢数据。"""
+    from src.routers.read.workspace import _splits_cell
+    from src.services.import_data.transformer import _parse_splits
+
+    cell = _splits_cell(
+        [{"account_id": "a", "amount": 3000.0}, {"account_id": "b", "amount": 2000.0}],
+        {"a": "招行卡", "b": "现金"},
+    )
+    assert _parse_splits(cell) == [("招行卡", 3000.0), ("现金", 2000.0)]
+
+
+def test_csv_splits_parse_is_lenient():
+    """宽容优先:一行脏数据不该让整份 CSV 失败。"""
+    from src.services.import_data.transformer import _parse_splits
+
+    # 单条腿 → 不是组合支付
+    assert _parse_splits("招行卡:3000.00") is None
+    assert _parse_splits("") is None
+    assert _parse_splits(None) is None
+    # 垃圾段被丢掉,剩下不足 2 条 → None
+    assert _parse_splits("垃圾|也是垃圾") is None
+    assert _parse_splits("招行卡:abc|现金:100") is None
+    assert _parse_splits(":100|现金:100") is None
+    assert _parse_splits("招行卡:0|现金:100") is None
+    # 一条坏 + 两条好 → 保留好的
+    assert _parse_splits("垃圾|招行卡:3000|现金:2000") == [
+        ("招行卡", 3000.0), ("现金", 2000.0)]
+
+
+def test_csv_header_has_splits_column():
+    """三语表头都要有拆分列,且排在税额之后(不打乱前 12 列)。"""
+    from src.routers.read.workspace import _CSV_HEADERS_BY_LANG
+
+    for lang, tax, splits in (("zh-CN", "税额", "拆分"),
+                              ("zh-TW", "稅額", "拆分"),
+                              ("en", "Tax", "Splits")):
+        headers = _CSV_HEADERS_BY_LANG[lang]
+        assert len(headers) == 14, (lang, headers)
+        assert headers[12] == tax, (lang, headers[12:])
+        assert headers[13] == splits, (lang, headers[13:])
+        # 前 12 列位置不动(mobile 导出对齐)
+        assert headers[3] in {"金额", "金額", "Amount"}, (lang, headers[3])
+
+
+def test_csv_import_alias_registered():
+    """导入侧表头别名要认「拆分」,否则整列被当未知列丢掉。"""
+    from src.services.import_data.parsers.beecount import _HEADER_ALIASES
+
+    assert "splits" in _HEADER_ALIASES
+    assert "拆分" in _HEADER_ALIASES["splits"]

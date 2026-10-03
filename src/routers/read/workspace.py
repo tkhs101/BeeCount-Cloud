@@ -289,12 +289,12 @@ _CSV_HEADERS_BY_LANG: dict[str, list[str]] = {
     # Type, Category, SubCategory, Amount, Currency, Account, FromAccount,
     # ToAccount, Note, Time, Tags, Attachments
     "zh-CN": ["类型", "分类", "二级分类", "金额", "币种", "账户", "转出账户",
-              "转入账户", "备注", "时间", "标签", "附件", "税额"],
+              "转入账户", "备注", "时间", "标签", "附件", "税额", "拆分"],
     "zh-TW": ["類型", "分類", "二級分類", "金額", "幣種", "帳戶", "轉出帳戶",
-              "轉入帳戶", "備註", "時間", "標籤", "附件", "稅額"],
+              "轉入帳戶", "備註", "時間", "標籤", "附件", "稅額", "拆分"],
     "en":    ["Type", "Category", "Subcategory", "Amount", "Currency",
               "Account", "From Account", "To Account", "Note", "Time",
-              "Tags", "Attachments", "Tax"],
+              "Tags", "Attachments", "Tax", "Splits"],
 }
 
 _TX_TYPE_LABELS_BY_LANG: dict[str, dict[str, str]] = {
@@ -302,6 +302,22 @@ _TX_TYPE_LABELS_BY_LANG: dict[str, dict[str, str]] = {
     "zh-TW": {"income": "收入", "expense": "支出", "transfer": "轉帳"},
     "en":    {"income": "Income", "expense": "Expense", "transfer": "Transfer"},
 }
+
+
+
+def _splits_cell(legs: list[dict[str, Any]], name_by_id: dict[str, str]) -> str:
+    """组合支付导出成一个单元格:`招行卡:3000.00|现金:2000.00`。
+
+    分隔符选 `|` 和 `:` 因为账户名里出现它们的概率极低,且 `_csv_field` 会把
+    整个单元格加引号,逗号/换行都能安全转义。导入侧 `beecount._parse_splits`
+    是对称的解析。
+    """
+    parts = []
+    for leg in legs or []:
+        sid = str(leg.get("account_id") or "")
+        amt = float(leg.get("amount") or 0.0)
+        parts.append(f"{name_by_id.get(sid, sid)}:{amt:.2f}")
+    return "|".join(parts)
 
 
 def _normalize_lang(lang: str | None) -> str:
@@ -384,6 +400,34 @@ def export_workspace_transactions_csv(
         primary_name = "ledger"
     # v30 多币种:currency_code NULL 的历史行按其账本本位币兜底(导出自包含)
     ledger_currency_by_id = {l.id: (l.currency or "CNY") for l in ledgers}
+
+    # 组合支付(0021):CSV 也要带腿,否则导出→导入会把组合支付变成
+    # 「无账户的支出」(父交易的 Account 列在有腿时按契约是空的)。
+    splits_by_tx: dict[str, list[dict[str, Any]]] = {}
+    acc_name_by_id = {
+        a.sync_id: (a.name or "")
+        for a in db.scalars(
+            select(UserAccountProjection).where(
+                UserAccountProjection.user_id == current_user.id)
+        ).all()
+    }
+    for srow in db.execute(
+        select(
+            ReadTxSplitProjection.ledger_id,
+            ReadTxSplitProjection.tx_sync_id,
+            ReadTxSplitProjection.account_sync_id,
+            ReadTxSplitProjection.amount,
+        )
+        .where(ReadTxSplitProjection.ledger_id.in_(
+            [l.id for l in ledgers] if ledgers else []
+        )).order_by(
+            ReadTxSplitProjection.tx_sync_id.asc(),
+            ReadTxSplitProjection.seq.asc(),
+        )
+    ).all() if ledgers else []:
+        splits_by_tx.setdefault(f"{srow[0]}::{srow[1]}", []).append(
+            {"account_id": srow[2], "amount": float(srow[3])}
+        )
 
     # LEFT JOIN UserCategoryProjection 拿 level + parent_name,做 parent/sub 列拆分。
     # category 是 user-global,按 user_id 而非 ledger_id JOIN。
@@ -524,6 +568,11 @@ def export_workspace_transactions_csv(
                 _csv_field(",".join(attachment_names)),
                 # 税额(0020):原币绝对值,无税则空。amount 列仍是实付总额。
                 f"{tx.tax_amount:.2f}" if tx.tax_amount is not None else "",
+                # 组合支付(0021):`招行卡:3000.00|现金:2000.00`。
+                # 不写这一列的话,导出→导入会把组合支付变成「无账户的支出」。
+                _csv_field(_splits_cell(
+                    splits_by_tx.get(f"{tx.ledger_id}::{tx.sync_id}", []),
+                    acc_name_by_id)),
             ]) + "\n"
 
     if date_from is None and date_to is None:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -74,7 +75,37 @@ def _resolve_ledger(
     return live[0] if live else None
 
 
-def _serialize_tx(row: ReadTxProjection, category_name: str | None) -> dict[str, Any]:
+
+def _splits_for(db, user_id: str, txs: Sequence[ReadTxProjection]) -> dict[str, list[dict[str, Any]]]:
+    """批量读一批交易的拆分腿(0021)→ `{tx_sync_id: 腿列表}`。一次查询,不 N+1。"""
+    if not txs:
+        return {}
+    from ...models import ReadTxSplitProjection
+
+    ids = [r.sync_id for r in txs]
+    out: dict[str, list[dict[str, Any]]] = {}
+    for row in db.execute(
+        select(
+            ReadTxSplitProjection.tx_sync_id,
+            ReadTxSplitProjection.account_sync_id,
+            ReadTxSplitProjection.amount,
+        )
+        .where(ReadTxSplitProjection.tx_sync_id.in_(ids))
+        .order_by(
+            ReadTxSplitProjection.tx_sync_id.asc(),
+            ReadTxSplitProjection.seq.asc(),
+        )
+    ).all():
+        out.setdefault(row[0], []).append(
+            {"account_id": row[1], "amount": float(row[2])})
+    return out
+
+
+def _serialize_tx(
+    row: ReadTxProjection,
+    category_name: str | None,
+    splits: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     return {
         "sync_id": row.sync_id,
         "tx_type": row.tx_type,
@@ -83,6 +114,9 @@ def _serialize_tx(row: ReadTxProjection, category_name: str | None) -> dict[str,
         # 消费税(0020):None = 无税。绝不折成 0,否则「免税商品」和「没记税」
         # 分不清,统计口径也会跟着错。
         "tax_amount": (float(row.tax_amount) if row.tax_amount is not None else None),
+        # 组合支付(0021):≥2 条腿时,account_name/account_id 为空,金额按腿分摊。
+        # 读侧必须能看到腿,否则 LLM 看到一笔「无账户的 5000 支出」会答错。
+        "splits": splits or [],
         "happened_at": row.happened_at.isoformat() if row.happened_at else None,
         "note": row.note,
         "category_name": category_name or row.category_name,
@@ -199,10 +233,12 @@ def list_transactions(
             query.order_by(ReadTxProjection.happened_at.desc()).limit(max(1, min(limit, 200)))
         ).all()
 
+        sp = _splits_for(db, user.id, list(rows))
         return {
             "ledger": led.name,
             "total": total,
-            "items": [_serialize_tx(r, r.category_name) for r in rows],
+            "items": [_serialize_tx(r, r.category_name, sp.get(r.sync_id))
+                       for r in rows],
         }
 
 
@@ -218,7 +254,8 @@ def get_transaction(user: User, sync_id: str) -> dict[str, Any] | None:
         if row is None:
             return None
         led = db.scalar(select(Ledger).where(Ledger.id == row.ledger_id))
-        out = _serialize_tx(row, row.category_name)
+        out = _serialize_tx(row, row.category_name,
+                            _splits_for(db, user.id, [row]).get(row.sync_id))
         out["ledger"] = led.name if led else None
         return out
 
@@ -482,7 +519,9 @@ def search(user: User, *, q: str, limit: int = 20) -> list[dict[str, Any]]:
             .limit(max(1, min(limit, 100)))
         )
         rows = db.scalars(query).all()
-        return [_serialize_tx(r, r.category_name) for r in rows]
+        sp = _splits_for(db, user.id, rows)
+        return [_serialize_tx(r, r.category_name, sp.get(r.sync_id))
+                for r in rows]
 
 
 # ---------- internal helpers -------------------------------------------------

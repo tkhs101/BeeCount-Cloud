@@ -78,6 +78,8 @@ class ImportFieldMapping:
     # 消费税税额(0020,可选列)。导出 CSV 的第 13 列「税额」;空 / 非法 /
     # 负数 / >= amount 一律当作无税(不阻断整行导入)。仅 expense 有意义。
     tax_amount: str | None = None
+    # 组合支付(0021)CSV 列:`招行卡:3000.00|现金:2000.00`
+    splits: str | None = None
     tags: list[str] = field(default_factory=list)
     # transformer 选项
     datetime_format: str | None = None
@@ -129,6 +131,8 @@ class ImportTransaction:
     # 消费税税额(0020):原币绝对值;None = 无税。写进 snapshot item 的
     # taxAmount,与 Web/MCP 录入同一条校验(mutator 里再兜一次)。
     tax_amount: float | None = None
+    # 拆分腿:[(account_name, amount), ...];导入按**名字**匹配账户
+    splits: list[tuple[str, float]] | None = None
     note: str | None = None
     category_name: str | None = None
     parent_category_name: str | None = None

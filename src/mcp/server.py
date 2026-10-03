@@ -510,6 +510,7 @@ async def create_transaction(
     ledger_id: str | None = None,
     currency: str | None = None,
     tax_amount: float | None = None,
+    splits: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Create a new transaction.
 

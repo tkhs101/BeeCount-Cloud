@@ -177,6 +177,7 @@ def _transform_row(row: ParsedRow, mapping: ImportFieldMapping) -> ImportTransac
     # 导入是一个批量操作,一行脏数据不该让整份 CSV 失败。真值仍会在
     # snapshot_mutator 里再校验一次(那里才是权威口径)。
     tax_amount = _parse_tax_amount(opt(mapping.tax_amount), float(amount), tx_type)
+    splits = _parse_splits(opt(mapping.splits))
 
     return ImportTransaction(
         tx_type=tx_type,
@@ -184,6 +185,7 @@ def _transform_row(row: ParsedRow, mapping: ImportFieldMapping) -> ImportTransac
         happened_at=dt,
         currency_code=currency_code,
         tax_amount=tax_amount,
+        splits=splits,
         note=opt(mapping.note),
         category_name=tx_category_name,
         parent_category_name=tx_parent_name,
@@ -315,3 +317,35 @@ class _RowError(Exception):
         self.code = code
         self.field_name = field_name
         self.message = message
+
+
+def _parse_splits(raw: str | None) -> list[tuple[str, float]] | None:
+    """CSV 拆分列 → `[(账户名, 金额), ...]`,或 None(不是组合支付)。
+
+    格式(导出侧 `workspace._splits_cell` 的对称解析):
+        `招行卡:3000.00|现金:2000.00`
+
+    **按名字而不是 sync_id** —— CSV 是给人看/改的,用户手填账户名更自然;
+    账户名到 sync_id 的解析在 `transformer` 后续步骤里做(和 account 列同口径)。
+
+    宽容优先:单条腿 / 金额非法 / 名字为空 → 丢弃那条;全部丢弃 → 返回 None
+    (= 不是组合支付)。求和是否等于 amount 由 server 的 `_normalize_splits`
+    判定,这里不重复。
+    """
+    if not raw:
+        return None
+    out: list[tuple[str, float]] = []
+    for part in str(raw).split("|"):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        name, _, amt = part.rpartition(":")
+        name = name.strip()
+        try:
+            value = float(amt.strip().replace(",", "").replace("¥", "").replace("$", ""))
+        except (TypeError, ValueError):
+            continue
+        if not name or value <= 0:
+            continue
+        out.append((name, value))
+    return out if len(out) >= 2 else None

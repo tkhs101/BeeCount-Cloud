@@ -708,9 +708,11 @@ def test_csv_export_includes_tax_column():
 
     for lang, expected in (("zh-CN", "税额"), ("zh-TW", "稅額"), ("en", "Tax")):
         headers = _CSV_HEADERS_BY_LANG[lang]
-        assert headers[-1] == expected, (lang, headers[-1:])
-        # 前 12 列位置不打乱(mobile 导出对齐)
-        assert len(headers) == 13, headers
+        # 税额不是**最后一**列了 —— 0021 在它后面追加了 Splits(拆分)。
+        # 位置约定:税额固定在第 13 位(0-indexed 12),拆分在第 14 位。
+        assert headers[12] == expected, (lang, headers[12:])
+        assert headers[13] in {"拆分", "Splits"}, (lang, headers[13:])
+        assert len(headers) == 14, headers
         assert headers[3] in {"金额", "金額", "Amount"}, headers[3]
 
 
@@ -733,7 +735,8 @@ def test_csv_export_row_carries_tax(monkeypatch):
         # 而错位时断言可能仍然「看起来通过」。
         rows = list(csv.reader(io.StringIO(r.text.lstrip("﻿"))))
         header = [h.strip() for h in rows[0]]
-        assert header[-1] == "Tax"
+        # 0021 之后 Tax 不再是最后一列
+        assert "Tax" in header and "Splits" in header, header
         tax_col = header.index("Tax")
         amount_col = header.index("Amount")
 

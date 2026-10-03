@@ -28,6 +28,8 @@ _HEADER_ALIASES = {
     "attachments": {"attachments", "附件"},
     # 消费税(0020):导出 CSV 第 13 列。别名与通用解析器共用同一组写法。
     "tax_amount": {"tax", "tax amount", "tax_amount", "税额", "稅額"},
+    # 组合支付(0021):导出 CSV 第 14 列,格式 `招行卡:3000.00|现金:2000.00`。
+    "splits": {"splits", "拆分"},
 }
 
 
@@ -87,6 +89,7 @@ class BeeCountParser:
             tags=[t for t in [_column_for(headers, _HEADER_ALIASES["tags"])] if t],
             # 消费税(0020):旧导出文件没有这一列 → None → 不导入,行为不变。
             tax_amount=_column_for(headers, _HEADER_ALIASES["tax_amount"]),
+            splits=_column_for(headers, _HEADER_ALIASES["splits"]),
             datetime_format=None,  # BeeCount 是 ISO-ish 格式,auto-try OK
             strip_currency_symbols=False,  # BeeCount 导出不含币种符号
             expense_is_negative=False,
