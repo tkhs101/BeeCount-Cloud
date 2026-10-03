@@ -202,7 +202,10 @@ def _repay_inner(db: Session, *, user_id: str, card: UserAccountProjection,
         .where(UserAccountProjection.autorepay_last_period.is_not(pkey))
         .values(autorepay_last_period=pkey)
     )
-    if claimed.rowcount != 1:
+    # `db.execute` 的返回类型标注不含 rowcount(SQLAlchemy 把它放在
+    # `Result` 的子类型上),运行时是有的 —— 用 getattr 消音,不要 cast 成
+    # 错误的类型。
+    if getattr(claimed, "rowcount", 0) != 1:
         db.rollback()
         return RepayOutcome(card_id, "skipped_locked", period=pkey,
                             detail="另一个进程正在处理本期")
@@ -322,12 +325,11 @@ def _balance_of(db: Session, *, user_id: str, account_sync_id: str) -> float:
         )
     )
     initial_f = float(initial or 0.0)
+    # `account_balance_from_stats` 接受**整个** stats dict 并自己 `.get()`,
+    # 账户没有交易时返回期初。所以不要再提前 `.get()` —— 那样既传错类型,
+    # 又会把「只有期初、没有交易」的账户算成 0。
     stats = account_balance_stats(db, _ledgers_of(db, user_id=user_id))
-    row = stats.get(account_sync_id)
-    if row is None:
-        # 没有任何交易 → 余额就等于期初。不能返回 0.0。
-        return initial_f
-    return account_balance_from_stats(account_sync_id, initial_f, row)
+    return account_balance_from_stats(account_sync_id, initial_f, stats)
 
 
 def _ledgers_of(db: Session, *, user_id: str) -> list[str]:
