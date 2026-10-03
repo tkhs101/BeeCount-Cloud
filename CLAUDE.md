@@ -170,6 +170,11 @@ mypy 那边本 fork 用 `TypedDict` 声明各工具的 kwargs（`kw = dict(...)`
 `**kw` 展开每一行都报 arg-type，上游 `parse_and_create_from_text` 就是这么
 留着存量错误的）。新写工具别再沿用 `dict(...)`。
 
+## 部署
+
+照 [`docs/SELFHOST-RUNBOOK.md`](docs/SELFHOST-RUNBOOK.md) 走（源码安装，不用
+Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器复验）。
+
 ## 环境相关的坑
 
 - **源码安装不用 Docker**:`WEB_STATIC_DIR` 默认是 `/app/static`(Docker 路径),
