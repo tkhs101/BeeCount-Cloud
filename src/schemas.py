@@ -891,6 +891,9 @@ class WriteAccountCreateRequest(WriteBaseRequest):
     # 账户隐藏(issue #240):新建一般为 false,留字段以备批量导入。写路径接线
     # (mutator / write handler)是 Task 4,本字段暂不生效。
     hidden: bool = False
+    # 信用卡自动还款(0022)
+    autorepay_enabled: bool | None = None
+    autorepay_from_account_id: str | None = None
 
 
 class WriteAccountUpdateRequest(WriteBaseRequest):
@@ -906,6 +909,14 @@ class WriteAccountUpdateRequest(WriteBaseRequest):
     card_last_four: str | None = Field(default=None, max_length=8)
     # None = 不改(PATCH exclude_unset)。写路径接线是 Task 4,本字段暂不生效。
     hidden: bool | None = None
+    # ---- 信用卡自动还款(0022)------------------------------------------- #
+    # `billing_day` / `payment_due_day` 的范围校验上游已有(ge=1/le=31)。
+    # 跨字段规则(扣款账户同币种、不能是卡自己、启用时账期必填)在
+    # `services/credit_card/config.py` —— 表达不了 Pydantic 单字段规则。
+    autorepay_enabled: bool | None = None
+    #: 扣款账户 **sync_id**。前端从账户下拉取值 —— 不是名字。
+    #: 存名字会在改名后静默失效(见 0022 迁移说明)。
+    autorepay_from_account_id: str | None = None
 
 
 class WriteBudgetCreateRequest(WriteBaseRequest):

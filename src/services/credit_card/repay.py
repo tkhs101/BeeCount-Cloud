@@ -174,8 +174,9 @@ def _repay_inner(db: Session, *, user_id: str, card: UserAccountProjection,
 
     # ---- 防线 1:账期查重(自愈,天然幂等) --------------------------------- #
     stmt = compute_statement(
-        db, user_id=user_id, ledger_id=_ledger_of(db, user_id=user_id,
-                                                   account_sync_id=card_id),
+        db, user_id=user_id,
+        ledger_id=_ledger_internal_of(db, user_id=user_id,
+                                      account_sync_id=card_id),
         card_account_sync_id=card_id, period=period, today=today)
     outstanding = stmt.outstanding
     if outstanding <= 0:
@@ -231,7 +232,7 @@ def _repay_inner(db: Session, *, user_id: str, card: UserAccountProjection,
     }
     try:
         resp = self_call(db, method="POST",
-                         path=f"/api/v1/write/ledgers/{_ledger_of(db, user_id=user_id, account_sync_id=card_id)}/transactions",
+                         path=f"/api/v1/write/ledgers/{_ledger_external_of(db, user_id=user_id, account_sync_id=card_id)}/transactions",
                          body=body, headers=headers)
     except Exception:
         # 写失败 → 把 last_period 撤回,否则这张卡这一期永远不会再还
@@ -266,17 +267,17 @@ def _release_period(db: Session, *, user_id: str, card_id: str,
         logger.exception("autorepay: failed to release last_period card=%s", card_id)
 
 
-def _ledger_of(db: Session, *, user_id: str,
-               account_sync_id: str) -> str:
-    """卡所属的账本 internal id。
+def _ledger_internal_of(db: Session, *, user_id: str,
+                        account_sync_id: str) -> str:
+    """卡所属账本的 **internal id**(`Ledger.id`)。
 
-    account 是 user-global 的,但交易必须挂到某个 ledger 上。取该卡最近
-    一笔交易的 ledger;没有交易就用用户的第一个账本。
+    用于 `compute_statement` —— `read_tx_projection.ledger_id` 存的就是它。
     """
     from sqlalchemy import select
+
     from ...models import Ledger, ReadTxProjection
 
-    row = db.scalar(
+    internal = db.scalar(
         select(ReadTxProjection.ledger_id)
         .where(ReadTxProjection.user_id == user_id)
         .where(
@@ -287,14 +288,51 @@ def _ledger_of(db: Session, *, user_id: str,
         .order_by(ReadTxProjection.happened_at.desc())
         .limit(1)
     )
-    if row:
-        return str(row)
+    if internal:
+        return str(internal)
     led = db.scalar(
-        select(Ledger.id)
-        .where(Ledger.user_id == user_id)
-        .order_by(Ledger.created_at.asc())
-        .limit(1)
-    )
+        select(Ledger.id).where(Ledger.user_id == user_id)
+        .order_by(Ledger.created_at.asc()).limit(1))
+    return str(led) if led else ""
+
+
+def _ledger_external_of(db: Session, *, user_id: str,
+                        account_sync_id: str) -> str:
+    """卡所属账本的 **external id** —— 写路由的路径参数要的是它。
+
+    ⚠️ **external 与 internal 是两个不同的 id**,混淆会让每次自动还款 404。
+
+    - `Ledger.id` = internal(uuid),`read_tx_projection.ledger_id` 存它
+    - `Ledger.external_id` = 用户可见的那个(如 `daily`),路由
+      `/write/ledgers/{ledger_external_id}/transactions` 要它
+
+    第一版只留了一个 `_ledger_of`,按调用点需要返回不同口径 —— 结果
+    修一处崩另一处:给了 external,`compute_statement` 就查不到交易、算出
+    账单 0;给了 internal,真实请求就 404。**所有分层测试都是绿的**,
+    因为它们用 FakeCall,没人真发过这个请求。
+
+    这就是必须有端到端层的理由。
+    """
+    from sqlalchemy import select
+
+    from ...models import Ledger
+
+    internal = _ledger_internal_of(db, user_id=user_id,
+                                   account_sync_id=account_sync_id)
+    led = None
+    if internal:
+        led = db.scalar(
+            select(Ledger.external_id)
+            .where(Ledger.user_id == user_id)
+            .where(Ledger.id == internal)
+        )
+    if not led:
+        led = db.scalar(
+            select(Ledger.external_id)
+            .where(Ledger.user_id == user_id)
+            .order_by(Ledger.created_at.asc())
+            .limit(1)
+        )
     return str(led) if led else ""
 
 

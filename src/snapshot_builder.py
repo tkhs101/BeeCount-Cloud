@@ -186,6 +186,14 @@ def build(db: Session, ledger: Ledger) -> dict[str, Any]:
         UserAccountProjection.bank_name,
         UserAccountProjection.card_last_four,
         UserAccountProjection.hidden,
+        # 信用卡自动还款(0022)。**漏了这三列,任何一次 PATCH 账户都会把
+        # 自动还款配置静默清空** —— 快照构建读不到 → mutator 的「缺键保留」
+        # 看到的快照里本来就没有 → 无从保留。
+        # 这与交易反向桥(`_projection_row_to_tx_dict`)是同一类坑,
+        # CLAUDE.md 的静默丢失清单里已有前两例(税额、splits)。
+        UserAccountProjection.autorepay_enabled,
+        UserAccountProjection.autorepay_from_account_sync_id,
+        UserAccountProjection.autorepay_last_period,
     ).where(UserAccountProjection.user_id == user_id)
     for (
         sid,
@@ -200,6 +208,9 @@ def build(db: Session, ledger: Ledger) -> dict[str, Any]:
         bank_name,
         card_last_four,
         hidden,
+        autorepay_enabled,
+        autorepay_from_account_sync_id,
+        autorepay_last_period,
     ) in db.execute(acc_stmt).all():
         acc: dict[str, Any] = {"syncId": sid, "name": name or ""}
         if acc_type:
@@ -224,6 +235,14 @@ def build(db: Session, ledger: Ledger) -> dict[str, Any]:
         # key"),与 App serializeAccount 无条件发 hidden 对齐,保 /sync/full
         # 重装 / 新设备首次同步时隐藏标记不丢(03-tech-design-cloud.md §二 (B))。
         acc["hidden"] = bool(hidden)
+        # 自动还款(0022):enabled 无条件输出(NOT NULL 列),另两列有值才带 ——
+        # 与其它扩展字段同一约定。`autorepay_last_period` 是运行状态不是配置,
+        # 放进快照是为了重启后的补跑判断能读到「本期已还过」。
+        acc["autorepayEnabled"] = bool(autorepay_enabled)
+        if autorepay_from_account_sync_id:
+            acc["autorepayFromAccountSyncId"] = autorepay_from_account_sync_id
+        if autorepay_last_period:
+            acc["autorepayLastPeriod"] = autorepay_last_period
         accounts.append(acc)
 
     # Categories —— 同 accounts,user-global per-user。
