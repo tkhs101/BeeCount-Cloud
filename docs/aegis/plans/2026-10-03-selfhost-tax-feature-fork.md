@@ -84,6 +84,33 @@ ALLOW 表刻意做得宽（宁可多报），代价是每加一个真实聚合�
 但它同时是一份**已复核记录**。已验证：塞一个 `reduce((s, t) => s + t.amount)`
 进去，护栏立刻变红。
 
+### 第九轮：PWA 分享链路（又抓到一个自己写的 bug）
+
+补上最后一个「已实现但从未端到端验证」的功能:相册分享小票 → SW 缓存 →
+自动挂成附件。浏览器冒烟一跑就发现它是**坏的**:流程打开了快速新建对话框,
+但附件从未挂上 —— 交易建出来了,`attachments` 是 null,服务器上还留了个没人
+引用的孤儿文件。
+
+**根因是 React 异步 effect 的顺序写反了**(我自己写的):
+
+```js
+setPendingAttachmentUpload(null)   // 同步清空 → 立刻重渲染 → cleanup 置 cancelled
+;(async () => {
+  const uploaded = await onUploadTxAttachments([file])
+  if (cancelled) return             // ← 结果被丢弃
+  setTxForm(...)                    // ← 永远执行不到
+})
+```
+
+附带 `onUploadTxAttachments` 不是 `useCallback`,身份每次渲染都变,effect 反复
+重跑。**单测和 tsc 抓不到**:类型合法,逻辑看起来也合理。
+
+这条路径上此前已经有一次同类事故(R2,effect 被插进函数体)。两次都发生在
+同一个文件、同一个异步 effect 上 —— 教训是这个文件里的异步 effect 需要按
+「状态更新顺序」逐个复核,不能靠读起来通顺。
+
+---
+
 ### 第五轮：备份/还原链路（发现一个上游缺陷）
 
 排查税额字段的备份链路时发现:管理面板的「备份」按钮**对任何方案 B 之后新建
