@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     attachment_storage_dir: str = "./data/attachments"
     attachment_max_upload_bytes: int = 64 * 1024 * 1024
 
+    # 新建账本时是否播撒默认分类(本 fork 专有)。
+    # 上游没有这个机制 —— 默认分类只存在于 Flutter App 的 seed_service,
+    # 靠首次启动 sync push 上行。放弃 App 只用 Web 时,新账本会**一个分类都没有**。
+    # 设为 false 可完全关掉(例如将来要同时用 App,避免同名分类出现两条)。
+    seed_default_categories: bool = Field(default=True, alias="SEED_DEFAULT_CATEGORIES")
+
     # 消费税归属的分类名(0020)。统计时从各笔支出剥出的税额累加到这个分类名
     # 下,与用户手动记在同一分类里的住民税/国保合并成饼图上的一个扇区(D1)。
     # 没有税额数据时该扇区不出现,统计与升级前完全一致。

@@ -115,28 +115,26 @@ sed -i 's/REGISTRATION_ENABLED=true/REGISTRATION_ENABLED=false/' .env
 systemctl restart beecount
 ```
 
-## 5. 建「税与保险」分类
+## 5. 建分类 —— **不需要了**
 
-Web 控制台 → 设置 → 开发者 → 新建 Token，勾 `mcp:read` + `mcp:write`，有效期选「永不」。**明文只显示一次**。
+建账本时会自动播撒一套默认分类（44 个，含「税与保险」及其下的
+消费税 / 所得税 / 社会保险）。新建账本后直接就能记账。
 
-然后把 MCP 指向你的实例：
+默认分类表在 `src/services/default_categories.py`，是一张可直接编辑的常量表，
+按需增删改后重启即可。想完全关掉：`.env` 里加 `SEED_DEFAULT_CATEGORIES=false`。
+
+> 规则是**每个用户只播撒一次**（他一个分类都没有时才播）。之后你怎么增删改分类
+> 都不会被干预。
+
+**仍然要做的一件事**：把 MCP 指到你的实例
 
 ```bash
 claude mcp add --transport http beecount https://your-domain.com/api/v1/mcp \
   --header "Authorization: Bearer bcmcp_你的token"
 ```
 
-建分类（下面 4 句可以直接交给 AI 执行，或自己调 MCP）：
-
-```
-create_category(name="税与保险", kind="expense")
-create_category(name="消费税",   kind="expense", parent_name="税与保险")
-create_category(name="所得税",   kind="expense", parent_name="税与保险")
-create_category(name="社会保险", kind="expense", parent_name="税与保险")
-```
-
-> 二级分类靠 **`parent_name`（名字）** 挂到父级，所以父级必须先建好。
-> 这条链路有端到端测试覆盖。
+Token 在 Web 控制台 → 设置 → 开发者 → 新建，勾 `mcp:read` + `mcp:write`，
+有效期选「永不」。**明文只显示一次。**
 
 ## 6. 记一笔含税的，验收
 

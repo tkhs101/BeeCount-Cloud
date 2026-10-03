@@ -150,9 +150,12 @@ def test_shared_resources_endpoint():
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["owner_user_id"] == owner_id
-    assert len(data["categories"]) == 1
-    assert data["categories"][0]["name"] == "早餐"
-    assert data["categories"][0]["kind"] == "expense"
+    # 建账本会自动播撒默认分类(本 fork 专有,见 services/default_categories),
+    # 所以这里**不能**断言总数 —— 只关心「owner 自己建的那个分类」是否可见
+    # 于 editor。这才是这条测试的本意(共享资源可见性)。
+    mine = [c for c in data["categories"] if c["name"] == "早餐"]
+    assert len(mine) == 1, [c["name"] for c in data["categories"]][:10]
+    assert mine[0]["kind"] == "expense"
 
 
 def test_editor_cannot_patch_ledger_meta():

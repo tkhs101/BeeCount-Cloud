@@ -290,8 +290,66 @@ async function checkShare(page) {
   const badge = await dlg.getByText(/已附\s*\d+\s*个|1\s*attached/).count()
   ok('附件计数显示已挂 1 个', badge > 0, `badge=${badge}`)
 
+  // 补完金额 + 选分类 + 提交,验证附件真的落库(分享路径的最后一环)
+  await dlg.locator('input').first().fill('3280')
+  await dlg.getByRole('button', { name: /分类名称|分类/ }).first().click()
+  const picker = page.getByRole('dialog').last()
+  await picker.waitFor({ state: 'visible' })
+  await picker.getByText(/餐饮/, { exact: false }).first().click()
+  await page.waitForTimeout(400)
+  await dlg.getByRole('button', { name: /新建交易|保存交易|Save/ }).last().click()
+  await page.waitForTimeout(2500)
+  const txRes = await page.request.get(
+    `${BASE}/api/v1/read/workspace/transactions`,
+    { headers: { Authorization: `Bearer ${TOKEN}` }, params: { limit: 200 } }
+  )
+  const items = (await txRes.json()).items || []
+  const made = items.find((t) => t.amount === 3280 && (t.attachments || []).length === 1)
+  ok('分享的小票随这笔交易落库', !!made,
+     JSON.stringify(items.map((t) => [t.amount, (t.attachments || []).length])))
 }
 
+/**
+ * 交易详情弹窗的税额三段展示 + 分类详情的「虚拟扇区」说明。
+ *
+ * 这两处 UI 此前只读过代码、没在浏览器里见过 —— 表单输入框验过,弹窗没验。
+ * 「税与保险」是**虚拟扇区**(含从别处剥出来的消费税),点进去看到的合计
+ * 必然小于扇区值,不说明用户会以为数据丢了。
+ */
+async function checkDetailDialogs(page) {
+  console.log('\n=== 7. 详情弹窗:税前 / 消费税 + 虚拟扇区说明 ===')
+  await page.goto(`${BASE}/app/transactions`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(1500)
+
+  await page.getByText(/KING BEAR NOW/).first().click()
+  const dlg = page.getByRole('dialog').last()
+  await dlg.waitFor({ state: 'visible', timeout: 10000 })
+  await page.waitForTimeout(800)
+  const txt = (await dlg.innerText()).replace(/\s+/g, ' ')
+  console.log('  弹窗:', txt.slice(0, 160))
+  ok('详情页显示「税前」', /税前/.test(txt))
+  ok('详情页显示「消费税」', /消费税/.test(txt))
+  ok('顶部大数字是实付总额', /\d,\d{3}\.\d{2}/.test(txt))
+  // 实付合计**故意不标文字** —— 顶部大数字就是它,加「实付合计」标签是冗余噪音。
+  // 收银小票也是这个排版。
+  ok('实付合计不加冗余标签(由大数字承担)', !/实付合计/.test(txt))
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(700)
+
+  // 「税与保险」分类详情 → 虚拟扇区说明
+  // 入口在「分类」页(行点击 → dispatchOpenDetailCategory)。直接 goto
+  // /app/categories 会被重定向回交易页,所以走侧边栏。
+  await page.getByRole('link', { name: /分类/ }).first().click()
+    .catch(async () => { await page.getByText(/分类/, { exact: true }).first().click() })
+  await page.waitForTimeout(2000)
+  await page.getByText(/税与保险/).first().click()
+  await page.waitForTimeout(2000)
+  const body = (await page.locator('body').innerText()).replace(/\s+/g, ' ')
+  ok('「税与保险」详情说明它是虚拟扇区(合计会小于扇区值)',
+     /剥离出来的消费税|小于饼图/.test(body), body.slice(0, 140))
+}
+
+await checkDetailDialogs(page)
 await browser.close()
 console.log('\n' + (fails.length ? `FAILED: ${fails.join('; ')}` : 'UI SMOKE ALL PASSED'))
 process.exit(fails.length ? 1 : 0)

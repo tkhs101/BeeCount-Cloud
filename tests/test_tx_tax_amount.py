@@ -1269,80 +1269,98 @@ def test_batch_transaction_item_keeps_tax_field() -> None:
     ).model_dump(mode="json")["tax_amount"] is None
 
 
-def test_mcp_create_tax_category_hierarchy(monkeypatch) -> None:
-    """**T3 的前置验证** —— 用户部署后要手动用 MCP 建「税与保险」两级结构。
+def test_default_seed_includes_tax_hierarchy():
+    """**默认分类种子里的税结构** —— 用户不再需要手动建这一步。
 
-    这条链路从没被端到端跑过:`create_category` 的 `parent_name` 解析、
-    父子 sync_id 的建立、以及**二级分类能不能被 `category_id` 引用**(预算是
-    按 sync_id 匹配的)—— 任一环断了,用户照着计划走就会卡住。
+    「税与保险」必须是**一级**分类,「消费税/所得税/社会保险」挂在它下面:
+    统计时从各分类剥出的消费税汇进「税与保险」(D1),而住民税 / 国民健康保险
+    是直接记在这个分类下的实际付款 —— 两者在饼图上合成一块。
 
-    跑通后可以确认:建一级 → 建三个二级 → 用二级建预算 → 预算按该分类统计。
+    这一条原来是没有的:建账本后一个分类都没有(默认分类只存在于 Flutter App
+    的 seed_service,而本 fork 不用 App)。
     """
-    from datetime import timedelta
-
-    from src.mcp.tools import write_tools
-    from src.security import SCOPE_APP_WRITE, SCOPE_WEB_WRITE, _create_token
-
     client, TS = _make_client()
-    monkeypatch.setattr(write_tools, "SessionLocal", TS)
-    monkeypatch.setattr(
-        write_tools, "_internal_token",
-        lambda u: _create_token(
-            sub=u.id, token_type="access", expires_delta=timedelta(seconds=60),
-            scopes=[SCOPE_APP_WRITE, SCOPE_WEB_WRITE], client_type="app",
-        ),
-    )
     try:
-        token = _register_and_token(client, "tax-hier@t.com", device_id="d-web",
+        token = _register_and_token(client, "seed-tax@t.com", device_id="d-web",
                                     client_type="web")
         hdr = {"Authorization": f"Bearer {token}", "X-Device-ID": "web"}
         J = {**hdr, "Content-Type": "application/json"}
         _web_ledger(client, hdr)
-        user = _fetch_user(TS, "tax-hier@t.com")
 
-        import asyncio
-
-        # 1) 一级
-        parent = asyncio.run(write_tools.create_category(user, name=TAX_BUCKET))
-        assert parent.get("sync_id"), parent
-        parent_id = parent["sync_id"]
-
-        # 2) 三个二级,靠 **名字** 挂到父级下
-        child_ids = {}
-        for name in ("消费税", "所得税", "社会保险"):
-            out = asyncio.run(write_tools.create_category(
-                user, name=name, parent_name=TAX_BUCKET))
-            assert out.get("sync_id"), out
-            child_ids[name] = out["sync_id"]
-
-        # 3) 父子关系真的建立了(不能只是两个平级分类)
         cats = client.get("/api/v1/read/workspace/categories", headers=hdr).json()
         by_name = {c["name"]: c for c in cats}
-        assert TAX_BUCKET in by_name
-        for name in ("消费税", "所得税", "社会保险"):
-            assert name in by_name, sorted(by_name)
-        # 子分类的 parent 指向一级(读端点用 parent_name 暴露)
-        assert by_name["消费税"].get("parent_name") == TAX_BUCKET, by_name["消费税"]
 
-        # 4) 记一笔挂到「消费税」下 —— 一级分类不该被选中记账
-        base = 0
+        assert TAX_BUCKET in by_name, sorted(by_name)[:20]
+        for child in ("消费税", "所得税", "社会保险"):
+            assert child in by_name, (child, sorted(by_name)[:20])
+            assert by_name[child].get("parent_name") == TAX_BUCKET, by_name[child]
+
+        # 建账本当天就能直接记含税的一笔,不需要任何手工准备
         r = client.post("/api/v1/write/ledgers/lg1/transactions", headers=J, json={
-            "base_change_id": base, "tx_type": "expense", "amount": 1000.0,
-            "happened_at": _iso(), "category_id": child_ids["消费税"],
-            "category_name": "消费税", "category_kind": "expense",
-            "note": "住民税"})
+            "base_change_id": 0, "tx_type": "expense", "amount": 3280.0,
+            "happened_at": _iso(), "category_name": "餐饮",
+            "category_kind": "expense", "tax_amount": 298.0})
         assert r.status_code == 200, r.text[:200]
 
-        # 5) 给二级建预算 —— 验证 sync_id 可被预算引用
-        r = asyncio.run(write_tools.create_budget(
-            user, amount=50000.0, budget_type="category",
-            category="消费税", period="monthly"))
-        assert r.get("sync_id"), r
-
-        usage = client.get("/api/v1/read/ledgers/lg1/budgets/usage", headers=hdr).json()
-        used = {x["budget_id"]: x["used"] for x in usage["items"]}
-        assert list(used.values()) == [1000.0], used
+        ranks = {x["category_name"]: x["total"]
+                 for x in _analytics(client, hdr)["category_ranks"]}
+        assert abs(ranks[TAX_BUCKET] - 298.0) < 1e-6, ranks
+        assert abs(ranks["餐饮"] - 2982.0) < 1e-6, ranks
     finally:
+        app.dependency_overrides.clear()
+
+
+def test_default_seed_is_idempotent_and_respects_user_edits():
+    """重复建账本不产生同名分类;用户改过的分类不被种子覆盖。"""
+    client, TS = _make_client()
+    try:
+        token = _register_and_token(client, "seed-idem@t.com", device_id="d-web",
+                                    client_type="web")
+        hdr = {"Authorization": f"Bearer {token}", "X-Device-ID": "web"}
+        J = {**hdr, "Content-Type": "application/json"}
+        _web_ledger(client, hdr)
+        first = client.get("/api/v1/read/workspace/categories", headers=hdr).json()
+        names = [c["name"] for c in first]
+        assert len(names) == len(set(names)), "种子产生了同名重复"
+
+        # 改一个分类的名字,再建第二本账本
+        target = next(c for c in first if c["name"] == "餐饮")
+        r = client.patch(f"/api/v1/write/ledgers/lg1/categories/{target['id']}",
+                         headers=J, json={"base_change_id": 0, "name": "吃饭"})
+        assert r.status_code == 200, r.text[:200]
+
+        r = client.post("/api/v1/write/ledgers", headers=J,
+                        json={"ledger_id": "second", "ledger_name": "第二本",
+                              "currency": "JPY"})
+        assert r.status_code == 200, r.text[:200]
+
+        after = client.get("/api/v1/read/workspace/categories", headers=hdr).json()
+        names2 = [c["name"] for c in after]
+        assert len(names2) == len(set(names2)), "第二次建账本又产生同名重复"
+        # 用户改过的名字没被种子改回去,同时没有把「餐饮」又加回来
+        assert "吃饭" in names2, names2[:10]
+        assert "餐饮" not in names2, names2[:10]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_seed_can_be_disabled(monkeypatch) -> None:
+    """`SEED_DEFAULT_CATEGORIES=false` → 新账本一个分类都没有。"""
+    from src.config import get_settings
+
+    client, TS = _make_client()
+    monkeypatch.setenv("SEED_DEFAULT_CATEGORIES", "false")
+    get_settings.cache_clear()
+    try:
+        token = _register_and_token(client, "seed-off@t.com", device_id="d-web",
+                                    client_type="web")
+        hdr = {"Authorization": f"Bearer {token}", "X-Device-ID": "web"}
+        _web_ledger(client, hdr)
+        cats = client.get("/api/v1/read/workspace/categories", headers=hdr).json()
+        assert cats == [], f"开关关掉后不该有任何分类,got {len(cats)}"
+    finally:
+        monkeypatch.delenv("SEED_DEFAULT_CATEGORIES", raising=False)
+        get_settings.cache_clear()
         app.dependency_overrides.clear()
 
 

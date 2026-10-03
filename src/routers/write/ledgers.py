@@ -19,6 +19,66 @@ from ...services.data_cleanup.cleaner import _remove_empty_parents
 router = APIRouter()
 
 
+def _seed_default_categories(db: Session, *, ledger: Ledger, user: User) -> int:
+    """建账本时播撒默认分类,返回新建条数。
+
+**规则:每个用户只播撒一次 —— 他一个分类都没有时才播。**
+
+一开始试的是「按 (name, kind) 跳过已存在的」,两个问题:
+
+1. 不查已有分类就会给第二本账本再灌一份 → 44 个同名重复(测试抓到的)
+2. 查了之后仍然不对 —— 用户把「餐饮」改名成「吃饭」,按名字判就认为「餐饮」
+   缺失,下次建账本又给他加回来。按名字判**没法尊重用户改名**。
+
+所以改成「用户已有任何分类就不动」。这也更可预测:种子只在「全新用户第一次
+建账本」时跑一次,之后无论他怎么增删改分类,都不会被种子干预。
+"""
+
+    if not get_settings().seed_default_categories:
+        return 0
+    try:
+        from sqlalchemy import select as _sa_select
+        from sqlalchemy import func as _sa_func
+
+        from ...models import UserCategoryProjection
+        from ...services.default_categories import build_default_snapshot
+
+        # 分类是 user-global 的,同一用户多本账本共享一套 —— 所以判据看
+        # 「这个用户有几个分类」,不是「这本账本有几个」。
+        already = db.scalar(
+            _sa_select(_sa_func.count())
+            .select_from(UserCategoryProjection)
+            .where(UserCategoryProjection.user_id == user.id)
+        )
+        if int(already or 0) > 0:
+            return 0
+
+        snapshot, _created = build_default_snapshot([], actor_user_id=user.id)
+        rows = snapshot.get("categories") or []
+        if not rows:
+            return 0
+        _emit_entity_diffs(
+            db,
+            ledger=ledger,
+            current_user=user,
+            device_id="web-console",
+            prev={"items": [], "accounts": [], "categories": [], "tags": [], "budgets": []},
+            next_snapshot=snapshot,
+            now=_utcnow(),
+        )
+        logger.info(
+            "write.ledger.seed_categories ledger=%s user=%s count=%s",
+            ledger.external_id, user.id, len(rows),
+        )
+        return len(rows)
+    except Exception:
+        logger.exception(
+            "write.ledger.seed_categories failed ledger=%s user=%s",
+            ledger.external_id, user.id,
+        )
+        return 0
+
+
 @router.post("/ledgers", response_model=WriteCommitMeta, responses=_WRITE_RESPONSES)
 async def create_ledger(
     req: WriteLedgerCreateRequest,
@@ -80,6 +140,14 @@ async def create_ledger(
     )
     db.add(row_change)
     db.flush()
+
+    # 默认分类种子(本 fork 专有,`SEED_DEFAULT_CATEGORIES` 可关)。
+    #
+    # 放在 ledger 的 SyncChange 之后、AuditLog 之前 —— 同一个事务里一次性
+    # commit,用户建完账本立刻就有分类可用,不会出现「账本建好但分类还得等
+    # 一会儿」。
+    seeded = _seed_default_categories(db, ledger=ledger, user=current_user)
+
     db.add(
         AuditLog(
             user_id=current_user.id,
@@ -88,6 +156,7 @@ async def create_ledger(
             metadata_json={
                 "ledgerId": external_id,
                 "newChangeId": row_change.change_id,
+                "seededCategories": seeded,
             },
         )
     )
