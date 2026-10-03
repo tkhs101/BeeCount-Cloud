@@ -21,7 +21,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, TypedDict
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.fastmcp.server import StreamableHTTPASGIApp
@@ -181,6 +181,71 @@ mcp = FastMCP(
 # Read tools — 11 个,mcp:read scope
 # ============================================================================
 
+
+class _CreateBudgetKw(TypedDict):
+    """`create_budget` 的 kwargs。
+
+    用 TypedDict 而不是 `dict(...)`:mypy 会拿它核对 `**kw` 展开与目标函数签名
+    是否匹配。写成 `dict(...)` 时 mypy 只看到 `dict[str, object]`,**每一行
+    展开都报一遍 arg-type** —— 上游 `parse_and_create_from_text` 就是这么留下
+    存量的 mypy 错误。新写的工具不沿用这个模式。
+    """
+
+    amount: float
+    budget_type: str
+    category: str | None
+    period: str
+    enabled: bool
+    ledger_id: str | None
+
+
+class _AttachReceiptKw(TypedDict):
+    """`attach_receipt` 的 kwargs(见 _CreateBudgetKw 的说明)。"""
+
+    sync_id: str
+    image_base64: str
+    file_name: str | None
+    mime_type: str | None
+
+
+class _CreateTxKw(TypedDict):
+    """`create_transaction` 的 kwargs(见 _CreateBudgetKw 的说明)。"""
+
+    amount: float
+    tx_type: str
+    category: str | None
+    account: str | None
+    happened_at: str | None
+    note: str | None
+    tags: list[str] | None
+    ledger_id: str | None
+    currency: str | None
+    tax_amount: float | None
+
+
+class _CreateTxReceiptKw(TypedDict):
+    """`create_transaction_with_receipt` 的 kwargs(见 _CreateBudgetKw 的说明)。"""
+
+    amount: float
+    image_base64: str
+    tx_type: str
+    category: str | None
+    account: str | None
+    happened_at: str | None
+    note: str | None
+    tags: list[str] | None
+    ledger_id: str | None
+    currency: str | None
+    tax_amount: float | None
+    file_name: str | None
+    mime_type: str | None
+
+
+class _CreateTxsKw(TypedDict):
+    """`create_transactions` 的 kwargs(见 _CreateBudgetKw 的说明)。"""
+
+    transactions: list[BatchTxItem]
+    ledger_id: str | None
 
 @mcp.tool()
 async def list_ledgers(ctx: Context) -> list[dict[str, Any]]:
@@ -379,13 +444,14 @@ async def create_transaction(
             the total paid; statistics move the tax into a "tax & insurance"
             slice, and the two still add up to `amount`.
     """
-    kw = dict(
-        amount=amount, tx_type=tx_type, category=category, account=account,
-        happened_at=happened_at, note=note, tags=tags, ledger_id=ledger_id,
-        currency=currency, tax_amount=tax_amount,
-    )
+    kw: _CreateTxKw = {
+        "amount": amount, "tx_type": tx_type, "category": category,
+        "account": account, "happened_at": happened_at, "note": note,
+        "tags": tags, "ledger_id": ledger_id, "currency": currency,
+        "tax_amount": tax_amount,
+    }
     return await _logged_call(
-        ctx, name="create_transaction", scope=SCOPE_MCP_WRITE, kwargs=kw,
+        ctx, name="create_transaction", scope=SCOPE_MCP_WRITE, kwargs=dict(kw),
         body=lambda user: write_tools.create_transaction(user, **kw),
     )
 
@@ -414,12 +480,12 @@ async def attach_receipt(
             extension when omitted.
         mime_type: Optional; inferred when omitted.
     """
-    kw = dict(
-        sync_id=sync_id, image_base64=image_base64, file_name=file_name,
-        mime_type=mime_type,
-    )
+    kw: _AttachReceiptKw = {
+        "sync_id": sync_id, "image_base64": image_base64,
+        "file_name": file_name, "mime_type": mime_type,
+    }
     return await _logged_call(
-        ctx, name="attach_receipt", scope=SCOPE_MCP_WRITE, kwargs=kw,
+        ctx, name="attach_receipt", scope=SCOPE_MCP_WRITE, kwargs=dict(kw),
         body=lambda user: write_tools.attach_receipt(user, **kw),
     )
 
@@ -469,15 +535,16 @@ async def create_transaction_with_receipt(
     the transaction WAS created — retry the image with attach_receipt and do
     NOT create the transaction again.
     """
-    kw = dict(
-        amount=amount, image_base64=image_base64, tx_type=tx_type,
-        category=category, account=account, happened_at=happened_at, note=note,
-        tags=tags, ledger_id=ledger_id, currency=currency,
-        tax_amount=tax_amount, file_name=file_name, mime_type=mime_type,
-    )
+    kw: _CreateTxReceiptKw = {
+        "amount": amount, "image_base64": image_base64, "tx_type": tx_type,
+        "category": category, "account": account, "happened_at": happened_at,
+        "note": note, "tags": tags, "ledger_id": ledger_id,
+        "currency": currency, "tax_amount": tax_amount,
+        "file_name": file_name, "mime_type": mime_type,
+    }
     return await _logged_call(
         ctx, name="create_transaction_with_receipt", scope=SCOPE_MCP_WRITE,
-        kwargs=kw,
+        kwargs=dict(kw),
         body=lambda user: write_tools.create_transaction_with_receipt(user, **kw),
     )
 
@@ -505,9 +572,11 @@ async def create_transactions(
             refuses to guess and returns the candidate list — re-call with an id.
             Max 200 transactions per call; split larger imports across calls.
     """
-    kw = dict(transactions=transactions, ledger_id=ledger_id)
+    kw: _CreateTxsKw = {
+        "transactions": transactions, "ledger_id": ledger_id,
+    }
     return await _logged_call(
-        ctx, name="create_transactions", scope=SCOPE_MCP_WRITE, kwargs=kw,
+        ctx, name="create_transactions", scope=SCOPE_MCP_WRITE, kwargs=dict(kw),
         body=lambda user: write_tools.create_transactions(user, **kw),
     )
 
@@ -600,12 +669,12 @@ async def create_budget(
         enabled: Create it paused when False.
         ledger_id: Optional; uses active ledger if omitted.
     """
-    kw = dict(
-        amount=amount, budget_type=budget_type, category=category,
-        period=period, enabled=enabled, ledger_id=ledger_id,
-    )
+    kw: _CreateBudgetKw = {
+        "amount": amount, "budget_type": budget_type, "category": category,
+        "period": period, "enabled": enabled, "ledger_id": ledger_id,
+    }
     return await _logged_call(
-        ctx, name="create_budget", scope=SCOPE_MCP_WRITE, kwargs=kw,
+        ctx, name="create_budget", scope=SCOPE_MCP_WRITE, kwargs=dict(kw),
         body=lambda user: write_tools.create_budget(user, **kw),
     )
 
