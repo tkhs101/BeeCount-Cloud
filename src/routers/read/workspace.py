@@ -13,7 +13,12 @@ from sqlalchemy import false as sa_false
 
 from ._shared import *  # noqa: F401,F403 — imports + helpers + router
 from ...config import get_settings
-from ...models import ExchangeRateCache, UserExchangeRateProjection
+from ...models import (
+    ExchangeRateCache,
+    ReadTxProjection,
+    ReadTxSplitProjection,
+    UserExchangeRateProjection,
+)
 
 # ---------------------------------------------------------------------------
 # 净值历史 — 响应 schema
@@ -1313,17 +1318,40 @@ def workspace_net_worth_history(
             ReadTxProjection.account_sync_id,
             ReadTxProjection.from_account_sync_id,
             ReadTxProjection.to_account_sync_id,
+            ReadTxProjection.sync_id,
         )
         .where(ReadTxProjection.ledger_id.in_(ledger_internal_ids))
         .order_by(ReadTxProjection.happened_at.asc())
     ).all()
 
+    # 组合支付(0021):净值历史是**逐笔推进**的,腿也必须跟着一起推进,
+    # 否则曲线对这笔 5000 零反应 —— 余额从期初值直接持平跳到下一笔,
+    # 和账户页显示的余额对不上。
+    splits_by_tx: dict[str, list[dict[str, Any]]] = {}
+    for srow in db.execute(
+        select(
+            ReadTxSplitProjection.tx_sync_id,
+            ReadTxSplitProjection.account_sync_id,
+            ReadTxSplitProjection.amount,
+        )
+        .where(ReadTxSplitProjection.ledger_id.in_(ledger_internal_ids))
+        .order_by(
+            ReadTxSplitProjection.tx_sync_id.asc(),
+            ReadTxSplitProjection.seq.asc(),
+        )
+    ).all():
+        splits_by_tx.setdefault(srow[0], []).append(
+            {"accountId": srow[1], "amount": float(srow[2])}
+        )
+
     bal = dict(init_by_acc)
 
-    def _apply(tx_type, amt, acc, from_acc, to_acc):
+    def _apply(tx_type, amt, acc, from_acc, to_acc, tx_splits=None):
         # 委托给 read/_shared.account_balance_delta —— 与
         # account_balance_stats(SQL 聚合版)必须同口径,两处各写一遍迟早漂移。
-        for sid, delta in account_balance_delta(tx_type, amt, acc, from_acc, to_acc).items():
+        for sid, delta in account_balance_delta(
+            tx_type, amt, acc, from_acc, to_acc, splits=tx_splits,
+        ).items():
             if sid in bal:          # 未知账户仍静默丢弃(保持原行为)
                 bal[sid] += delta
 
@@ -1358,6 +1386,7 @@ def workspace_net_worth_history(
         _apply(
             tx.tx_type, float(tx.amount or 0.0),
             tx.account_sync_id, tx.from_account_sync_id, tx.to_account_sync_id,
+            splits_by_tx.get(tx.sync_id),
         )
         last_bucket = bucket
     if last_bucket is not None:

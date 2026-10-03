@@ -36,6 +36,7 @@ from ...models import (
     LedgerMember,
     ReadBudgetProjection,
     ReadTxProjection,
+    ReadTxSplitProjection,
     SyncChange,
     User,
     UserAccountProjection,
@@ -503,7 +504,34 @@ def account_balance_stats(
         b["count"] = int(b["count"]) + int(cnt)
         b["balance"] = float(b["balance"]) + float(amt)
 
+    # 组合支付(0021):拆分腿。
+    #
+    # 父交易**不参与**这笔扣款(mutator 在有腿时强制清空了它的 account_sync_id,
+    # 所以上面那个 `account_sync_id IS NOT NULL` 的查询自然就漏过了它)。
+    # 每条腿各扣自己那个账户 —— 这正是「一笔订单两个支付方式」要的效果。
+    #
+    # `count` 也 +1:否则 `HomeTopAccounts` 按 `count > 0` 过滤时,纯靠卡支付的
+    # 组合支付订单涉及的账户会**整块消失**(不是算错,是不显示,最难测)。
+    for acc, cnt, amt in _split_legs(db, ledger_internal_ids):
+        b = _bucket(acc)
+        b["count"] = int(b["count"]) + int(cnt)
+        b["expense"] = float(b["expense"]) + float(amt)
+        b["balance"] = float(b["balance"]) - float(amt)
+
     return stats
+
+
+def _split_legs(db: Session, ledger_internal_ids: Sequence[str]):
+    """组合支付的腿按账户聚合 (account_sync_id, count, amount)。"""
+    return db.execute(
+        select(
+            ReadTxSplitProjection.account_sync_id,
+            func.count().label("cnt"),
+            func.coalesce(func.sum(ReadTxSplitProjection.amount), 0.0).label("amt"),
+        ).where(
+            ReadTxSplitProjection.ledger_id.in_(ledger_internal_ids),
+        ).group_by(ReadTxSplitProjection.account_sync_id)
+    ).all()
 
 
 def _transfer_legs(db: Session, ledger_internal_ids: Sequence[str], column: Any):
@@ -539,6 +567,7 @@ def account_balance_delta(
     account_sync_id: str | None,
     from_account_sync_id: str | None = None,
     to_account_sync_id: str | None = None,
+    splits: list[dict[str, Any]] | None = None,
 ) -> dict[str, float]:
     """一笔交易对**各个账户**余额的影响 -> `{account_sync_id: delta}`。
 
@@ -557,6 +586,15 @@ def account_balance_delta(
     if not amount:
         return {}
     out: dict[str, float] = {}
+    if splits is not None:
+        # 组合支付(0021):有腿时父交易的 account_sync_id 已被 mutator 强制清空,
+        # 所以这里按腿分摊。`sum(splits)` == amount(mutter 层校验过)。
+        for leg in splits:
+            sid = str(leg.get("accountId") or leg.get("account_id") or "").strip()
+            if not sid:
+                continue
+            out[sid] = out.get(sid, 0.0) - float(leg.get("amount") or 0.0)
+        return out
     if tx_type == "income":
         if account_sync_id:
             out[account_sync_id] = out.get(account_sync_id, 0.0) + amount
