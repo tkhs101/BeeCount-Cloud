@@ -14,9 +14,27 @@ import {
   accountBalance,
   hasBankName,
   hasCardLastFour,
+  repaySourceCandidates,
+  sourceAccountIssue,
   TransactionList
 } from '@beecount/web-features'
-import { Banknote, Calendar as CalendarIcon, CreditCard } from 'lucide-react'
+import {
+  Button,
+  Label,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@beecount/ui'
+import {
+  Banknote,
+  Calendar as CalendarIcon,
+  CreditCard,
+  Zap as ZapIcon
+} from 'lucide-react'
+
+import { useState, useEffect } from 'react'
 
 import { useAuth } from '../../context/AuthContext'
 import type { DetailScope } from '../../lib/txDialogEvents'
@@ -42,6 +60,14 @@ interface Props {
   onLoadMore: (accountName: string, offset: number) => void
   onPreviewAttachment?: (ctx: unknown) => void
   resolveAttachmentPreviewUrl?: (att: unknown) => string | null
+  /** 自动还款(0022):候选扣款账户。**必须包含 hidden 账户** ——
+   *  规则指向一个已隐藏的账户时,用户需要在界面上看见它在跑。 */
+  allAccounts?: ReadAccount[]
+  /** 保存自动还款配置。返回错误消息表示失败,null 表示成功。 */
+  onSaveAutoRepay?: (patch: {
+    enabled: boolean
+    from_account_sync_id: string | null
+  }) => Promise<string | null>
 }
 
 /** 点账户卡片弹出的详情:顶部账户名 + 当前余额/累计收入/累计支出 + 交易列表(无限滚动加载)。 */
@@ -58,6 +84,8 @@ export function AccountDetailDialog({
   onLoadMore,
   onPreviewAttachment,
   resolveAttachmentPreviewUrl,
+  allAccounts,
+  onSaveAutoRepay,
 }: Props) {
   const t = useT()
   const { profileMe } = useAuth()
@@ -81,7 +109,8 @@ export function AccountDetailDialog({
 
             {/* 信用卡 / 银行卡专属信息:bank_name / 卡号末 4 / 信用额度 /
                 账单日 / 还款日 + 倒计时。普通账户类型不渲染。 */}
-            <AccountCardInfo account={account} t={t} />
+            <AccountCardInfo account={account} t={t}
+        allAccounts={allAccounts} onSaveAutoRepay={onSaveAutoRepay} />
 
             <div className="min-h-0 flex-1 overflow-y-auto">
               <TransactionList
@@ -185,9 +214,15 @@ function AccountStatsHeader({
 function AccountCardInfo({
   account,
   t,
+  allAccounts,
+  onSaveAutoRepay,
 }: {
   account: AccountWithStats
   t: (key: string, params?: Record<string, string | number>) => string
+  allAccounts?: ReadAccount[]
+  onSaveAutoRepay?: (
+    patch: { enabled: boolean; from_account_sync_id: string | null },
+  ) => Promise<string | null>
 }) {
   const accountType = account.account_type || ''
   const isCreditCard = accountType === 'credit_card'
@@ -286,6 +321,15 @@ function AccountCardInfo({
           ) : null}
         </div>
       ) : null}
+      {/* 自动还款(0022)—— 挂在还款日那一格下方:那里已经有「每月 N 号 /
+        还有 N 天」,自动还款是这条信息的自然延伸,不新增一级导航。 */}
+      {isCreditCard && paymentDueDay && onSaveAutoRepay && allAccounts ? (
+        <AutoRepaySection
+          card={account}
+          accounts={allAccounts}
+          onSave={onSaveAutoRepay}
+        />
+      ) : null}
     </div>
   )
 }
@@ -344,4 +388,160 @@ function daysUntilDay(targetDay: number): number {
   const lastDayNextMonth = new Date(now.getFullYear(), now.getMonth() + 2, 0).getDate()
   const effective = Math.min(targetDay, lastDayNextMonth)
   return (lastDayThisMonth - today) + effective
+}
+
+// ============================================================================
+// 信用卡自动还款(0022)
+// ============================================================================
+
+/** 自动还款的绑定 / 暂停 / 故障提示。
+ *
+ * ## 为什么「暂停」而不是「删除」
+ *
+ * 用户「这个月先不还」时期望的是**关掉**,不是删掉重填。删了要重选账户、
+ * 重选币种、重新确认。所以 `enabled=false` 保留配置,只关执行。
+ *
+ * ## 为什么扣款账户候选要包含 hidden
+ *
+ * `TransactionsPanel` 把 hidden 账户排除在所有选择器之外。若沿用那套,
+ * 用户给已隐藏的卡绑不了还款;而已有规则可能正指向一个后来被隐藏的账户 ——
+ * 结果是**一条规则在跑,用户在界面上完全看不见**。
+ *
+ * ## 失败必须可见
+ *
+ * 扣款账户被删 / 币种变了 → 自动还款会静默跳过。界面上必须说清楚,
+ * 不能只显示「已启用」让用户以为一切正常。
+ */
+function AutoRepaySection({
+  card,
+  accounts,
+  onSave,
+}: {
+  card: ReadAccount & {
+    autorepay_enabled?: boolean | null
+    autorepay_from_account_sync_id?: string | null
+    autorepay_last_period?: string | null
+  }
+  accounts: ReadAccount[]
+  onSave: (patch: {
+    enabled: boolean
+    from_account_sync_id: string | null
+  }) => Promise<string | null>
+}) {
+  // 本仓的 `useT()` 返回的就是 t 函数本身(不是 { t } 对象)——
+  // 写成 `const { t } = useT()` 会拿到 t 自己的属性,全 undefined。
+  const t = useT()
+  const [sourceId, setSourceId] = useState<string>(
+    card.autorepay_from_account_sync_id || '',
+  )
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // 账户数据刷新后同步选中项(换账户编辑时会走到这里)
+  useEffect(() => {
+    setSourceId(card.autorepay_from_account_sync_id || '')
+  }, [card.id, card.autorepay_from_account_sync_id])
+
+  const enabled = Boolean(card.autorepay_enabled)
+  const candidates = repaySourceCandidates(accounts, card)
+  const issue = sourceAccountIssue(
+    {
+      enabled,
+      from_account_sync_id: card.autorepay_from_account_sync_id ?? null,
+      last_period: card.autorepay_last_period ?? null,
+    },
+    candidates,
+  )
+
+  const save = async (patch: { enabled: boolean; from_account_sync_id: string | null }) => {
+    setBusy(true)
+    setError(null)
+    try {
+      const msg = await onSave(patch)
+      if (msg) setError(msg)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-md border bg-muted/20 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <ZapIcon
+              className={
+                enabled && issue === 'ok'
+                  ? 'h-4 w-4 shrink-0 text-expense'
+                  : 'h-4 w-4 shrink-0 text-muted-foreground'
+              }
+            />
+            <span className="truncate text-sm font-medium">
+              {enabled
+                ? t('detail.autoRepay.on', { day: String(card.payment_due_day ?? '') })
+                : t('detail.autoRepay.off')}
+            </span>
+          </div>
+          {enabled && issue !== 'ok' ? (
+            <p className="mt-1 text-xs text-expense">
+              {t('detail.autoRepay.sourceMissing')}
+            </p>
+          ) : null}
+          {card.autorepay_last_period ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('detail.autoRepay.lastPeriod', {
+                period: card.autorepay_last_period,
+              })}
+            </p>
+          ) : null}
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={() =>
+            save({
+              enabled: !enabled,
+              from_account_sync_id: enabled
+                ? (card.autorepay_from_account_sync_id ?? null)
+                : (sourceId || null),
+            })
+          }
+        >
+          {enabled ? t('detail.autoRepay.pause') : t('detail.autoRepay.enable')}
+        </Button>
+      </div>
+
+      {!enabled ? (
+        <div className="mt-3 space-y-1">
+          <Label>{t('detail.autoRepay.source')}</Label>
+          <Select
+            value={sourceId}
+            onValueChange={setSourceId}
+            disabled={busy || candidates.length === 0}
+          >
+            <SelectTrigger className="h-10">
+              <SelectValue placeholder={t('detail.autoRepay.sourcePlaceholder')} />
+            </SelectTrigger>
+            <SelectContent>
+              {candidates.map((a) => (
+                <SelectItem key={a.id} value={a.id}>
+                  {a.name}
+                  {a.hidden ? t('detail.autoRepay.hiddenSuffix') : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {candidates.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              {t('detail.autoRepay.noCandidate')}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {error ? <p className="mt-2 text-xs text-expense">{error}</p> : null}
+    </div>
+  )
 }

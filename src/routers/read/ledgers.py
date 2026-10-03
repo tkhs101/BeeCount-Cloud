@@ -397,6 +397,10 @@ def list_accounts(
             credit_limit=row.credit_limit,
             billing_day=row.billing_day,
             payment_due_day=row.payment_due_day,
+            # 自动还款(0022)
+            autorepay_enabled=bool(row.autorepay_enabled),
+            autorepay_from_account_sync_id=row.autorepay_from_account_sync_id,
+            autorepay_last_period=row.autorepay_last_period,
             bank_name=row.bank_name,
             card_last_four=row.card_last_four,
             hidden=row.hidden,

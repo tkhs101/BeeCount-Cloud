@@ -577,6 +577,13 @@ class ReadAccountOut(BaseModel):
     credit_limit: float | None = None
     billing_day: int | None = None
     payment_due_day: int | None = None
+    # ---- 信用卡自动还款(0022)------------------------------------------- #
+    # 前端靠这三个字段渲染绑定状态。不返回的话,已绑定的规则用户**看不见** ——
+    # 自动还在跑,但界面上没有任何提示。
+    autorepay_enabled: bool = False
+    #: 扣款账户 **sync_id**。不是名字 —— 改名会让按名定位静默失效。
+    autorepay_from_account_sync_id: str | None = None
+    autorepay_last_period: str | None = None
     bank_name: str | None = None
     card_last_four: str | None = None
     # 账户隐藏(issue #240):只影响前端选择器/列表呈现,服务端不做任何统计

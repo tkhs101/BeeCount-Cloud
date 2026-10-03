@@ -710,6 +710,10 @@ def list_workspace_accounts(
                 credit_limit=acct.credit_limit,
                 billing_day=acct.billing_day,
                 payment_due_day=acct.payment_due_day,
+                # 自动还款(0022)
+                autorepay_enabled=bool(acct.autorepay_enabled),
+                autorepay_from_account_sync_id=acct.autorepay_from_account_sync_id,
+                autorepay_last_period=acct.autorepay_last_period,
                 bank_name=acct.bank_name,
                 card_last_four=acct.card_last_four,
                 hidden=acct.hidden,

@@ -2,8 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import {
+  fetchWorkspaceAccounts,
   fetchWorkspaceTags,
   fetchWorkspaceTransactions,
+  updateAccount,
   type WorkspaceAccount,
   type WorkspaceCategory,
   type WorkspaceTag,
@@ -52,6 +54,50 @@ export function GlobalEntityDialogs() {
   const { token } = useAuth()
   const { activeLedgerId, currentLedger, currency: activeCurrency } = useLedgers()
   const { previewMap: iconPreviewByFileId } = useAttachmentCache()
+  // 自动还款(0022):候选扣款账户在弹窗里按需取 —— 账户数据由各页的
+  // `usePageCache` 持有,全局弹窗拿不到,重新取一次比把状态提到 context
+  // 更省事(弹窗不常开)。
+  const [allAccounts, setAllAccounts] = useState<WorkspaceAccount[]>([])
+  useEffect(() => {
+    if (!token || !activeLedgerId) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const rows = await fetchWorkspaceAccounts(token, { ledgerId: activeLedgerId })
+        if (!cancelled) setAllAccounts(rows)
+      } catch {
+        // 取不到就退化成「没有候选」 —— 绑定区会显示提示而不是静默失败
+      }
+    })()
+    return () => { cancelled = true }
+  }, [token, activeLedgerId])
+
+  const saveAutoRepay = useCallback(
+    async (
+      target: { id: string },
+      patch: { enabled: boolean; from_account_sync_id: string | null },
+    ): Promise<string | null> => {
+      if (!token || !activeLedgerId) return 'not-ready'
+      try {
+        await updateAccount(token, activeLedgerId, target.id, 0, {
+          autorepay_enabled: patch.enabled,
+          autorepay_from_account_id: patch.from_account_sync_id,
+        })
+        setAllAccounts((prev) => prev.map((a) =>
+          a.id === target.id
+            ? {
+                ...a,
+                autorepay_enabled: patch.enabled,
+                autorepay_from_account_sync_id: patch.from_account_sync_id,
+              }
+            : a))
+        return null
+      } catch (e) {
+        return e instanceof Error ? e.message : 'save-failed'
+      }
+    },
+    [token, activeLedgerId],
+  )
 
   // 4 个独立 state — 互不影响,可同时打开(不太可能但理论支持)
   const [tx, setTx] = useState<WorkspaceTransaction | null>(null)
@@ -331,6 +377,10 @@ export function GlobalEntityDialogs() {
         tags={tagsDict}
         onClose={() => setAccount(null)}
         onLoadMore={(name, off) => void loadAccountTxs(name, accountScope, off)}
+        allAccounts={allAccounts}
+        onSaveAutoRepay={account
+          ? (patch) => saveAutoRepay(account, patch)
+          : undefined}
       />
       <CategoryDetailDialog
         category={category}

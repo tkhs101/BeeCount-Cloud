@@ -201,6 +201,10 @@ export type ReadTransaction = {
   /** 组合支付拆分腿(0021)。≥2 条时这笔是拆分的:父交易的 `account_id` /
    *  `account_name` 为空,金额按腿分摊。空数组 = 普通交易。 */
   splits?: TransactionSplit[]
+  // 自动还款配置(0022)。`from_account_sync_id` 是 sync_id,不是名字。
+  autorepay_enabled?: boolean | null
+  autorepay_from_account_sync_id?: string | null
+  autorepay_last_period?: string | null
   last_change_id: number
   ledger_id?: string | null
   ledger_name?: string | null
@@ -603,6 +607,11 @@ export type TxPayload = {
   /** 组合支付(0021)。≥2 条腿时 account_* 会被 server 清空,金额按腿分摊。
    *  **不传 = 不动**(PATCH 语义);传 `[]` = 清除全部腿。 */
   splits?: TransactionSplitPayload[] | null
+  // ---- 信用卡自动还款(0022)------------------------------------------- #
+  // 缺键保留(update 语义);跨字段规则由服务端 config.py 校验。
+  autorepay_enabled?: boolean | null
+  /** 扣款账户 **sync_id**。不是名字 —— 改名会让按名定位静默失效。 */
+  autorepay_from_account_id?: string | null
 }
 
 /** 组合支付的一条腿(0021)。金额是原币,与父交易 amount 同币种。 */
@@ -648,6 +657,10 @@ export type AccountPayload = {
   payment_due_day?: number | null
   bank_name?: string | null
   card_last_four?: string | null
+  // ---- 信用卡自动还款(0022)------------------------------------------- #
+  autorepay_enabled?: boolean | null
+  /** 扣款账户 **sync_id**。不是名字 —— 改名会让按名定位静默失效。 */
+  autorepay_from_account_id?: string | null
   /** 账户隐藏(issue #240)。create 缺省 false;update 不传 = 不改(服务端
    *  merge 缺键保留,见 snapshot_mutator._apply_account_optional_fields)。 */
   hidden?: boolean | null
