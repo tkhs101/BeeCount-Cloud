@@ -1468,3 +1468,55 @@ def test_tax_category_name_env_override(monkeypatch):
         assert abs(renamed["税務"] - 298.0) < 1e-6, renamed
     finally:
         app.dependency_overrides.clear()
+
+
+def test_default_seed_matches_official_app_set():
+    """分类表必须与官方 App 一致 —— 不是本 fork 自创。
+
+    数字对不上就是「有人改了表或提取错了」,会在用户拿 App 导出数据比对时
+    才发现。这里把关键锚点锁住:官方的一级分类全都在、税与保险是我们新增的、
+    以及 App 的确定性 syncId 也在用。
+    """
+    from src.services.default_categories import (
+        DEFAULT_CATEGORIES,
+        deterministic_category_sync_id,
+    )
+
+    keys = {k for k, _n, _kind, _lvl, _p in DEFAULT_CATEGORIES}
+    # 官方 App 的一级分类(取几个稳定的锚点,整表 22+14 个没必要逐个列)
+    for official in (
+        "dining", "transport", "housing", "shopping", "education",
+        "entertainment", "sports", "beauty", "salary", "investment",
+        "red_packet", "bonus", "reimbursement", "part_time", "gift",
+        "interest", "refund", "invest_income", "second_hand",
+        "social_benefit", "tax_refund", "provident_fund",
+    ):
+        assert official in keys, f"官方分类 {official} 缺失"
+
+    # 本 fork 的新增(上游 #512)
+    assert {"tax_insurance", "tax_consumption", "tax_income_tax",
+            "tax_social_insurance"} <= keys
+
+    # 确定性 syncId 与 App 同算法 —— 同一 key 在两边算出同一个值
+    a = deterministic_category_sync_id(kind="expense", level=1, key="dining")
+    b = deterministic_category_sync_id(kind="expense", level=1, key="dining")
+    assert a == b
+    assert a != deterministic_category_sync_id(kind="expense", level=2, key="dining")
+    assert a != deterministic_category_sync_id(kind="income", level=1, key="dining")
+
+
+def test_default_seed_uses_app_deterministic_sync_ids():
+    """建出来的分类必须带 App 那套确定性 syncId,否则两边 seed 会撞车。"""
+    from src.services.default_categories import (
+        build_default_snapshot,
+        deterministic_category_sync_id,
+    )
+
+    snap, _ = build_default_snapshot([], actor_user_id="u1")
+    got = {c["name"]: c.get("syncId") for c in snap["categories"]}
+    assert got["餐饮"] == deterministic_category_sync_id(
+        kind="expense", level=1, key="dining")
+    assert got["早餐"] == deterministic_category_sync_id(
+        kind="expense", level=2, key="dining_breakfast")
+    assert got["税与保险"] == deterministic_category_sync_id(
+        kind="expense", level=1, key="tax_insurance")

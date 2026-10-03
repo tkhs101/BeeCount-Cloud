@@ -126,7 +126,7 @@ def test_shared_resources_endpoint():
         db.add(UserCategoryProjection(
             user_id=owner_id,
             sync_id="cat-1",
-            name="早餐",
+            name="测试专用早餐",
             kind="expense",
             icon_type="material",
             sort_order=0,
@@ -153,7 +153,7 @@ def test_shared_resources_endpoint():
     # 建账本会自动播撒默认分类(本 fork 专有,见 services/default_categories),
     # 所以这里**不能**断言总数 —— 只关心「owner 自己建的那个分类」是否可见
     # 于 editor。这才是这条测试的本意(共享资源可见性)。
-    mine = [c for c in data["categories"] if c["name"] == "早餐"]
+    mine = [c for c in data["categories"] if c["name"] == "测试专用早餐"]
     assert len(mine) == 1, [c["name"] for c in data["categories"]][:10]
     assert mine[0]["kind"] == "expense"
 
