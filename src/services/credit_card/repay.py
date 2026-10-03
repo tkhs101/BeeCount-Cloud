@@ -18,6 +18,22 @@
 安全,但 `database.py:16-18` 注释明说作者预期过多 worker。加上条件更新
 之后,即使将来有人加 `--workers 4`,每个账期也只会有一个进程真正执行。
 
+## self_call 为什么可能是 coroutine
+
+self-call 底层是 `httpx.AsyncClient` + `ASGITransport`,而 ASGI transport
+在发请求时会访问**当前线程**的事件循环。两个调用点的处境**相反**:
+
+- **APScheduler 线程**:没有运行中的 loop → 直接给一个 `asyncio.run` 包装
+- **FastAPI 端点**:已经在 async 上下文 → 必须复用它那个 loop
+
+所以执行器不假设 self_call 是同步还是异步:调用后用 `inspect.isawaitable`
+判断,必要时在**独立线程**里跑完那个 coroutine。
+
+⚠️ 不用 `new_event_loop().run_until_complete()` —— 端点那个线程里已经
+有一个 loop 在跑,httpx 会找到它并抛
+`RuntimeError: Cannot run the event loop while another loop is running`。
+**换线程**才能拿到一个干净的 loop。
+
 ## 写入路径:self-call,不是直接操作 DB
 
 `mcp/tools/write_tools.py:71-92` + `_mcp_internal_client.py:33-40` 是仓库里
@@ -44,6 +60,8 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import inspect
 import logging
 from dataclasses import dataclass
 from datetime import date
@@ -85,6 +103,15 @@ class RepayOutcome:
     @property
     def repaid(self) -> bool:
         return self.status == "done" and self.amount > 0
+
+
+def _amount_key(amount: Decimal) -> str:
+    """金额的稳定字符串形式,用于拼幂等键。
+
+    量化到分(0.01)—— 避免浮点尾差把同一笔钱变成两个不同的键,
+    那会让防线 3 失效。`Decimal` 量化后 `str` 不会带尾随零。
+    """
+    return str(amount.quantize(Decimal("0.01")))
 
 
 def period_key(due_date: date) -> str:
@@ -226,14 +253,27 @@ def _repay_inner(db: Session, *, user_id: str, card: UserAccountProjection,
             "to_account_id": card_id,
         },
     }
+    # 幂等键里**带上金额**。
+    #
+    # 服务端的 `Idempotency-Key` 校验会把 payload 一起 hash
+    # (`write/_shared.py::_hash_request`):同 key + 不同 payload → 409
+    # `IDEMPOTENCY_KEY_REUSED`。而本键原本只有 `{card}:{period}`,一旦
+    # 防线 4 撤回 `last_period` 后重试,**欠款额可能已经变了**(期间又刷了
+    # 一笔、或上期还款落账)→ 撞 409,自动还款彻底卡住。
+    #
+    # 带上金额后:同金额的重试仍然幂等(防线 3 生效),不同金额是不同键
+    # (那是**不同的事**,本就不该被当成重复)。防线 1/2/4 才是「同一件事
+    # 只做一次」的真正保证,防线 3 只是短时间重试的保险。
     headers = {
-        "Idempotency-Key": f"auto-repay:{card_id}:{pkey}",
+        "Idempotency-Key": f"auto-repay:{card_id}:{pkey}:{_amount_key(payable)}",
         "X-Device-ID": AUTO_REPAY_DEVICE_ID,
     }
+    from ...models import User
+    actor = db.get(User, user_id)
     try:
-        resp = self_call(db, method="POST",
+        resp = _resolve(self_call(db, method="POST",
                          path=f"/api/v1/write/ledgers/{_ledger_external_of(db, user_id=user_id, account_sync_id=card_id)}/transactions",
-                         body=body, headers=headers)
+                         body=body, headers=headers, user=actor))
     except Exception:
         # 写失败 → 把 last_period 撤回,否则这张卡这一期永远不会再还
         db.rollback()
@@ -381,3 +421,23 @@ def _ledgers_of(db: Session, *, user_id: str) -> list[str]:
 
 def _iso(d: date) -> str:
     return f"{d.isoformat()}T12:00:00+00:00"
+
+
+def _resolve(value: Any) -> Any:
+    """self_call 的结果可能是 coroutine —— 是就**换线程**跑完。
+
+    不能在当前线程 `run_until_complete`:FastAPI 端点上下文里已经有运行中
+    的 loop,httpx 的 ASGI transport 会找到它并抛
+    `RuntimeError: Cannot run the event loop while another loop is running`。
+
+    换到一个全新的线程,那里没有任何 loop,`asyncio.run()` 干净可用。
+    这个 coroutine 内部只做 HTTP,不依赖外层上下文,在线程里跑是安全的。
+    """
+    if not inspect.isawaitable(value):
+        return value
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(lambda: asyncio.run(_await(value))).result()
+
+
+async def _await(coro: Any) -> Any:
+    return await coro

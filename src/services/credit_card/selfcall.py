@@ -10,67 +10,61 @@ tx_id 生成 → `snapshot_mutator` 字段规范化与校验 → `projection.ups
 CLAUDE.md 记录的那几个**静默**丢失坑(税额被抹、splits 被删、
 nativeAmount 变 NULL),而且不报错。
 
-`mcp/tools/write_tools.py:71-92` + `_mcp_internal_client.py` 是仓库里
-唯一的「非用户 HTTP 触发,但完整走全套」的先例。复用它,等于白拿一整套
-已经验证过的逻辑。
+## 直接复用 MCP 的 `_self_call`,不自造
 
-## 同步/异步的桥接
+第一版在这里自己实现了一遍「签 token + 发请求 + 判错误」,结果连着三个
+笔误:`from ..mcp...` 导入路径错(多了一层 `services`)、`_internal_token()`
+签名猜错(它要 `user: User` 不是 `scopes=`)、以及漏了 `X-Device-ID`。
 
-MCP 的 self-call 是 **async** 的(`httpx.AsyncClient`),而 APScheduler 的
-job 跑在**线程池**里(同步上下文)。这里用 `asyncio.run()` 在线程内起一个
-独立事件循环 —— 每个线程一个 loop,不与 MCP server 的主 loop 共享。
+而 `mcp/tools/write_tools.py:71` 的 `_self_call` **已经把这些全做好了** ——
+它是仓库里唯一的「非用户 HTTP 触发,但完整走 `_commit_write` 全套」先例。
 
-⚠️ 不要试图复用 MCP server 的事件循环:调度器线程拿不到它,而且共用
-一个 loop 会让「等待一个 await」阻塞整个 server。
+教训:要复用某个模式时,**先去找它是否已经存在**,而不是照着描述重写。
+重写的每一行都是新的出错机会,而复用的那份已经在生产路径上跑着。
 
-## 身份
+## 同步/异步的桥接 —— **两种调用上下文,两种做法**
 
-用 `_internal_token()` 自签**短期** JWT(`write_tools.py:59-69` 的做法),
-`scopes=[SCOPE_APP_WRITE]`、`client_type="app"`。不签长期 token 落盘 ——
-那会变成一个躺在磁盘上的万能凭据。
+`_self_call` 是 async 的,调用方有两种:
+
+1. **APScheduler 的 job** —— 线程池里,**没有**运行中的事件循环,
+   可以用 `asyncio.run()` 起独立 loop
+2. **FastAPI 端点**(`POST .../autorepay/run`)—— `async def`,**已经在
+   运行的事件循环里**。这里 `asyncio.run()` 直接抛
+   `RuntimeError: asyncio.run() cannot be called from a running event loop`
+
+第一版只考虑了场景 1,冒烟测试点一次手动触发就炸出场景 2。而当时端点把
+异常吞成 `status="failed"` 再返回 HTTP 200,所以**看起来只是「点了没反应」**,
+排查绕了一大圈 —— 那次吞异常的问题一并修了(失败现在返回 502/400)。
 """
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-logger = logging.getLogger("beecount.credit_autorepay")
-
 
 def make_self_call() -> Any:
-    """返回一个同步可调用的 `self_call(db, *, method, path, body, headers)`。"""
+    """**同步**上下文用(APScheduler 线程池)。
+
+    返回的 `self_call(...)` 是普通函数,内部 `asyncio.run()` 起独立 loop。
+    """
 
     def self_call(db: Session, *, method: str, path: str,
-                  body: dict[str, Any], headers: dict[str, str]) -> Any:
-        return asyncio.run(_do(method, path, body, headers))
+                  body: dict[str, Any], headers: dict[str, str],
+                  user: Any) -> Any:
+        # 参数名统一用 (与执行器一致); 需要 httpx 的
+        #  关键字,在这里转换一次。名字不统一过一次,端点报
+        # TypeError 才发现。
+        return asyncio.run(call_async(
+            method=method, path=path, body=body, headers=headers, user=user))
 
     return self_call
 
 
-async def _do(method: str, path: str, body: dict[str, Any],
-              headers: dict[str, str]) -> Any:
-    import httpx
+async def call_async(*, method: str, path: str, body: dict[str, Any],
+                     headers: dict[str, str], user: Any) -> Any:
+    """**async** 上下文用(FastAPI 端点)—— 复用当前 loop,不起新的。"""
+    from ...mcp.tools.write_tools import _self_call
 
-    from ..._mcp_internal_client import close_internal_client, get_internal_client
-    from ..mcp.tools.write_tools import _internal_token
-    from ...security import SCOPE_APP_WRITE
-
-    client = get_internal_client()
-    hdrs = {"Content-Type": "application/json"}
-    hdrs.update(headers)
-    hdrs["Authorization"] = f"Bearer {_internal_token(scopes=[SCOPE_APP_WRITE])}"
-
-    resp = await client.request(method, path, json=body, headers=hdrs)
-    if resp.status_code >= 400:
-        # 4xx/5xx 一律抛 —— 让执行器走「失败撤回 last_period」的路径。
-        # 静默吞掉会让这张卡这一期永远不再还,而用户以为还了。
-        raise RuntimeError(
-            f"auto-repay write failed: HTTP {resp.status_code} {resp.text[:300]}"
-        )
-    try:
-        return resp.json()
-    except Exception:  # noqa: BLE001
-        return {"raw": resp.text}
+    return await _self_call(method, path, user, json=body, headers=headers)

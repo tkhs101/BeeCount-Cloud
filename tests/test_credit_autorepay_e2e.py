@@ -88,7 +88,7 @@ class WriteThrough:
         self.n = 0
         self.headers_seen: list[dict] = []
 
-    def __call__(self, db, *, method, path, body, headers):
+    def __call__(self, db, *, method, path, body, headers, user=None):
         self.n += 1
         self.headers_seen.append(headers)
         # 路径里的必须是 **external id**(用户可见的那个),不是 internal。

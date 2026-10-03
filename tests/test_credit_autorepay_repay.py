@@ -56,7 +56,7 @@ class FakeCall:
         self.fail = fail
         self.apply = apply
 
-    def __call__(self, db, *, method, path, body, headers):
+    def __call__(self, db, *, method, path, body, headers, user=None):
         if self.fail:
             raise RuntimeError("模拟写入失败")
         self.calls.append({"method": method, "path": path, "body": body,
@@ -71,7 +71,9 @@ class FakeCall:
                 account_sync_id=None,
                 from_account_sync_id=body["from_account_id"],
                 to_account_sync_id=body["to_account_id"],
-                happened_at=datetime(2026, 10, 25, tzinfo=timezone.utc),
+                # 用请求里的日期,不要写死 —— 写死 10/25 会让 11 月那笔
+                # 落在「下一期窗口」里,欠款看起来永远没还清
+                happened_at=datetime.fromisoformat(body["happened_at"]),
                 source_change_id=1))
             db.commit()
         return {"entity_id": tx_id}
@@ -123,8 +125,9 @@ def _run(db, today=date(2026, 10, 25), call=None):
     call = call or FakeCall()
     card = db.scalar(select(UserAccountProjection).where(
         UserAccountProjection.sync_id == CARD))
-    return repay_one(db, user_id="u1", card=card, today=today,
-                     self_call=call), call
+    out = repay_one(db, user_id="u1", card=card, today=today,
+                          self_call=call)
+    return out, call
 
 
 # --------------------------------------------------------------------------- #
@@ -307,11 +310,11 @@ def test_idempotency_key_is_stable_per_period(db) -> None:
     db.commit()
     _run(db)
     assert _last_key(db) == key1, "同一账期的幂等键变了"
-    assert key1 == f"auto-repay:{CARD}:2026-10", key1
+    assert key1 == f"auto-repay:{CARD}:2026-10:5000.00", key1
 
 
 def _last_key(db) -> str:
-    return "auto-repay:%s:2026-10" % CARD
+    return "auto-repay:%s:2026-10:5000.00" % CARD
 
 
 # --------------------------------------------------------------------------- #
@@ -574,3 +577,34 @@ def test_claim_is_checked_before_self_call(monkeypatch, db) -> None:
         f"抢锁失败没有跳过,而是继续执行了:{r}"
     )
     assert call.calls == [], "抢锁失败却仍然发出了还款交易 —— 会重复扣钱"
+
+
+def test_idempotency_key_carries_the_amount(db) -> None:
+    """幂等键必须**带金额**。
+
+    ## 为什么
+
+    服务端的 `Idempotency-Key` 校验会把 payload 一起 hash
+    (`write/_shared.py::_hash_request`):**同 key + 不同 payload → 409**
+    `IDEMPOTENCY_KEY_REUSED`。
+
+    第一版的键是 `auto-repay:{card}:{period}`,不含金额。防线 4 在写失败时
+    撤回 `last_period`,让本期能重试 —— 但重试时**欠款额可能已经变了**
+    (期间又刷了一笔、或上期还款落账)→ 同键不同 payload → 409 →
+    **自动还款彻底卡在这一期,直到 TTL 过期**。
+
+    冒烟测试实测撞到过:清掉 `last_period` 后重试返回 409,查了半天才发现
+    是自己的键设计问题,不是环境问题。
+
+    带金额后:同金额重试仍然幂等(防线 3 生效),不同金额是不同键 ——
+    那本来就是**不同的事**,不该被当成重复。
+
+    防线的分工(别混淆):「同一件事只做一次」由防线 1/2/4 保证,
+    防线 3 只是**短时间重试的保险**。
+    """
+    _setup(db)
+    _spend(db, "t1", 5000.0, date(2026, 9, 20))
+    call = FakeCall()
+    _run(db, call=call)
+    key = call.calls[0]["headers"]["Idempotency-Key"]
+    assert key == f"auto-repay:{CARD}:2026-10:5000.00", key

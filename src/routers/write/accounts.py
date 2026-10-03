@@ -235,10 +235,8 @@ async def run_autorepay_now(
     (`credit_card/scheduler.py::detect_multi_process`),这时用户仍可以
     手动跑一次。也用于验证配置是否生效。
     """
-    from datetime import date
-
     from ...services.credit_card.repay import repay_one
-    from ...services.credit_card.selfcall import make_self_call
+    from ...services.credit_card.selfcall import call_async
 
     card = db.scalar(
         select(UserAccountProjection).where(
@@ -249,10 +247,32 @@ async def run_autorepay_now(
     if card is None:
         raise HTTPException(status_code=404, detail="account not found")
 
+    # `call_async` 是 **async** 函数,直接传进同步的 `repay_one` —— 执行器
+    # 调它得到 coroutine,再用**独立线程**跑完(`repay._resolve`)。
+    # 不能在这个 async 端点里 `run_until_complete`:同一个线程已经有一个
+    # loop 在跑,httpx 会找到它并抛
+    # `Cannot run the event loop while another loop is running`。
+    async def self_call(db, *, method, path, body, headers, user):
+        return await call_async(method=method, path=path, body=body,
+                                headers=headers, user=user)
+
     outcome = repay_one(
-        db, user_id=current_user.id, card=card, today=date.today(),
-        self_call=make_self_call(),
+        db, user_id=current_user.id, card=card, today=_local_today(),
+        self_call=self_call,
     )
+    # **失败必须让用户看到**。`repay_one` 把所有异常包成 `status="failed"`
+    # 返回,端点若照常返回 200,用户看到的是「点了没反应」——
+    # 冒烟测试就是这么发现的:HTTP 200、余额没动、什么提示都没有。
+    if outcome.status == "failed":
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"auto-repayment failed: {outcome.detail}",
+        )
+    if outcome.status == "skipped_invalid_config":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"auto-repayment misconfigured: {outcome.detail}",
+        )
     return WriteCommitMeta(
         ledger_id=ledger_id,
         base_change_id=0,
@@ -264,3 +284,24 @@ async def run_autorepay_now(
         idempotency_replayed=False,
         entity_id=outcome.tx_sync_id or account_id,
     )
+
+
+def _local_today():
+    """当前「本地日期」—— **与调度器同一套时区解析**。
+
+    还款日是本地语义:用户在东京的 25 号刷卡,无论服务器 OS 时区是什么,
+    都该落进 25 号那期。
+
+    这里原本写 `date.today()`(服务器 OS 时区),而调度器用
+    `_resolve_scheduler_tz()`(`SCHEDULER_TIMEZONE` → 本地时区 → UTC)。
+    两者不一致时,「用户手动触发」和「定时任务自动跑」会判定成**不同日期** ——
+    手动触发说「今天不是还款日」而自动跑说「是」,用户完全无法理解。
+
+    冒烟测试实测撞到过这个:VPS 是 UTC,东京用户下午点手动触发,
+    服务器算出来还是前一天。
+    """
+    from datetime import datetime
+
+    from ...services.backup.scheduler import _resolve_scheduler_tz
+
+    return datetime.now(_resolve_scheduler_tz()).date()
