@@ -245,3 +245,70 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 
 **腿没有 currency 字段** —— 与父交易同币种是**结构保证**,不是运行时校验。
 别加「跨币种拆分」检查:那无法表达,只会给出虚假的安全感。
+
+## 新增:信用卡自动还款(alembic `0022`)
+
+一张信用卡绑一个扣款账户,到还款日自动生成一笔
+`from=扣款账户 → to=信用卡` 的 transfer。**父交易就是普通转账**,不新增交易类型。
+
+| 要改的地方 | 文件 |
+|---|---|
+| 账期窗口(纯日期) | `src/services/credit_card/billing.py` |
+| 应还金额(四条规则) | `src/services/credit_card/statement.py` |
+| 配置校验 | `src/services/credit_card/config.py` |
+| 执行器(四道防线) | `src/services/credit_card/repay.py` |
+| 定时任务 | `src/services/credit_card/scheduler.py` |
+| 进程内 self-call | `src/services/credit_card/selfcall.py` |
+| 写路径校验 + 手动触发 | `src/routers/write/accounts.py` |
+| **反向桥(最易漏)** | `src/snapshot_builder.py` |
+| sync merge | `src/sync_applier.py` |
+| 前端 | `lib/autoRepay.ts` + `AccountDetailDialog.tsx` |
+
+### 四条金额规则(漏一条静默算错)
+
+1. 用 `amount` **原币**,禁 `coalesce(native_amount, amount)`
+2. **必须 join 组合支付腿** —— 0021 有腿时父交易 `account_sync_id` 被清空
+3. **不过滤** `exclude_from_stats` / `exclude_from_budget`
+4. 账单不减窗口内还款(那是还上期账单)
+
+### 五个必守的不变式
+
+1. **余额是累计口径**:`balance@账单日 = 期初 + 截止账单日的全部变动`。
+   写成「期初 + 窗口内变动」会丢掉窗口前的还款和转出卡的钱
+2. **`window_start` 在原始 `billing_day` 空间重算**,不能
+   `add_months(statement, -1)`(二次钳制 → 窗口重叠 → 还款额翻倍)
+3. 正向 `current_billing_period` 与反向 `period_for_payment_due_date`
+   **共用 `_payment_due_after()`** —— 各写一套会在
+   `billing_day == payment_due_day` 时给出不同窗口
+4. **孤儿还款日返回 `None`**(`bd=30, dd=29` 时 3/29 不偿还任何账单)
+5. **`autorepay_from_account_sync_id` 存 sync_id 不存名字** —— 改名会让
+   按名定位静默失效 → 同名歧义 → **只扣不加**
+
+### 四道幂等防线(任缺一道可能重复扣钱)
+
+1. 账期查重(`outstanding == 0` 就跳过 —— 这一条顺带满足「手动已还过就跳过」)
+2. `autorepay_last_period`(恰好一次)
+3. `Idempotency-Key: auto-repay:{card}:{YYYY-MM}`(TTL 只有 24h,
+   **不能**作唯一保障)
+4. 数据库条件更新抢锁(`get_scheduler()` 是进程内单例,多 worker 会重复扣钱)
+
+### 三个会烧钱的配置陷阱
+
+| 陷阱 | 后果 |
+|---|---|
+| 多进程部署 | `BackgroundScheduler` 每进程一份 → 每张卡扣 N 次钱。**自动禁用** |
+| `payment_due_day=0` | 调度**永远不触发**,用户半年后才发现没还过 |
+| 跨币种还款 | transfer 两端共用一个 `amount` → ¥10000 原样加到 JPY 卡 |
+
+### 静默丢失的坑(第三次同类)
+
+`tax_amount` 在 `_projection_row_to_tx_dict` 被漏 → `splits` 在同一函数被漏
+→ **`autorepay_*` 在 `snapshot_builder` 被漏**。同一形状:「projection →
+内存结构」的反向桥漏了新列。漏了之后任何一次**无关字段的更新**都会把用户
+配置清空,HTTP 200,不报错。
+
+护栏:`tests/test_credit_autorepay_e2e.py`(端到端穿过全链路,分层测试全绿时
+只有它能抓到)。
+
+**分层测试全绿 ≠ 拼起来能工作。** internal/external 账本 id 混淆就是端到端
+才抓到的 —— 所有分层测试用 FakeCall,没人真发过那个请求。
