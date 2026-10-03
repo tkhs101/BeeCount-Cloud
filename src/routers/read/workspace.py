@@ -9,7 +9,7 @@ from __future__ import annotations
 import statistics as _stats
 
 from pydantic import BaseModel
-from sqlalchemy import false as sa_false
+from sqlalchemy import false as sa_false, literal_column
 
 from ._shared import *  # noqa: F401,F403 — imports + helpers + router
 from ...config import get_settings
@@ -104,6 +104,16 @@ def list_workspace_transactions(
             ReadTxProjection.account_sync_id == account_sync_id,
             ReadTxProjection.from_account_sync_id == account_sync_id,
             ReadTxProjection.to_account_sync_id == account_sync_id,
+            # 组合支付(0021):父交易的三个账户字段在有腿时**被强制清空**
+            # (否则余额双倍扣),所以上面三个条件全不命中 —— 打开账户详情
+            # 会看不到这笔组合支付。加一条腿表的存在性判断。
+            select(literal_column("1"))
+            .where(
+                ReadTxSplitProjection.ledger_id == ReadTxProjection.ledger_id,
+                ReadTxSplitProjection.tx_sync_id == ReadTxProjection.sync_id,
+                ReadTxSplitProjection.account_sync_id == account_sync_id,
+            )
+            .exists(),
         ))
     if q:
         pattern = f"%{q}%"

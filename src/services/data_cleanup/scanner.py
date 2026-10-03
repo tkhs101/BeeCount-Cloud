@@ -36,6 +36,7 @@ def scan_all(db: Session, *, attachments_root: Path | None = None) -> ScanReport
     db_orphans = [
         *_scan_tx_missing_category(db),
         *_scan_tx_missing_account(db),
+        *_scan_tx_split_missing_account(db),
         *_scan_tx_missing_from_account(db),
         *_scan_tx_missing_to_account(db),
         *_scan_budget_missing_category(db),
@@ -87,6 +88,42 @@ def _scan_tx_missing_category(db: Session) -> list[OrphanRecord]:
             title=f"交易 {row.sync_id[:8]} (¥{row.amount:.2f})",
             subtitle=f"分类已删 categorySyncId={row.category_sync_id[:8]}…",
             extra={"ledger_id": row.ledger_id, "sync_id": row.sync_id},
+        )
+        for row in db.execute(stmt).all()
+    ]
+
+
+def _scan_tx_split_missing_account(db: Session) -> list[OrphanRecord]:
+    """组合支付(0021)的腿引用了已删除的账户。
+
+    正常情况下 `delete_account` 的守卫会拦住,但守卫只对 **web write API**
+    生效(mobile 走 sync_applier 不经过 snapshot_mutator,历史上就允许孤儿)。
+    所以这是最后一道网 —— 没有它,悬空腿会让余额永久漂移且不报任何错。
+    """
+    from ...models import ReadTxSplitProjection
+
+    acc = UserAccountProjection
+    leg = ReadTxSplitProjection
+    stmt = (
+        select(leg.ledger_id, leg.tx_sync_id, leg.seq, leg.account_sync_id,
+               leg.amount)
+        .where(
+            ~select(literal_column("1"))
+            .where(acc.sync_id == leg.account_sync_id)
+            .select_from(acc)
+            .exists()
+        )
+    )
+    return [
+        OrphanRecord(
+            type=OrphanType.TX_SPLIT_MISSING_ACCOUNT,
+            user_id="",
+            row_id=f"{row.ledger_id}:{row.tx_sync_id}:{row.seq}",
+            sync_id=row.tx_sync_id,
+            title=f"组合支付 {row.tx_sync_id[:8]} 第 {row.seq} 条腿",
+            subtitle=f"账户已删 accountSyncId={row.account_sync_id[:8]}…",
+            extra={"ledger_id": row.ledger_id, "sync_id": row.tx_sync_id,
+                   "seq": row.seq, "field": "account_sync_id"},
         )
         for row in db.execute(stmt).all()
     ]

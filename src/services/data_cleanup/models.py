@@ -21,6 +21,9 @@ class OrphanType(str, Enum):
     # A 类:DB 引用断链
     TX_MISSING_CATEGORY = "tx_missing_category"
     TX_MISSING_ACCOUNT = "tx_missing_account"
+    # 组合支付(0021):腿引用的账户已删。父交易的三个账户字段在有腿时
+    # 被强制清空,所以现有的 A2 扫描扫不到它。
+    TX_SPLIT_MISSING_ACCOUNT = "tx_split_missing_account"
     TX_MISSING_FROM_ACCOUNT = "tx_missing_from_account"
     TX_MISSING_TO_ACCOUNT = "tx_missing_to_account"
     BUDGET_MISSING_CATEGORY = "budget_missing_category"

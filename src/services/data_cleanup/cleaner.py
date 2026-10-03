@@ -120,6 +120,10 @@ def _dispatch(db: Session, r: OrphanRecord, file_ops: list) -> None:
         _clear_tx_field(db, r, "from_account_sync_id", "from_account_name")
     elif t == OrphanType.TX_MISSING_TO_ACCOUNT:
         _clear_tx_field(db, r, "to_account_sync_id", "to_account_name")
+    elif t == OrphanType.TX_SPLIT_MISSING_ACCOUNT:
+        # 组合支付(0021):删掉这条悬空的腿。**不做「把腿并回父交易账户」**
+        # —— 那要凭空编一个账户,等于伪造数据。
+        _delete_tx_split_leg(db, r)
     elif t == OrphanType.BUDGET_MISSING_CATEGORY:
         _clear_budget_category(db, r)
     elif t == OrphanType.SYNC_CHANGE_MISSING_ENTITY:
@@ -269,3 +273,24 @@ def _strip_broken_attachments(db: Session, r: OrphanRecord) -> None:
         if not (isinstance(a, dict) and a.get("cloudFileId") in broken_set)
     ]
     obj.attachments_json = json.dumps(kept) if kept else None
+
+
+def _delete_tx_split_leg(db: Session, r: OrphanRecord) -> None:
+    """删掉一条引用了已删账户的拆分腿(0021 孤儿清理)。
+
+    删掉之后这笔交易的腿数会变少,`sum(legs) != amount`,于是下一次 PATCH 时
+    mutator 的自洽性校验会把它降级清空(带 warning)。这是有意的:宁可让一笔
+    组合支付退回「无账户的支出」,也不要留一条指向不存在账户的腿让余额漂移。
+    """
+    from ...models import ReadTxSplitProjection
+
+    ledger_id = str((r.extra or {}).get("ledger_id") or "")
+    sync_id = str((r.extra or {}).get("sync_id") or "")
+    seq = (r.extra or {}).get("seq")
+    if not ledger_id or not sync_id or seq is None:
+        return
+    db.query(ReadTxSplitProjection).filter(
+        ReadTxSplitProjection.ledger_id == ledger_id,
+        ReadTxSplitProjection.tx_sync_id == sync_id,
+        ReadTxSplitProjection.seq == int(seq),
+    ).delete(synchronize_session=False)
