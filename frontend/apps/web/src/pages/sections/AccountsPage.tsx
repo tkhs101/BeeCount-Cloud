@@ -37,6 +37,8 @@ import {
   useToast,
 } from '@beecount/ui'
 import { accountBalance,
+  hasBankName,
+  hasCardLastFour,
   AccountsPanel,
   Amount,
   AssetsCompositionMini,
@@ -262,7 +264,8 @@ export function AccountsPage() {
     }
     try {
       const isCreditCard = form.account_type === 'credit_card'
-      const isBankOrCredit = isCreditCard || form.account_type === 'bank_card'
+      const showBank = hasBankName(form.account_type || '')
+      const showCard = hasCardLastFour(form.account_type || '')
       const payload = {
         name: trimmedName,
         account_type: form.account_type || null,
@@ -274,8 +277,8 @@ export function AccountsPage() {
         credit_limit: isCreditCard ? creditLimitNum : null,
         billing_day: isCreditCard ? billingDayNum : null,
         payment_due_day: isCreditCard ? paymentDueDayNum : null,
-        bank_name: isBankOrCredit ? form.bank_name.trim() || null : null,
-        card_last_four: isBankOrCredit ? form.card_last_four.trim() || null : null,
+        bank_name: showBank ? form.bank_name.trim() || null : null,
+        card_last_four: showCard ? form.card_last_four.trim() || null : null,
         // 账户隐藏(issue #240):新建默认 false;编辑时带当前切换状态。
         hidden: form.hidden,
       }

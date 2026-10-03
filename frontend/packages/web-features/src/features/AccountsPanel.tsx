@@ -32,6 +32,7 @@ import {
   LIABILITY_TYPES,
   splitByCurrency
 } from '../lib/assetAggregation'
+import { hasBankName, hasCardLastFour } from '../lib/accountTypeCaps'
 import { useSingleFlight } from '../lib/singleFlight'
 
 
@@ -560,6 +561,7 @@ export function AssetsCompositionMini({
  *    没有 stats（老接口 / 空账户）时回退到只展示初始余额。
  */
 const VALUATION_TYPES_SET = new Set([
+  'receivable',
   'real_estate',
   'vehicle',
   'investment',
@@ -848,13 +850,16 @@ function StatCell({
 // 顺序——顺序决定了分组/下拉里的展示顺序。
 const TRADABLE_TYPES: { value: string }[] = [
   { value: 'cash' },
+  { value: 'bank_account' },   // 银行账户(普通存款):只记余额 / 振込,没有卡
   { value: 'bank_card' },
   { value: 'credit_card' },
+  { value: 'point_card' },     // 积分卡:1 积分 = 1 日元,手动记账
   { value: 'alipay' },
   { value: 'wechat' },
   { value: 'other' }
 ]
 const VALUATION_TYPES: { value: string }[] = [
+  { value: 'receivable' },     // 应收款:别人欠你的钱,余额为正 = 资产
   { value: 'real_estate' },
   { value: 'vehicle' },
   { value: 'investment' },
@@ -868,11 +873,14 @@ const VALUATION_TYPES: { value: string }[] = [
 // 打包到 bundle）。`other` 回退到 `other_account.svg`，其它直接同名。
 const TYPE_ICON_URL: Record<string, string> = {
   cash: '/icons/account/cash.svg',
+  bank_account: '/icons/account/bank_account.svg',
   bank_card: '/icons/account/bank_card.svg',
   credit_card: '/icons/account/credit_card.svg',
+  point_card: '/icons/account/point_card.svg',
   alipay: '/icons/account/alipay.svg',
   wechat: '/icons/account/wechat.svg',
   other: '/icons/account/other_account.svg',
+  receivable: '/icons/account/receivable.svg',
   real_estate: '/icons/account/real_estate.svg',
   vehicle: '/icons/account/vehicle.svg',
   investment: '/icons/account/investment.svg',
@@ -899,11 +907,14 @@ function TypeIcon({ type, size = 28 }: { type: string; size?: number }) {
 // 的配色保持一致，这样 overview 的饼图和这里的分组颜色呼应。
 const TYPE_COLORS: Record<string, string> = {
   cash: '#10b981',
+  bank_account: '#0d9488',
   bank_card: '#3b82f6',
   credit_card: '#ef4444',
+  point_card: '#d97706',
   alipay: '#06b6d4',
   wechat: '#22c55e',
   other: '#64748b',
+  receivable: '#14b8a6',
   real_estate: '#8b5cf6',
   vehicle: '#f59e0b',
   investment: '#ec4899',
@@ -1195,11 +1206,14 @@ export function AccountsPanel({
                       next.billing_day = ''
                       next.payment_due_day = ''
                     }
-                    // 离开 bank_card / credit_card → 清空银行卡元信息
-                    const wasBankOrCredit = form.account_type === 'bank_card' || form.account_type === 'credit_card'
-                    const isBankOrCredit = value === 'bank_card' || value === 'credit_card'
-                    if (wasBankOrCredit && !isBankOrCredit) {
+                    // 按**能力**分别清空,不是一刀切。
+                    // bank_account(普通存款)也要填开户行 —— 若沿用旧的
+                    // `wasBankOrCredit && !isBankOrCredit` 判据,从 bank_card
+                    // 切到 bank_account 会把已填的开户行清掉,用户得重填。
+                    if (hasBankName(form.account_type) && !hasBankName(value)) {
                       next.bank_name = ''
+                    }
+                    if (hasCardLastFour(form.account_type) && !hasCardLastFour(value)) {
                       next.card_last_four = ''
                     }
                     onFormChange(next)
@@ -1295,8 +1309,9 @@ export function AccountsPanel({
               </div>
             ) : null}
 
-            {/* 银行卡 / 信用卡 元信息:开户行 + 卡号后四位。 */}
-            {form.account_type === 'bank_card' || form.account_type === 'credit_card' ? (
+            {/* 开户行 / 卡号后四位 —— 按类型能力渲染。
+                bank_account(普通存款)只有开户行,没有卡号。 */}
+            {hasBankName(form.account_type) ? (
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-1">
                   <Label>{t('accounts.field.bankName')}</Label>
@@ -1306,6 +1321,7 @@ export function AccountsPanel({
                     onChange={(e) => onFormChange({ ...form, bank_name: e.target.value })}
                   />
                 </div>
+                {hasCardLastFour(form.account_type) ? (
                 <div className="space-y-1">
                   <Label>{t('accounts.field.cardLastFour')}</Label>
                   <Input
@@ -1320,6 +1336,7 @@ export function AccountsPanel({
                     }}
                   />
                 </div>
+                ) : null}
               </div>
             ) : null}
 

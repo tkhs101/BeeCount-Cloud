@@ -12,11 +12,14 @@ interface Props {
 // 与 AccountsPanel 里的 TRADABLE / VALUATION 分组 + 颜色一致。
 const TYPE_META: Record<string, { color: string; group: 'asset' | 'liability' }> = {
   cash: { color: '#10b981', group: 'asset' },
+  bank_account: { color: '#0d9488', group: 'asset' },
   bank_card: { color: '#3b82f6', group: 'asset' },
   credit_card: { color: '#ef4444', group: 'liability' },
+  point_card: { color: '#d97706', group: 'asset' },
   alipay: { color: '#06b6d4', group: 'asset' },
   wechat: { color: '#22c55e', group: 'asset' },
   other: { color: '#64748b', group: 'asset' },
+  receivable: { color: '#14b8a6', group: 'asset' },
   real_estate: { color: '#8b5cf6', group: 'asset' },
   vehicle: { color: '#f59e0b', group: 'asset' },
   investment: { color: '#ec4899', group: 'asset' },

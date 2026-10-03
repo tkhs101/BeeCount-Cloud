@@ -858,7 +858,9 @@ async def create_account(
         name: Account name, unique within the ledger.
         account_type: cash / bank_card / credit_card / alipay / wechat /
             loan / investment / insurance / social_fund / vehicle /
-            real_estate / other_account.
+            real_estate / receivable / other_account. 本 fork 另加:
+            `bank_account`(银行普通存款户口,只记余额 / 振込)与 `point_card`
+            (积分卡,口径 1 积分 = 1 日元)。
         currency: ISO code. **Set it explicitly for foreign-currency
             accounts** (e.g. a CNY salary card in a JPY ledger) — otherwise
             amounts get booked in the ledger's base currency.

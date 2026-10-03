@@ -17,6 +17,7 @@ interface Props {
  * 参与日常记账，放进"活跃度"排行会干扰视觉。
  */
 const EXCLUDE_TYPES = new Set([
+  'receivable',
   'real_estate',
   'vehicle',
   'investment',
@@ -28,16 +29,20 @@ const EXCLUDE_TYPES = new Set([
 // 账户类型 → 品牌 SVG 路径（与 AccountsPanel 一致，无导出引用降低耦合）
 const TYPE_ICON_URL: Record<string, string> = {
   cash: '/icons/account/cash.svg',
+  bank_account: '/icons/account/bank_account.svg',
   bank_card: '/icons/account/bank_card.svg',
   credit_card: '/icons/account/credit_card.svg',
+  point_card: '/icons/account/point_card.svg',
   alipay: '/icons/account/alipay.svg',
   wechat: '/icons/account/wechat.svg',
   other: '/icons/account/other_account.svg'
 }
 const TYPE_COLORS: Record<string, string> = {
   cash: '#10b981',
+  bank_account: '#0d9488',
   bank_card: '#3b82f6',
   credit_card: '#ef4444',
+  point_card: '#d97706',
   alipay: '#06b6d4',
   wechat: '#22c55e',
   other: '#64748b'

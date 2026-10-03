@@ -40,11 +40,28 @@ from .write_tools import _resolve_write_ledger, _self_call
 
 logger = logging.getLogger(__name__)
 
-# 与 mobile lib/data/db.dart 的账户类型对齐(AccountType enum)
+# 与 mobile lib/data/db.dart 的账户类型对齐(AccountType enum),外加本 fork
+# 新增的三种(mobile 那边还没有):
+#   bank_account —— 银行普通存款户口。只用来记余额 / 振込,没有卡。
+#   point_card   —— 积分卡。本 fork 口径:1 积分 = 1 日元,返积分手动记为收入
+#                   (所以本月收入会含返积分 —— 这是有意的,不是 bug)。
+#   receivable   —— 应收款。**资产**方向(别人欠你钱,余额为正),
+#                   所以故意不在 workspace.py 的 is_liab 集合里。
+#
+# ⚠️ 值统一用 `other`,**不是** `other_account` —— 后者只是图标文件名
+# (`/icons/account/other_account.svg`),从来不是 account_type 的值。
+# 之前这份白名单写的是 `other_account`,而前端下拉用的是 `other`,于是
+# `create_account(account_type="other_account")` 建出来的账户会被前端
+# `computeTypeGroups` 静默丢弃:不显示在账户列表,但照常计入 hero 净值和
+# 饼图 —— 用户看到「总资产里有这笔钱但列表里找不到」。这正是
+# tests/test_account_type_parity.py 守的 bug 类,由它抓出来的。
+#
+# 服务端的写入路径其实**不校验** account_type(自由文本列),这个白名单只管
+# MCP 工具。前端下拉是另一份列表 —— 护栏断言两边一致。
 VALID_ACCOUNT_TYPES = {
-    "cash", "bank_card", "credit_card", "alipay", "wechat", "loan",
-    "investment", "insurance", "social_fund", "vehicle", "real_estate",
-    "other_account",
+    "cash", "bank_account", "bank_card", "credit_card", "point_card",
+    "alipay", "wechat", "loan", "investment", "insurance", "social_fund",
+    "vehicle", "real_estate", "receivable", "other",
 }
 
 

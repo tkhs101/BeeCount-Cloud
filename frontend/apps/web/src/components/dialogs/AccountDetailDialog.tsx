@@ -10,7 +10,12 @@ import {
   DialogTitle,
   useT
 } from '@beecount/ui'
-import { accountBalance, TransactionList } from '@beecount/web-features'
+import {
+  accountBalance,
+  hasBankName,
+  hasCardLastFour,
+  TransactionList
+} from '@beecount/web-features'
 import { Banknote, Calendar as CalendarIcon, CreditCard } from 'lucide-react'
 
 import { useAuth } from '../../context/AuthContext'
@@ -186,11 +191,14 @@ function AccountCardInfo({
 }) {
   const accountType = account.account_type || ''
   const isCreditCard = accountType === 'credit_card'
-  const isBankOrCredit = isCreditCard || accountType === 'bank_card'
-  if (!isBankOrCredit) return null
+  // 按能力判定,不 `isBankOrCredit` 一个布尔 —— bank_account(普通存款)
+  // 要显示开户行但没有卡号,一个布尔表达不了。
+  const showBank = hasBankName(accountType)
+  const showCard = hasCardLastFour(accountType)
+  if (!showBank && !showCard) return null
 
-  const bankName = account.bank_name?.trim() || ''
-  const cardLastFour = account.card_last_four?.trim() || ''
+  const bankName = showBank ? (account.bank_name?.trim() || '') : ''
+  const cardLastFour = showCard ? (account.card_last_four?.trim() || '') : ''
   const creditLimit = isCreditCard ? account.credit_limit : null
   const billingDay = isCreditCard ? account.billing_day : null
   const paymentDueDay = isCreditCard ? account.payment_due_day : null
