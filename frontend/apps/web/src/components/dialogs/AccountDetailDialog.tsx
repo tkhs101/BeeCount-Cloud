@@ -10,7 +10,7 @@ import {
   DialogTitle,
   useT
 } from '@beecount/ui'
-import { TransactionList } from '@beecount/web-features'
+import { accountBalance, TransactionList } from '@beecount/web-features'
 import { Banknote, Calendar as CalendarIcon, CreditCard } from 'lucide-react'
 
 import { useAuth } from '../../context/AuthContext'
@@ -110,7 +110,7 @@ function AccountStatsHeader({
   t: (key: string) => string
 }) {
   const hasServerStats = typeof account.balance === 'number'
-  const balance = hasServerStats ? account.balance! : account.initial_balance ?? 0
+  const balance = accountBalance(account)
   const fmt = (v: number) =>
     v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
@@ -206,7 +206,7 @@ function AccountCardInfo({
   // expense / transfer-in / transfer-out,跟 mobile 端
   // `getCreditCardUsedAmount` (balance < 0 ? -balance : 0) 完全一致。
   // 修复 issue #26:储蓄卡转账到信用卡额度没恢复。
-  const balance = account.balance ?? account.initial_balance ?? 0
+  const balance = accountBalance(account)
   const used =
     typeof creditLimit === 'number' ? Math.max(0, -balance) : null
   const remaining =

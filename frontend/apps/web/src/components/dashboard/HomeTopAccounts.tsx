@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, useT } from '@beecount/ui'
 
 import type { WorkspaceAccount } from '@beecount/api-client'
-import { Amount } from '@beecount/web-features'
+import { accountBalance, Amount } from '@beecount/web-features'
 
 interface Props {
   accounts: WorkspaceAccount[]
@@ -54,7 +54,7 @@ export function HomeTopAccounts({ accounts, currency = 'CNY', onSelectAccount }:
         name: a.name,
         type: a.account_type || 'other',
         count: a.tx_count ?? 0,
-        balance: a.balance ?? a.initial_balance ?? 0,
+        balance: accountBalance(a),
         expense: a.expense_total ?? 0
       }))
       .filter((a) => a.count > 0)

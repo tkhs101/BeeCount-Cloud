@@ -36,7 +36,7 @@ import {
   useT,
   useToast,
 } from '@beecount/ui'
-import {
+import { accountBalance,
   AccountsPanel,
   Amount,
   AssetsCompositionMini,
@@ -324,7 +324,7 @@ export function AccountsPage() {
 
   const openBalanceAdjustment = (row: ReadAccount) => {
     const workspaceRow = rows.find((item) => item.id === row.id) || (row as WorkspaceAccount)
-    const current = workspaceRow.balance ?? workspaceRow.initial_balance ?? 0
+    const current = accountBalance(workspaceRow)
     setBalanceAdjustment({
       row: workspaceRow,
       target: current.toFixed(2),
@@ -359,7 +359,7 @@ export function AccountsPage() {
       const freshRows = await fetchWorkspaceAccounts(token, { limit: 500 })
       const row = freshRows.find((item) => item.id === balanceAdjustment.row.id)
       if (!row) throw new Error('account not found')
-      const current = row.balance ?? row.initial_balance ?? 0
+      const current = accountBalance(row)
       const difference = target - current
       if (Math.abs(difference) < 0.0000001) {
         setBalanceAdjustment(null)

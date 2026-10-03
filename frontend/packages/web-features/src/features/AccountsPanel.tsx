@@ -602,7 +602,7 @@ function BankCardTile({
     row.balance !== undefined &&
     typeof row.balance === 'number'
   // 展示余额：优先用 stats.balance（考虑所有交易后的结果），否则 initial_balance。
-  const displayBalance = hasStats ? (row.balance as number) : row.initial_balance ?? 0
+  const displayBalance = accountBalance(row)
   // 估值账户：负债显示绝对值欠款，资产显示当前估值。
   const valuationValue = isLiability ? Math.abs(displayBalance) : displayBalance
   // 信用卡：按负债展示。已用 = max(0, -balance),可用 = 额度 - 已用(对齐 mobile）。

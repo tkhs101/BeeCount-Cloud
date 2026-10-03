@@ -307,10 +307,10 @@ async def get_account_balance(
         account_id / account: 指定一个账户;都不传则返回全部 + 合计。
         ledger_id: 可选;多账本时不传会要求先澄清。
     """
-    from sqlalchemy import case as sa_case
-    from sqlalchemy import func
-
-    from ...models import ReadTxProjection
+    from ...routers.read._shared import (
+        account_balance_from_stats,
+        account_balance_stats,
+    )
 
     with SessionLocal() as db:
         ext, status = _resolve_target(db, user, ledger_id)
@@ -334,46 +334,20 @@ async def get_account_balance(
             if not accounts:
                 raise ValueError(f"Account not found: {want!r}")
 
-        # income / expense 合计(按 account_sync_id)
-        main = {
-            r[0]: float(r[1] or 0.0)
-            for r in db.execute(
-                select(
-                    ReadTxProjection.account_sync_id,
-                    func.coalesce(func.sum(sa_case(
-                        (ReadTxProjection.tx_type == "income", ReadTxProjection.amount),
-                        (ReadTxProjection.tx_type == "expense", -ReadTxProjection.amount),
-                        else_=0.0,
-                    )), 0.0),
-                ).where(
-                    ReadTxProjection.ledger_id == ledger.id,
-                    ReadTxProjection.account_sync_id.is_not(None),
-                ).group_by(ReadTxProjection.account_sync_id)
-            ).all()
-        }
-        # 转账:转出为负、转入为正
-        xfer: dict[str, float] = {}
-        for col, sign in (
-            (ReadTxProjection.from_account_sync_id, -1.0),
-            (ReadTxProjection.to_account_sync_id, 1.0),
-        ):
-            for sid, amt in db.execute(
-                select(
-                    col,
-                    func.coalesce(func.sum(ReadTxProjection.amount), 0.0),
-                ).where(
-                    ReadTxProjection.ledger_id == ledger.id,
-                    col.is_not(None),
-                ).group_by(col)
-            ).all():
-                xfer[str(sid)] = xfer.get(str(sid), 0.0) + sign * float(amt or 0.0)
+        # 余额变动委托给 read/_shared.account_balance_stats —— 这段 SQL 原本
+        # 在这里是**第二份逐字重复**的实现(第一份在 read/workspace.py)。
+        # 漏改一处的表现是「LLM 说的余额和 Web 显示的不一致」,而两边的单测
+        # 各自都绿(它们测的是不同端点)。
+        stats = account_balance_stats(db, [ledger.id])
 
         base_currency = ledger.currency
         out: list[dict[str, Any]] = []
         total = 0.0
         for acct in accounts:
             sid = str(acct.sync_id)
-            bal = float(acct.initial_balance or 0.0) + main.get(sid, 0.0) + xfer.get(sid, 0.0)
+            bal = account_balance_from_stats(
+                sid, float(acct.initial_balance or 0.0), stats
+            )
             total += bal
             out.append({
                 "sync_id": sid,

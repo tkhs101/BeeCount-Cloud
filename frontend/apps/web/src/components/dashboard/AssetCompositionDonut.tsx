@@ -1,5 +1,6 @@
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 import type { WorkspaceAccount } from '@beecount/api-client'
+import { accountBalance } from '@beecount/web-features'
 import { Card, CardContent, CardHeader, CardTitle, useLocale, useT } from '@beecount/ui'
 
 import { formatCompactTick } from '../../i18n/format'
@@ -37,10 +38,10 @@ export function AssetCompositionDonut({ accounts }: Props) {
     // 用 balance(= initial_balance + 净流水)而非 initial_balance。用户常常
     // 把初始余额留 0,靠日常记账累积现金/微信/支付宝等账户流水 —— 若只看
     // initial_balance,donut 会全空;资产页走 balance 兜底所以正常。
-    const raw = typeof a.balance === 'number' && a.balance !== null
-      ? a.balance
-      : a.initial_balance ?? 0
-    totals.set(key, (totals.get(key) || 0) + raw)
+    // 走 assetAggregation.accountBalance() —— 原本这里 inline 重写了一遍
+    // `balance ?? initial_balance`,是全前端第 1 份绕过唯一入口的副本。
+    // 入口的注释白纸黑字写着「抽出 lib 是为了锁住不跨币种合并这个契约」。
+    totals.set(key, (totals.get(key) || 0) + accountBalance(a))
   }
   const allRows = Array.from(totals.entries())
     .map(([type, signed]) => ({

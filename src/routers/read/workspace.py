@@ -570,65 +570,10 @@ def list_workspace_accounts(
     # 分桶 —— 否则后面的 dedup(`best_by_key` 按 last_change_id 留一份 ledger
     # 下的 account)会跟 tx 聚合的 ledger 对不上,tx_count 永远 miss。
     # 用户可见 ledger 范围靠 `ledger_id IN ledger_internal_ids` 限定。
-    from sqlalchemy import case as sa_case
-
-    # Main account stats: income + expense,按 account_sync_id 聚合
-    main_stats = db.execute(
-        select(
-            ReadTxProjection.account_sync_id,
-            func.count().label("cnt"),
-            func.coalesce(func.sum(sa_case(
-                (ReadTxProjection.tx_type == "income", ReadTxProjection.amount),
-                else_=0.0)), 0.0).label("income"),
-            func.coalesce(func.sum(sa_case(
-                (ReadTxProjection.tx_type == "expense", ReadTxProjection.amount),
-                else_=0.0)), 0.0).label("expense"),
-        ).where(
-            ReadTxProjection.ledger_id.in_(ledger_internal_ids),
-            ReadTxProjection.account_sync_id.is_not(None),
-            ReadTxProjection.tx_type.in_(["income", "expense"]),
-        ).group_by(ReadTxProjection.account_sync_id)
-    ).all()
-
-    # Transfer balance effects: from_account = minus, to_account = plus
-    transfer_from = db.execute(
-        select(
-            ReadTxProjection.from_account_sync_id,
-            func.count().label("cnt"),
-            func.coalesce(func.sum(ReadTxProjection.amount), 0.0).label("amt"),
-        ).where(
-            ReadTxProjection.ledger_id.in_(ledger_internal_ids),
-            ReadTxProjection.tx_type == "transfer",
-            ReadTxProjection.from_account_sync_id.is_not(None),
-        ).group_by(ReadTxProjection.from_account_sync_id)
-    ).all()
-    transfer_to = db.execute(
-        select(
-            ReadTxProjection.to_account_sync_id,
-            func.count().label("cnt"),
-            func.coalesce(func.sum(ReadTxProjection.amount), 0.0).label("amt"),
-        ).where(
-            ReadTxProjection.ledger_id.in_(ledger_internal_ids),
-            ReadTxProjection.tx_type == "transfer",
-            ReadTxProjection.to_account_sync_id.is_not(None),
-        ).group_by(ReadTxProjection.to_account_sync_id)
-    ).all()
-
-    # 合并成 per-account 的 dict(跨 ledger,key 只是 sync_id)
-    stats: dict[str, dict[str, float | int]] = {}
-    for acc, cnt, inc, exp in main_stats:
-        stats[acc] = {"count": int(cnt), "income": float(inc),
-                      "expense": float(exp), "balance": float(inc) - float(exp)}
-    for acc, cnt, amt in transfer_from:
-        bucket = stats.setdefault(acc,
-                                   {"count": 0, "income": 0.0, "expense": 0.0, "balance": 0.0})
-        bucket["count"] = int(bucket["count"]) + int(cnt)
-        bucket["balance"] = float(bucket["balance"]) - float(amt)
-    for acc, cnt, amt in transfer_to:
-        bucket = stats.setdefault(acc,
-                                   {"count": 0, "income": 0.0, "expense": 0.0, "balance": 0.0})
-        bucket["count"] = int(bucket["count"]) + int(cnt)
-        bucket["balance"] = float(bucket["balance"]) + float(amt)
+    # 聚合委托给 read/_shared.account_balance_stats —— 这段 SQL 原本在仓库里
+    # 有**两份逐字重复**的实现(MCP 的 get_account_balance 是另一份),漏改一处
+    # 就会出现「账户页对、净值曲线错」。见该函数的 docstring。
+    stats = account_balance_stats(db, ledger_internal_ids)
 
     # user-global 重构:account 是 per-user 表,直接按 user_id 拉,不再 per-ledger
     # 重复存 + dedup。target_user 是 admin 模式下指定的 user_id,否则 caller。
@@ -1376,16 +1321,11 @@ def workspace_net_worth_history(
     bal = dict(init_by_acc)
 
     def _apply(tx_type, amt, acc, from_acc, to_acc):
-        if tx_type == "income" and acc in bal:
-            bal[acc] += amt
-        elif tx_type == "expense" and acc in bal:
-            bal[acc] -= amt
-        elif tx_type == "transfer":
-            fa, ta = from_acc or acc, to_acc
-            if fa in bal:
-                bal[fa] -= amt
-            if ta in bal:
-                bal[ta] += amt
+        # 委托给 read/_shared.account_balance_delta —— 与
+        # account_balance_stats(SQL 聚合版)必须同口径,两处各写一遍迟早漂移。
+        for sid, delta in account_balance_delta(tx_type, amt, acc, from_acc, to_acc).items():
+            if sid in bal:          # 未知账户仍静默丢弃(保持原行为)
+                bal[sid] += delta
 
     def _net():
         # 折算到主币种:各账户余额 × 该币种汇率;缺汇率(或无 base)的账户整条剔除,

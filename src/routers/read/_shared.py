@@ -17,6 +17,7 @@ _get_latest_change_id / snapshot_cache 相关 / Flutter ↔ server 字段转换 
 import json
 import math
 from datetime import datetime, timedelta, timezone
+from collections.abc import Sequence
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -427,6 +428,151 @@ def _to_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def account_balance_stats(
+    db: Session, ledger_internal_ids: Sequence[str]
+) -> dict[str, dict[str, float | int]]:
+    """按 `account_sync_id` 聚合账户的收支/转账/笔数 → 余额变动。
+
+    返回 `{account_sync_id: {"count", "income", "expense", "balance"}}`,
+    其中 `balance` 是**变动额**(不含期初),调用方自己加 `initial_balance`。
+
+    ## 为什么抽出来
+
+    这段 SQL 之前在仓库里有**两份逐字重复**的实现:
+
+    - `read/workspace.py` 的 `list_workspace_accounts`
+    - `mcp/tools/entity_tools.py` 的 `get_account_balance`(我加的,注释里
+      还写「口径与 server 的 /read/workspace/accounts 逐字对应」)
+
+    两处互相担保、却各自演化。以后要改余额语义(比如加组合支付拆分),
+    漏改一处的表现是「账户页对、净值曲线错」或「LLM 说的余额和 Web 显示的
+    不一致」—— 而两边的单测各自都绿(它们测的是不同端点)。所以收敛到一处。
+
+    ## 口径(两处原本就必须一致的东西)
+
+    - 金额读 **`amount` 原币**,不折本位币 —— 与 `_projection_totals` 的
+      账本维度口径**故意不同**,那里折本位币,这里不折(账户是原币余额)。
+    - 跨账本聚合:`ledger_id IN (...)`,按 `account_sync_id` 分组。
+      不能按 `(ledger, account)` 分桶,否则后面的 dedup 会跟 tx 聚合对不上。
+    - 转账对两端分别计:`from_account` 减、`to_account` 加。
+    """
+    from sqlalchemy import case as sa_case
+
+    if not ledger_internal_ids:
+        return {}
+
+    stats: dict[str, dict[str, float | int]] = {}
+
+    def _bucket(acc: str) -> dict[str, float | int]:
+        return stats.setdefault(
+            acc, {"count": 0, "income": 0.0, "expense": 0.0, "balance": 0.0}
+        )
+
+    for acc, cnt, inc, exp in db.execute(
+        select(
+            ReadTxProjection.account_sync_id,
+            func.count().label("cnt"),
+            func.coalesce(func.sum(sa_case(
+                (ReadTxProjection.tx_type == "income", ReadTxProjection.amount),
+                else_=0.0)), 0.0).label("income"),
+            func.coalesce(func.sum(sa_case(
+                (ReadTxProjection.tx_type == "expense", ReadTxProjection.amount),
+                else_=0.0)), 0.0).label("expense"),
+        ).where(
+            ReadTxProjection.ledger_id.in_(ledger_internal_ids),
+            ReadTxProjection.account_sync_id.is_not(None),
+            ReadTxProjection.tx_type.in_(["income", "expense"]),
+        ).group_by(ReadTxProjection.account_sync_id)
+    ).all():
+        stats[acc] = {
+            "count": int(cnt), "income": float(inc),
+            "expense": float(exp), "balance": float(inc) - float(exp),
+        }
+
+    for acc, cnt, amt in _transfer_legs(
+        db, ledger_internal_ids, ReadTxProjection.from_account_sync_id
+    ):
+        b = _bucket(acc)
+        b["count"] = int(b["count"]) + int(cnt)
+        b["balance"] = float(b["balance"]) - float(amt)
+
+    for acc, cnt, amt in _transfer_legs(
+        db, ledger_internal_ids, ReadTxProjection.to_account_sync_id
+    ):
+        b = _bucket(acc)
+        b["count"] = int(b["count"]) + int(cnt)
+        b["balance"] = float(b["balance"]) + float(amt)
+
+    return stats
+
+
+def _transfer_legs(db: Session, ledger_internal_ids: Sequence[str], column: Any):
+    """转账某一端(转出/转入)按账户聚合的 (sync_id, count, amount)。"""
+    return db.execute(
+        select(
+            column,
+            func.count().label("cnt"),
+            func.coalesce(func.sum(ReadTxProjection.amount), 0.0).label("amt"),
+        ).where(
+            ReadTxProjection.ledger_id.in_(ledger_internal_ids),
+            ReadTxProjection.tx_type == "transfer",
+            column.is_not(None),
+        ).group_by(column)
+    ).all()
+
+
+def account_balance_from_stats(
+    account_sync_id: str,
+    initial_balance: float,
+    stats: dict[str, dict[str, float | int]] | None,
+) -> float:
+    """期初 + 变动 → 余额。`stats` 没有该账户时返回期初。"""
+    row = (stats or {}).get(account_sync_id)
+    if not row:
+        return initial_balance
+    return initial_balance + float(row["balance"])
+
+
+def account_balance_delta(
+    tx_type: str | None,
+    amount: float,
+    account_sync_id: str | None,
+    from_account_sync_id: str | None = None,
+    to_account_sync_id: str | None = None,
+) -> dict[str, float]:
+    """一笔交易对**各个账户**余额的影响 -> `{account_sync_id: delta}`。
+
+    这是 `account_balance_stats` 的「逐笔版本」。两者**必须同口径** ——
+    前者给账户列表 / MCP 做整体聚合,后者给净值历史按时间逐笔推进。
+
+    口径:
+    - income   -> 主账户 +
+    - expense  -> 主账户 -
+    - transfer -> 转出账户 -,转入账户 +(转出缺失时退回主账户)
+    - 其它 tx_type -> 无影响
+
+    不判断账户是否存在(调用方按自己的集合过滤)。净值历史原本对未知账户
+    静默丢弃,这里保持这个行为 —— delta 算全,让调用方决定丢不丢。
+    """
+    if not amount:
+        return {}
+    out: dict[str, float] = {}
+    if tx_type == "income":
+        if account_sync_id:
+            out[account_sync_id] = out.get(account_sync_id, 0.0) + amount
+    elif tx_type == "expense":
+        if account_sync_id:
+            out[account_sync_id] = out.get(account_sync_id, 0.0) - amount
+    elif tx_type == "transfer":
+        src = from_account_sync_id or account_sync_id
+        dst = to_account_sync_id
+        if src:
+            out[src] = out.get(src, 0.0) - amount
+        if dst:
+            out[dst] = out.get(dst, 0.0) + amount
+    return out
+
+
 def _projection_totals(
     db: Session, ledger_internal_id: str
 ) -> tuple[int, float, float, float, datetime | None]:
@@ -708,6 +854,9 @@ __all__ = [
     '_load_owner_identity',
     '_tags_list',
     '_to_utc',
+    'account_balance_delta',
+    'account_balance_from_stats',
+    'account_balance_stats',
     '_projection_totals',
     '_bucket_key',
     '_analytics_range',

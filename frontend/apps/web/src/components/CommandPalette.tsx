@@ -46,7 +46,7 @@ import {
   dispatchOpenSharedJoin,
   dispatchOpenSharedManage,
 } from '../lib/sharedLedgerEvents'
-import { currentMonthRange, yearRange } from '@beecount/web-features'
+import { accountBalance, currentMonthRange, yearRange } from '@beecount/web-features'
 import { useLocale, useT, useTheme, useToast } from '@beecount/ui'
 import { VoiceInputButton } from './cmdk-ai/VoiceInputButton'
 
@@ -503,7 +503,7 @@ export function CommandPalette({ open, onClose, onOpenAnnualReport }: CommandPal
                   key={acc.id}
                   icon={<CreditCard className="h-4 w-4" />}
                   label={acc.name}
-                  hint={`${formatAmount(acc.balance ?? 0)} ${acc.currency}`}
+                  hint={`${formatAmount(accountBalance(acc))} ${acc.currency}`}
                   onSelect={() => handleSelectAccount(acc)}
                 />
               ))}
