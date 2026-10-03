@@ -238,6 +238,9 @@ curl -X POST "https://你的域名/api/v1/write/ledgers/<账本id>/accounts/<卡
 | 开了没反应 | `SCHEDULER_TIMEZONE` 没配 → 按 UTC 算，差一整天 |
 | 没反应且日志有 `autorepay.scheduler disabled` | **多进程部署**，已自动禁用。用上面的手动触发 |
 | 日志 `database is locked` | 正常，会退避重试 3 次 |
+| 手动触发返回 **502** | 还款真的失败了，`detail` 里有原因。502 而不是 200 是有意的 —— 早先吞成 200 时排查绕了很久 |
+| 手动触发返回 **400** | 配置有问题（跨币种 / 绑了自己 / 缺账单日） |
+| 还款卡在某一期不动 | 看日志有无 `IDEMPOTENCY_KEY_REUSED`；幂等键带金额，若欠款变了会换新键，旧键等 TTL 过期即可 |
 | 显示「扣款账户已不存在」 | 扣款账户被删或币种变了 → 还款会跳过，重新绑一个 |
 
 ## 7. 附小票
