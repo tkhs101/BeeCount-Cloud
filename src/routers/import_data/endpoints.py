@@ -524,7 +524,14 @@ async def _do_execute(
                 skipped += 1
             else:
                 seen_keys.add(dedup_key)
-                tx_payload = _build_tx_payload(tx, auto_tags, actor_payload_base)
+                # 账户都建完之后才取 name → syncId 映射:新建账户的 syncId 是
+                # `create_account` 现场生成的,提前取拿不到(见函数注释)。
+                tx_payload = _build_tx_payload(
+                    tx,
+                    auto_tags,
+                    actor_payload_base,
+                    _account_ids_by_name(snapshot),
+                )
                 try:
                     snapshot, _ = create_transaction(snapshot, tx_payload)
                 except (KeyError, ValueError, PermissionError) as exc:
@@ -765,6 +772,10 @@ def _tx_to_payload(tx) -> dict:
     `category_name` = leaf(可能是二级 / 也可能是一级 if no sub),
     `parent_category_name` = level-1(仅当有二级时填)。语义跟 mobile tx
     模型一致。
+
+    `splits` 用 `[[账户名, 金额], ...]` 而不是对象数组:这一层是**给人看的预览**,
+    而此刻快照里还没有这些账户、也就没有 sync_id,给不出 `account_id`。
+    对象形式留到真正写入时(第 4 层)才有意义。
     """
     return {
         "tx_type": tx.tx_type,
@@ -778,6 +789,10 @@ def _tx_to_payload(tx) -> dict:
         "to_account_name": tx.to_account_name,
         "tag_names": list(tx.tag_names),
         "source_row_number": tx.source_row_number,
+        # 🔴 别再漏这一项:preview 阶段前端要靠它告诉用户
+        # 「这一行是组合支付,腿是这么分的」。没有它,用户在执行之前
+        # 完全看不出这笔会被拆 —— 而拆错账是静默的。
+        "splits": [[name, str(amount)] for name, amount in (tx.splits or [])] or None,
     }
 
 
@@ -785,7 +800,14 @@ def _collect_new_accounts(txs, existing: set[str]) -> list[str]:
     seen: list[str] = []
     seen_set: set[str] = set()
     for tx in txs:
-        for n in (tx.account_name, tx.from_account_name, tx.to_account_name):
+        # 🔴 拆分腿的账户**也要**建（0021）。
+        #
+        # 这里原本只扫 account_name / from_ / to_ 三个单账户字段，于是
+        # 「招行卡 3000 + 现金 2000」里那两个只出现在拆分列的账户不会被创建。
+        # 少了这一步，后面的 account_id 解析就会失败 —— 而静默失败的代价是
+        # 整笔组合支付被记成「第一腿账户上的全额支出」。
+        leg_names = [name for name, _amount in (tx.splits or [])]
+        for n in (tx.account_name, tx.from_account_name, tx.to_account_name, *leg_names):
             if not n:
                 continue
             if n in existing or n in seen_set:
@@ -793,6 +815,23 @@ def _collect_new_accounts(txs, existing: set[str]) -> list[str]:
             seen.append(n)
             seen_set.add(n)
     return seen
+
+
+def _account_ids_by_name(snapshot: dict) -> dict[str, str]:
+    """账户名 → sync_id。给拆分腿解析 account_id 用。
+
+    必须在**所有账户都建完之后**再调 —— 新建账户的 syncId 是
+    `create_account` 现场生成的，预查拿不到。
+    """
+    out: dict[str, str] = {}
+    for acc in snapshot.get("accounts", []) or []:
+        if not isinstance(acc, dict):
+            continue
+        name = str(acc.get("name") or "").strip()
+        sync_id = acc.get("syncId")
+        if name and isinstance(sync_id, str) and sync_id.strip():
+            out[name] = sync_id
+    return out
 
 
 def _collect_new_categories(txs, existing: set[tuple[str, str]]) -> list[tuple[str, str, str | None]]:
@@ -835,7 +874,12 @@ def _collect_new_tags(txs, auto_tags: list[str], existing: set[str]) -> list[str
     return seen
 
 
-def _build_tx_payload(tx, auto_tags: list[str], actor_base: dict) -> dict:
+def _build_tx_payload(
+    tx,
+    auto_tags: list[str],
+    actor_base: dict,
+    account_ids: dict[str, str] | None = None,
+) -> dict:
     user_tags = list(tx.tag_names)
     merged = user_tags + [t for t in auto_tags if t and t not in user_tags]
     payload = {
@@ -860,4 +904,51 @@ def _build_tx_payload(tx, auto_tags: list[str], actor_base: dict) -> dict:
     }
     if merged:
         payload["tags"] = merged
+
+    # 组合支付(0021):CSV 拆分列 → payload["splits"]。
+    #
+    # 🔴 **这是第 4 层**,前面三层(request model / to_internal / _mapping_to_payload)
+    # 已在 ad59207 补上。不补这里的后果是**静默的账目损坏**:
+    # 一笔 ¥5000 的组合支付(招行卡 3000 + 现金 2000)导入后变成
+    # 「招行卡上的 ¥5000 普通支出」—— 父交易 accountName 取第一腿,
+    # 现金账户一分没扣,余额直接错,HTTP 200 且无任何告警。
+    #
+    # 为什么必须把**名字**换成 `account_id`:`snapshot_mutator._normalize_splits`
+    # 只认 `account_id`,不认 `account_name` —— 而 transformer 产出的是
+    # `[(账户名, 金额)]`。这里做那一层翻译。
+    if tx.splits:
+        if account_ids is None:
+            raise _ImportFailed(
+                code="WRITE_TX_FAILED",
+                row_number=tx.source_row_number,
+                field_name="splits",
+                message="split legs present but no account id map was provided",
+                raw_line=tx.source_raw_line,
+            )
+        legs: list[dict] = []
+        missing: list[str] = []
+        for name, amount in tx.splits:
+            acc_id = account_ids.get(str(name).strip())
+            if not acc_id:
+                # 记下来**一次性**报,不要遇到第一个就抛 —— 那样用户只会看到
+                # 一个账户名,修完再导又报下一个,来回折腾。
+                missing.append(str(name))
+                continue
+            legs.append({"account_id": acc_id, "amount": float(amount)})
+        if missing:
+            # 宁可整批失败,也不把腿悄悄丢掉。那正是本函数要修的 bug。
+            raise _ImportFailed(
+                code="WRITE_TX_FAILED",
+                row_number=tx.source_row_number,
+                field_name="splits",
+                message=(
+                    "split legs reference unknown accounts: "
+                    + ", ".join(sorted(set(missing)))
+                    + " — import aborted rather than recording a wrong amount"
+                ),
+                raw_line=tx.source_raw_line,
+            )
+        # 有腿时父账户必须为空,否则余额双倍扣(mutator 会清,但显式更清楚)
+        payload["account_name"] = None
+        payload["splits"] = legs
     return payload
