@@ -75,6 +75,22 @@ class FieldMappingPayload(BaseModel):
     # 消费税税额列(0020,可选)。**必须双向透传** —— 前端映射编辑器会把整个
     # mapping 原样回传,这里少一个字段就等于用户点一次「应用」把税额全丢掉。
     tax_amount: str | None = None
+    # 组合支付分账列(0021,可选)。**同样必须双向透传**，理由与 tax_amount 完全相同。
+    #
+    # 2026-10-05 修复:这个字段此前**只有下游三处支持、上游这三处全缺**——
+    #   - schema.py:82            ImportFieldMapping.splits ✅ 早就有
+    #   - parsers/beecount.py:32  表头别名 {"splits","拆分"} ✅ 早就有
+    #   - transformer.py:180      _parse_splits(mapping.splits) ✅ 早就有
+    # 但本类的 FieldMappingPayload / to_internal() / _mapping_to_payload 三处都
+    # 没有它,于是 Pydantic 以 extra=ignore **静默丢弃**前端传回的映射。
+    #
+    # 后果是**静默的账目损坏**:一笔 5000 的组合支付(招行卡 3000 + 现金 2000)
+    # 导入后变成一笔「招行卡上的 5000 普通支出」—— 父交易 account_name 会被
+    # 取第一腿,账户余额直接错,而且不报错、不告警。
+    #
+    # 导出侧 `routers/read/workspace.py:308 _splits_cell` 一直会写出这一列,
+    # 所以「导出 → 编辑 → 导入」这条最常见的往返路径**必然**踩到。
+    splits: str | None = None
     tags: list[str] = Field(default_factory=list)
     datetime_format: str | None = None
     strip_currency_symbols: bool = True
@@ -96,6 +112,7 @@ class FieldMappingPayload(BaseModel):
             note=self.note,
             currency=self.currency,
             tax_amount=self.tax_amount,
+            splits=self.splits,
             tags=list(self.tags),
             datetime_format=self.datetime_format,
             strip_currency_symbols=self.strip_currency_symbols,
@@ -117,6 +134,7 @@ def _mapping_to_payload(m: ImportFieldMapping) -> dict:
         "note": m.note,
         "currency": m.currency,
         "tax_amount": m.tax_amount,
+        "splits": m.splits,
         "tags": list(m.tags),
         "datetime_format": m.datetime_format,
         "strip_currency_symbols": m.strip_currency_symbols,
