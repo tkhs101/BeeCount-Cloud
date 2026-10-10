@@ -193,3 +193,38 @@ describe('自动还款 —— 接线护栏', () => {
     }
   })
 })
+
+describe('自动还款 —— 保存后的状态闭环(P0-1)', () => {
+  const DIALOGS = 'components/GlobalEntityDialogs.tsx'
+
+  it('保存成功必须**同时**更新弹窗正在读的那个 state', () => {
+    // 抓到过真 bug:PATCH 200、库里真的生效了,而按钮仍显示「开启」。
+    // 根因是 `saveAutoRepay` 只 `setAllAccounts`(喂候选下拉),
+    // 而弹窗读的是 `account` —— 那个 state 只在 `onOpenDetailAccount`
+    // 事件里被 set 过一次,全文件没有别的刷新机制。
+    //
+    // 用户看到的就是**点了没反应**,会再点一次、再点一次,
+    // 然后判定功能坏了。而后端每月 25 号真的会扣钱。
+    const src = _read(DIALOGS)
+    expect(src).toMatch(/setAllAccounts\(/)
+    expect(src).toMatch(/setAccount\(\(prev\)/)
+    // 两个都要在 saveAutoRepay 的函数体内 —— 光「文件里有 setAccount」
+    // 不够:那个 event handler 里本来就有一次,断言不到点上。
+    const fn = src.slice(
+      src.indexOf('const saveAutoRepay'),
+      src.indexOf('const saveAutoRepay') + 1600,
+    )
+    expect(fn).toContain('setAllAccounts')
+    expect(fn).toContain('setAccount((prev) => (prev && prev.id === target.id')
+  })
+
+  it('更新的是同一个目标账户,不是整份列表刷新', () => {
+    // 整份重取会让弹窗里的分页/排序状态被打断,而这里只需要改一行。
+    const src = _read(DIALOGS)
+    const fn = src.slice(
+      src.indexOf('const saveAutoRepay'),
+      src.indexOf('const saveAutoRepay') + 1600,
+    )
+    expect(fn).toContain('prev.id === target.id')
+  })
+})

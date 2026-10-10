@@ -83,14 +83,25 @@ export function GlobalEntityDialogs() {
           autorepay_enabled: patch.enabled,
           autorepay_from_account_id: patch.from_account_sync_id,
         })
+        // ⚠️ **两个 state 都要更新**。
+        //
+        // `allAccounts` 只喂候选下拉;弹窗本体读的是 `account`
+        // (由 `onOpenDetailAccount` 事件写入,全文件只在那一个地方被 set 过)。
+        // 第一版只更新了 `allAccounts` —— 于是 PATCH 成功、库里真的生效了,
+        // 而按钮仍显示「开启」。用户看到的就是**「点了没反应」**,
+        // 会再点一次、再点一次,然后判定功能坏了。
+        //
+        // 这与后端那条「`repay_one` 的失败被吞成 HTTP 200 → 同样是点了没反应」
+        // 是同一症状的两处来源。后端已改 failed→502,这里把状态闭环补齐。
+        const applied = {
+          autorepay_enabled: patch.enabled,
+          autorepay_from_account_sync_id: patch.from_account_sync_id,
+        }
         setAllAccounts((prev) => prev.map((a) =>
-          a.id === target.id
-            ? {
-                ...a,
-                autorepay_enabled: patch.enabled,
-                autorepay_from_account_sync_id: patch.from_account_sync_id,
-              }
-            : a))
+          a.id === target.id ? { ...a, ...applied } : a))
+        setAccount((prev) => (prev && prev.id === target.id
+          ? { ...prev, ...applied }
+          : prev))
         return null
       } catch (e) {
         return e instanceof Error ? e.message : 'save-failed'
