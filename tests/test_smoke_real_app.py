@@ -100,14 +100,29 @@ def client():
     # 不删 DB:engine 是模块级全局,连接仍持有,删会 PermissionError(WinError 32)
 
 
-def test_smoke_full_chain(client) -> None:
-    """一条链走完:注册 -> 建账本 -> 建卡 -> 记账 -> 读应还 -> 绑自动还款 -> 手动触发。"""
+@pytest.fixture(scope="module")
+def smoke(client):
+    """注册一个用户并返回 (client, headers)。
+
+    ⚠️ **整个仓库只能有一个 `TestClient(app)`** —— MCP 的
+    `StreamableHTTPSessionManager` 是**模块级单例**,`.run()` 只能调一次,
+    第二个 TestClient 会抛
+    `RuntimeError: StreamableHTTPSessionManager .run() can only be called once`。
+    所以两个冒烟文件必须合并、共用一个 client(我第一版分成两个文件,
+    单独跑都绿、全量跑 3 个 ERROR)。
+    """
     r = client.post("/api/v1/auth/register", json={
         "email": "smoke@e2e.com", "password": "SmokeTest123!x",
         "client_type": "web", "device_name": "smoke", "platform": "test"})
     assert r.status_code == 200, r.text
     H = {"Authorization": f"Bearer {r.json()['access_token']}",
          "X-Device-ID": "smoke", "Content-Type": "application/json"}
+    return client, H
+
+
+def test_smoke_full_chain(smoke) -> None:
+    """一条链走完:建账本 -> 建卡 -> 记账 -> 读应还 -> 绑自动还款 -> 手动触发。"""
+    client, H = smoke
 
     r = client.post("/api/v1/write/ledgers", headers=H, json={
         "ledger_id": LEDGER, "ledger_name": "冒烟账本", "currency": "JPY"})
@@ -160,8 +175,9 @@ def test_smoke_full_chain(client) -> None:
     assert r.status_code < 500, f"{r.status_code}: {r.text[:300]}"
 
 
-def test_admin_me_requires_admin(client) -> None:
+def test_admin_me_requires_admin(smoke) -> None:
     """新加的 `/admin/me`:普通用户必须 403,不能像 `/admin/health` 那样 200。"""
+    client, _ = smoke
     r = client.post("/api/v1/auth/register", json={
         "email": "smoke-admin@e2e.com", "password": "SmokeTest123!x",
         "client_type": "web", "device_name": "s", "platform": "t"})
@@ -172,8 +188,9 @@ def test_admin_me_requires_admin(client) -> None:
     assert r.status_code == 403, f"{r.status_code}: {r.text[:200]}"
 
 
-def test_default_categories_are_seeded(client) -> None:
+def test_default_categories_are_seeded(smoke) -> None:
     """放弃 App 只用 Web 时,新账本必须**自带**分类(否则连「餐饮」都得手建)。"""
+    client, _ = smoke
     r = client.post("/api/v1/auth/register", json={
         "email": "smoke-cats@e2e.com", "password": "SmokeTest123!x",
         "client_type": "web", "device_name": "s", "platform": "t"})
@@ -184,3 +201,159 @@ def test_default_categories_are_seeded(client) -> None:
         "ledger_id": "smoke-cats", "ledger_name": "分类冒烟", "currency": "JPY"})
     cats = client.get("/api/v1/read/workspace/categories", headers=H).json()
     assert len(cats) > 100, f"只有 {len(cats)} 条分类"
+
+
+# --------------------------------------------------------------------------- #
+# CSV 导出 -> 导入 真往返(组合支付 / 税额)                                #
+# --------------------------------------------------------------------------- #
+
+
+def _items(c, H) -> list:
+    """`/workspace/transactions` 返回**分页对象** `{items, total}`,
+    不是裸数组。"""
+    page = c.get("/api/v1/read/workspace/transactions",
+                 headers=H).json()
+    return page["items"] if isinstance(page, dict) else page
+
+
+def test_split_payment_survives_csv_roundtrip(smoke) -> None:
+    """组合支付:导出 -> 导入,**腿必须还在**。
+
+    CLAUDE.md 记过的静默数据损坏:「CSV 不导出 Splits 列 → 导入后组合支付
+    变『无账户的支出』,账户余额全错」。
+    """
+    c, H = smoke
+    # **独立的账户名** —— 账户是 user-global 的,重名会被写路径拒
+    # (`duplicated account name`)。合并进同一个 app fixture 后,
+    # 信用卡那条链路已经建了「招行信用卡」。
+    for name, atype in (("全家便利店卡", "credit_card"), ("现金钱包", "bank_card")):
+        r = c.post(f"/api/v1/write/ledgers/{LEDGER}/accounts", headers=H,
+                   json={"name": name, "account_type": atype,
+                         "currency": "JPY", "base_change_id": 0})
+        assert r.status_code in (200, 201), f"{name}: {r.text[:200]}"
+
+    accs = c.get("/api/v1/read/workspace/accounts", headers=H).json()
+    by_name = {a["name"]: a["id"] for a in accs}
+    assert "全家便利店卡" in by_name, list(by_name)
+
+    # 记一笔组合支付:5000 = 卡 3000 + 现金 2000
+    r = c.post(f"/api/v1/write/ledgers/{LEDGER}/transactions", headers=H,
+               json={"tx_type": "expense", "amount": 5000.0,
+                     "note": "便利店", "happened_at": "2026-10-20T09:00:00Z",
+                     "base_change_id": 0,
+                     "splits": [{"account_id": by_name["全家便利店卡"],
+                                 "amount": 3000.0},
+                                {"account_id": by_name["现金钱包"],
+                                 "amount": 2000.0}]})
+    assert r.status_code in (200, 201), r.text
+
+    # 读回确认腿在(这一层已有测试,这里是确认写路径真的落了库)
+    txs = _items(c, H)
+    mine = next((t for t in txs if t.get("note") == "便利店"), None)
+    assert mine is not None, f"交易没写进去: {txs[:2]}"
+    assert len(mine.get("splits") or []) == 2, (
+        f"腿没落库: {mine.get('splits')}")
+
+    # ---- 导出 ----
+    r = c.get("/api/v1/read/workspace/transactions.csv", headers=H)
+    assert r.status_code == 200, r.text[:200]
+    text = r.text
+    assert "3000" in text and "2000" in text, (
+        f"导出的 CSV 里没有腿的金额 —— 那正是 CLAUDE.md 记的静默损坏。"
+        f"\nCSV 内容:\n{text[:600]}")
+
+    # 表头里必须有 splits 那一列(否则导入器匹配不到 -> 静默丢弃)
+    header = text.splitlines()[0]
+    assert "plits" in header, f"CSV 表头没有 splits 列: {header}"
+
+
+def test_tax_amount_survives_csv_roundtrip(smoke) -> None:
+    """税额:导出 -> 导入,税额必须还在,且 amount 仍是**含税总额**。"""
+    c, H = smoke
+    accs = c.get("/api/v1/read/workspace/accounts", headers=H).json()
+    card = next(a["id"] for a in accs if a["name"] == "全家便利店卡")
+
+    r = c.post(f"/api/v1/write/ledgers/{LEDGER}/transactions", headers=H,
+               json={"tx_type": "expense", "amount": 1080.0,
+                     "account_id": card, "note": "含税消费",
+                     "tax_amount": 80.0,
+                     "happened_at": "2026-10-21T09:00:00Z",
+                     "base_change_id": 0})
+    assert r.status_code in (200, 201), r.text
+
+    txs = _items(c, H)
+    mine = next((t for t in txs if t.get("note") == "含税消费"), None)
+    assert mine is not None, f"交易没写进去: {txs[:2]}"
+    # amount 语义不变:仍是实付总额
+    assert abs(float(mine["amount"]) - 1080.0) < 1e-6, mine["amount"]
+    assert abs(float(mine.get("tax_amount") or 0) - 80.0) < 1e-6, (
+        f"税额没落库: {mine.get('tax_amount')}")
+
+    r = c.get("/api/v1/read/workspace/transactions.csv", headers=H)
+    assert r.status_code == 200, r.text[:200]
+    assert "1080" in r.text and "80" in r.text, (
+        f"导出丢了税额:\n{r.text[:600]}")
+    assert "税额" in r.text or "Tax" in r.text, (
+        f"CSV 表头没有税额列:\n{r.text.splitlines()[0]}")
+
+def test_exported_csv_can_be_imported_back_with_splits_and_tax(smoke) -> None:
+    """**真往返**:导出 -> 重新上传 -> preview,腿和税额都在。
+
+    ## 为什么必须真的走一遍导入
+
+    CLAUDE.md 记的静默损坏是双向的:导出少一列、或导入解析不出来,
+    组合支付都会变成「无账户的支出」,账户余额全错 —— 而**两边都不报错**。
+
+    分层测试(`test_tx_split_invariants.py`)直接写 projection 行,
+    证明不了「导出的文本能被本仓自己的导入器解析回来」。这一条才证明得了。
+    """
+    c, H = smoke
+    csv_text = c.get("/api/v1/read/workspace/transactions.csv",
+                     headers=H).text
+    assert csv_text.strip(), "导出是空的,没法测往返"
+
+    # 导到一个**空账本** —— 目标账本里还没有账户,能看清解析出的东西
+    c.post("/api/v1/write/ledgers", headers=H, json={
+        "ledger_id": "csv-target", "ledger_name": "导入目标",
+        "currency": "JPY"})
+
+    r = c.post(
+        "/api/v1/import/upload",
+        headers={k: v for k, v in H.items() if k != "Content-Type"},
+        files={"file": ("t.csv", csv_text.encode("utf-8"), "text/csv")},
+        data={"target_ledger_id": "csv-target",
+              # 客户端本地时区(东为正)。CSV 里的时间是本地墙钟。
+              "tz_offset_minutes": "540"},
+    )
+    assert r.status_code == 200, f"{r.status_code}: {r.text[:300]}"
+    token = r.json()["import_token"]
+
+    r = c.post(f"/api/v1/import/{token}/preview", headers=H, json={})
+    assert r.status_code == 200, r.text[:300]
+    summary = r.json()
+    items = (summary.get("sample_transactions")
+             or summary.get("samples")
+             or summary.get("preview")
+             or [])
+    assert items, f"preview 没有样本: {sorted(summary)}"
+
+    # 找到那笔组合支付
+    mine = next((i for i in items
+                 if i.get("splits") and len(i["splits"]) >= 2), None)
+    assert mine is not None, (
+        f"往返后组合支付的腿没了 —— 正是 CLAUDE.md 记的静默损坏。"
+        f"\npreview 样本: {items[:3]}")
+
+    # 腿的金额对得上(预览层给的是 [账户名, 金额] 二元组 —— 那时快照里
+    # 还没有账户、给不出 sync_id,见 endpoints.py::_tx_to_payload)
+    amounts = []
+    for leg in mine["splits"]:
+        assert isinstance(leg, (list, tuple)) and len(leg) == 2, (
+            f"腿的形状不对: {leg!r}")
+        amounts.append(str(leg[1]))
+    assert any("3000" in a for a in amounts), amounts
+    assert any("2000" in a for a in amounts), amounts
+
+    # 税额那一笔也要在
+    taxed = next((i for i in items if i.get("note") == "含税消费"), None)
+    assert taxed is not None, f"含税那笔没进 preview: {items[:3]}"

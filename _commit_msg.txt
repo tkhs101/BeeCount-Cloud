@@ -1,0 +1,47 @@
+test: CSV 导出->导入 真往返(组合支付/税额)—— 静默损坏必须真的抓得到
+
+## 为什么加这条
+
+本会话改过这几条路径里的每一层(splits 映射 UI/预览表/导出单元格/导入解析、
+tax_amount、CSV 导入时区归一),但只在**分层**层面测过。
+
+而 `CLAUDE.md` 把 CSV 往返明确记成过**静默数据损坏**:
+「CSV 不导出 Splits 列 → 导入后组合支付变『无账户的支出』,账户余额全错」。
+
+`test_tx_split_invariants.py` 直接写 projection 行,证明不了
+「真的导出了这一列」,更证明不了「**本仓自己的导入器解析得回来**」。
+
+## 覆盖
+
+- 组合支付:写腿 -> 读回腿在 -> 导出 CSV 有腿金额 + 表头有 splits 列
+- 税额:`amount` 仍是含税总额(1080),`tax_amount=80` 在,导出有税额列
+- **真往返**:导出文本 -> 重新 upload 到空账本 -> preview,
+  腿以 `[账户名, 金额]` 二元组回来、3000/2000 都在
+
+## 变异验证:两个方向都咬住
+
+| 变异 | 结果 |
+|---|---|
+| 导出不再写 Splits 列(CLAUDE.md 记的那个) | 变红 |
+| 导入不解析 splits(另一半) | 变红 |
+
+## ⚠️ 合并时踩到:全仓库只能有一个 TestClient(app)
+
+两个冒烟文件各自 `TestClient(app)`,单独跑都绿,**全量跑 3 个 ERROR**:
+
+    RuntimeError: StreamableHTTPSessionManager .run() can only be
+    called once per instance.
+
+MCP 的 session manager 是**模块级单例**,`.run()` 只能调一次。
+
+合并成一个文件、共用 module 级 `client` fixture。另外账户是
+user-global 的,两个测试都建「招行信用卡」会被写路径拒
+(`duplicated account name`)—— 合并后 CSV 那半用独立账户名。
+
+## 又一个「单跑绿、全量红」
+
+上一条提交刚记录过「模块顶层改 env 会污染整个会话」。这一条是同源的另一半:
+**模块级单例**同样只影响全量跑。两者都是「分层/单跑看不出来、
+拼起来才炸」。
+
+854 passed(851 + 3)/ mypy 80(零新增,纯测试改动)
