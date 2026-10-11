@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useT } from '@beecount/ui'
 import { useNavigate } from 'react-router-dom'
 
 import {
@@ -57,6 +58,7 @@ export function GlobalEntityDialogs() {
   // 自动还款(0022):候选扣款账户在弹窗里按需取 —— 账户数据由各页的
   // `usePageCache` 持有,全局弹窗拿不到,重新取一次比把状态提到 context
   // 更省事(弹窗不常开)。
+  const t = useT()
   const [allAccounts, setAllAccounts] = useState<WorkspaceAccount[]>([])
   useEffect(() => {
     if (!token || !activeLedgerId) return
@@ -108,6 +110,55 @@ export function GlobalEntityDialogs() {
       }
     },
     [token, activeLedgerId],
+  )
+
+  // 「立即试跑一次」——调那个一直存在但**从没有前端入口**的端点。
+  //
+  // 后端为此专门设计过错误码(failed→502 / 配错→400),理由是「用户看到
+  // 的是点了没反应」。而 Web 上连按钮都没有,那些错误码从未被用户见过。
+  // 这个函数就是补上那个入口,并把 detail 原样显示 —— 那是后端写的、
+  // 人能读懂的原因,不是状态码。
+  const [runResult, setRunResult] = useState<string | null>(null)
+
+  const runAutoRepayNow = useCallback(
+    async (accountId: string) => {
+      if (!token || !activeLedgerId) {
+        setRunResult(t('detail.autoRepay.notReady'))
+        return
+      }
+      setRunResult(t('detail.autoRepay.running'))
+      try {
+        const res = await fetch(
+          `/api/v1/write/ledgers/${encodeURIComponent(activeLedgerId)}`
+          + `/accounts/${encodeURIComponent(accountId)}/autorepay/run`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'X-Device-ID': 'web-console',
+            },
+          },
+        )
+        const body = await res.json().catch(() => ({}))
+        if (res.ok) {
+          // 200 = 真的走完了判断链。还了多少不由这个响应体表达(它返回
+          // WriteCommitMeta),所以只告诉用户「跑完了」,让他去看交易列表。
+          setRunResult(t('detail.autoRepay.runOk'))
+          // 重新拉一次账户列表 ——「上次自动还款」可能变了
+          const rows = await fetchWorkspaceAccounts(token, {
+            ledgerId: activeLedgerId,
+          })
+          setAllAccounts(rows)
+        } else {
+          // 400 = 配置有问题;502 = 真的失败了。detail 是后端写的、
+          // 人能读懂的原因,原样显示比再包一层好。
+          setRunResult(String(body?.detail || body?.message || res.status))
+        }
+      } catch (e) {
+        setRunResult(e instanceof Error ? e.message : 'run-failed')
+      }
+    },
+    [token, activeLedgerId, t],
   )
 
   // 4 个独立 state — 互不影响,可同时打开(不太可能但理论支持)
@@ -392,6 +443,8 @@ export function GlobalEntityDialogs() {
         onSaveAutoRepay={account
           ? (patch) => saveAutoRepay(account, patch)
           : undefined}
+        onRunNow={account ? () => void runAutoRepayNow(account.id) : undefined}
+        autoRepayRunResult={runResult}
       />
       <CategoryDetailDialog
         category={category}

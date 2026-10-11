@@ -228,3 +228,46 @@ describe('自动还款 —— 保存后的状态闭环(P0-1)', () => {
     expect(fn).toContain('prev.id === target.id')
   })
 })
+
+
+describe('自动还款 —— 手动触发必须有前端入口', () => {
+  const _read = (rel: string) =>
+    fs.readFileSync(path.resolve(__dirname, rel), 'utf8')
+
+  it('端点是从 Web 真能调到的,不是死代码', () => {
+    // 后端 `POST /write/ledgers/{id}/accounts/{id}/autorepay/run` 为它专门
+    // 设计过错误码(failed→502 / 配错→400),理由是「用户看到的是点了没反应」。
+    // 但 Web 上一直没有按钮 —— 那些错误码从未被用户见过。
+    const src = _read('components/GlobalEntityDialogs.tsx')
+    expect(src).toMatch(/autorepay\/run/)
+    expect(src).toMatch(/method: 'POST'/)
+  })
+
+  it('结果必须显示给用户,不能只 setState 不渲染', () => {
+    // 我第一版写了 `setRunResult(...)` 却没有任何地方渲染它 ——
+    // compile 全过、测试全绿,而用户点了按钮依然什么都看不到。
+    // 这跟后端那条「失败被吞成 HTTP 200」是同一枚硬币。
+    const src = _read('components/GlobalEntityDialogs.tsx')
+    expect(src).toContain('autoRepayRunResult={runResult}')
+
+    const dlg = _read('components/dialogs/AccountDetailDialog.tsx')
+    expect(dlg).toContain('runResult={autoRepayRunResult}')
+    // 渲染出口
+    expect(dlg).toMatch(/\{runResult \? \(/)
+  })
+
+  it('「立即试跑」按钮只在已启用时可点', () => {
+    // 没启用就试跑只会得到 skipped_disabled —— 点了没反应,
+    // 用户又以为是 bug。
+    const dlg = _read('components/dialogs/AccountDetailDialog.tsx')
+    expect(dlg).toMatch(/disabled=\{busy \|\| !enabled\}/)
+  })
+
+  it('i18n 三语都有 detail.autoRepay.runNow', () => {
+    for (const f of ['en.ts', 'zh-CN.ts', 'zh-TW.ts']) {
+      const src = _read(path.join('i18n', f))
+      expect(src, `${f} 缺 detail.autoRepay.runNow`)
+        .toMatch(/'detail\.autoRepay\.runNow'/)
+    }
+  })
+})

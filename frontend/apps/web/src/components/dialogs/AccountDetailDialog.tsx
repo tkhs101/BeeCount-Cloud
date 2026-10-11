@@ -68,6 +68,10 @@ interface Props {
     enabled: boolean
     from_account_sync_id: string | null
   }) => Promise<string | null>
+  /** 「立即试跑一次」。结果由调用方通过 autoRepayRunResult 回传。 */
+  onRunNow?: () => void
+  /** 试跑结果 / 失败原因。调用方持有 —— 它才知道 HTTP 结果。 */
+  autoRepayRunResult?: string | null
 }
 
 /** 点账户卡片弹出的详情:顶部账户名 + 当前余额/累计收入/累计支出 + 交易列表(无限滚动加载)。 */
@@ -86,6 +90,8 @@ export function AccountDetailDialog({
   resolveAttachmentPreviewUrl,
   allAccounts,
   onSaveAutoRepay,
+  onRunNow,
+  autoRepayRunResult,
 }: Props) {
   const t = useT()
   const { profileMe } = useAuth()
@@ -110,7 +116,8 @@ export function AccountDetailDialog({
             {/* 信用卡 / 银行卡专属信息:bank_name / 卡号末 4 / 信用额度 /
                 账单日 / 还款日 + 倒计时。普通账户类型不渲染。 */}
             <AccountCardInfo account={account} t={t}
-        allAccounts={allAccounts} onSaveAutoRepay={onSaveAutoRepay} />
+        allAccounts={allAccounts} onSaveAutoRepay={onSaveAutoRepay}
+        onRunNow={onRunNow} autoRepayRunResult={autoRepayRunResult} />
 
             <div className="min-h-0 flex-1 overflow-y-auto">
               <TransactionList
@@ -216,6 +223,8 @@ function AccountCardInfo({
   t,
   allAccounts,
   onSaveAutoRepay,
+  onRunNow,
+  autoRepayRunResult,
 }: {
   account: AccountWithStats
   t: (key: string, params?: Record<string, string | number>) => string
@@ -223,6 +232,8 @@ function AccountCardInfo({
   onSaveAutoRepay?: (
     patch: { enabled: boolean; from_account_sync_id: string | null },
   ) => Promise<string | null>
+  onRunNow?: () => void
+  autoRepayRunResult?: string | null
 }) {
   const accountType = account.account_type || ''
   const isCreditCard = accountType === 'credit_card'
@@ -328,6 +339,8 @@ function AccountCardInfo({
           card={account}
           accounts={allAccounts}
           onSave={onSaveAutoRepay}
+          onRunNow={onRunNow}
+          runResult={autoRepayRunResult}
         />
       ) : null}
     </div>
@@ -416,6 +429,8 @@ function AutoRepaySection({
   card,
   accounts,
   onSave,
+  onRunNow,
+  runResult,
 }: {
   card: ReadAccount & {
     autorepay_enabled?: boolean | null
@@ -427,6 +442,8 @@ function AutoRepaySection({
     enabled: boolean
     from_account_sync_id: string | null
   }) => Promise<string | null>
+  onRunNow?: () => void
+  runResult?: string | null
 }) {
   // 本仓的 `useT()` 返回的就是 t 函数本身(不是 { t } 对象)——
   // 写成 `const { t } = useT()` 会拿到 t 自己的属性,全 undefined。
@@ -511,7 +528,35 @@ function AutoRepaySection({
         >
           {enabled ? t('detail.autoRepay.pause') : t('detail.autoRepay.enable')}
         </Button>
+        {/* 「立即试跑一次」。
+
+            后端有 `POST .../autorepay/run`,而且专门为它设计过错误码
+            (failed→502 / 配错→400),理由是「用户看到的是点了没反应」。
+            但 Web 上一直没有入口 —— 那些错误码从未被用户见过。
+
+            在这之前用户唯一能做的就是等到还款日,而界面上唯一的信号
+            「上次自动还款:2026-09」要等真的成功跑过一次才出现。
+
+            不是「强制还款」:仍然走完整判断链(今天是不是还款日、本期
+            是否已还过、余额够不够),所以还款日前点它是一次安全的空跑。 */}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={busy || !enabled}
+          onClick={() => void onRunNow?.()}
+          title={t('detail.autoRepay.runNowHint')}
+        >
+          {t('detail.autoRepay.runNow')}
+        </Button>
       </div>
+
+      {/* 试跑结果。用普通文字而不是红字 —— 「今天不是还款日,所以没还」
+          是正常结果,不是错误。502/400 的原因也照原文显示:那是后端写的、
+          人能读懂的一句话,再包一层 i18n 只会丢掉细节。 */}
+      {runResult ? (
+        <p className="mt-2 text-xs text-muted-foreground">{runResult}</p>
+      ) : null}
 
       {!enabled ? (
         <div className="mt-3 space-y-1">
