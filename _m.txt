@@ -1,0 +1,7 @@
+docs: 记录 recharts 首屏修复与「manualChunks 会破坏懒加载」
+
+首屏预取 781 kB -> 382 kB,产物总量不变。manualChunks 把 recharts 提升进
+入口静态图,Vite 就给它发 modulepreload,浏览器首屏就下载 —— 路由是 lazy
+的完全没用。
+
+同时更正:我盯了三轮的「主块 850 kB」不是真正的大头。

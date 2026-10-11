@@ -179,7 +179,39 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 | `poster-*.js` | 60 kB | 20 kB | html-to-image + qrcode |
 | `cmdk-*.js` | 44 kB | 14 kB | 命令面板 |
 
-### ⚠️⚠️ 首屏真实下载是 **~1.6 MB**,不是主块的 850 kB
+### ⚠️ 首屏要看 `index.html` 的 rel,不是看 assets 目录(**已修一处**)
+
+**首屏真实下载** = 入口 `<script>` + 所有 `rel="modulepreload"`。
+只看 `dist/assets/` 的文件列表**看不出这件事**:文件都在,
+但哪些是首屏的**只有 HTML 说了算**。
+
+验证方法(不装任何东西):build 完 `grep 'modulepreload' dist/index.html`,
+或起真服务器把引用的 `/assets/*` 逐个取回来。
+
+#### 已修:`manualChunks` 给 recharts 的规则反而害了它
+
+改前首屏预取 **781 kB**,改后 **382 kB**(产物总量 2045 -> 2048 kB,
+没有重复打包)。**少下载 399 kB**。
+
+机制:`manualChunks` 把 recharts 提升进**入口的静态 import 图**,而 Vite
+只给「入口静态依赖」的 chunk 发 `modulepreload` ——
+
+```html
+<link rel="modulepreload" href="/assets/recharts-CEpsFnzg.js">   <!-- 409 kB -->
+```
+
+路由是 lazy 的**完全没用**。改前入口块里能直接看到
+`from"./recharts-CEpsFnzg.js"`。
+
+我把四条 `manualChunks` 规则**逐条**去掉各测一次 —— 只有 recharts 有效果
+(781 -> 382 kB),再去掉 cmdk / poster / framer-motion **首屏不变**,
+所以那三条保留。
+
+⚠️ 这也说明:**我盯了三轮的「主块 850 kB」不是真正的大头** ——
+它只占首屏的一半,真正被白拉进去的是 recharts。
+盯一个指标之前先确认它是不是**最大的那个**。
+
+### (存档)首屏曾是 ~1.6 MB,不是主块的 850 kB
 
 这一条纠正了**整整三轮**我一直在优化的错误目标。
 
@@ -195,7 +227,8 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 | **`poster-*.js`** | **37 kB** | **是** —— html-to-image + qrcode |
 | CSS | 87 kB | |
 
-**首屏 JS 合计 ~1615 kB 未 gzip(约 468 kB gzip)+ CSS。**
+**改前首屏 JS 合计 ~1615 kB 未 gzip(约 468 kB gzip)+ CSS。**
+(修掉 recharts 那条 modulepreload 后降到约 1216 kB)
 
 `manualChunks` 把它们拆成独立 chunk 了,路由也是 lazy 的 —— 但只要 chunk
 还在**入口的静态 import 图**里,Vite 就给它发 `modulepreload`,
