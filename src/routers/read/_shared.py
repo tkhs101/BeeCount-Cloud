@@ -195,6 +195,40 @@ def _get_latest_change_id(db: Session, *, ledger_id: str) -> int:
     return int(val or 0)
 
 
+def _account_name_map(db: Session) -> dict[str, str]:
+    """`{account_sync_id: name}` —— **全量**,不分页、不按账本过滤。
+
+    ## 为什么需要
+
+    组合支付的腿(`read_tx_split_projection`)只有 `account_sync_id` 和
+    `amount`,没有名字。前端只拿 id 就只能显示裸的 `acc_0a63dbec54bc`,
+    用户认不出来是哪张卡 —— 于是组合支付在交易详情弹窗里「零展示」。
+
+    ## 为什么不按本页过滤
+
+    腿表存的是 sync_id,要先用它反查 page 上的 tx,那需要一次额外扫描;
+    而账户表是 user-global、量级和用户数同阶(几十到几百),全取一次
+    的代价低于多跑一轮查询。
+
+    ## 账户是 user-global,`ledger_id` 是空串
+
+    别按 `ledger_id` 过滤 —— 同一张卡可以同时用在多个账本
+    (`UserAccountProjection` PK = `user_id` + `sync_id`)。
+    """
+    from ...models import UserAccountProjection
+
+    # name 是可空列(None 时前端 fallback 到 account_id),所以过滤掉 None,
+    # 让返回类型保持 `dict[str, str]` —— 混进 None 会让调用方到处要判空。
+    return {
+        str(r[0]): r[1]
+        for r in db.execute(
+            select(UserAccountProjection.sync_id,
+                   UserAccountProjection.name)
+        ).all()
+        if r[1] is not None
+    }
+
+
 def _user_info_map(
     db: Session, user_ids: set[str]
 ) -> dict[str, tuple[str | None, str | None, str | None, int]]:
@@ -916,6 +950,7 @@ __all__ = [
     '_get_latest_snapshot',
     '_get_latest_change_id',
     '_owner_map_for_ledgers',
+    '_account_name_map',
     '_user_info_map',
     '_is_ledger_deleted',
     # 消费税(0020):原币税额 → 折本位币税额。workspace.py 与 MCP 的

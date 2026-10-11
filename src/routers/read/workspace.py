@@ -169,6 +169,10 @@ def list_workspace_transactions(
             actor_user_ids.add(owner_uid)
     user_info_map = _user_info_map(db, actor_user_ids)
 
+    # 组合支付的腿要显示账户**名**(不是裸 sync_id)。账户是 user-global,
+    # 同一张卡可能出现在多个账本,所以整个取一次。
+    account_names = _account_name_map(db)
+
     # 组合支付(0021):跨账本,按 ledger 分组各查一次(ledger 数量很少)。
     splits_by_tx: dict[str, list[dict[str, Any]]] = {}
     for lrow in db.execute(
@@ -184,9 +188,15 @@ def list_workspace_transactions(
             ReadTxSplitProjection.seq.asc(),
         )
     ).all() if ledgers else []:
-        splits_by_tx.setdefault(f"{lrow[0]}::{lrow[1]}", []).append(
-            {"account_id": lrow[2], "amount": float(lrow[3])}
-        )
+        splits_by_tx.setdefault(f"{lrow[0]}::{lrow[1]}", []).append({
+            "account_id": lrow[2],
+            # **必须带上账户名**。只给 account_id 的话,前端只能显示裸的
+            # sync_id(如 `acc_0a63dbec54bc`)—— 用户认不出来是哪张卡,
+            # 于是「组合支付在详情弹窗零展示」(前端 console 断言 account_name
+            # 恒为 null,索性什么都不渲染)。
+            "account_name": account_names.get(lrow[2]),
+            "amount": float(lrow[3]),
+        })
 
     out_items: list[WorkspaceTransactionOut] = []
     for row in rows:
@@ -239,7 +249,12 @@ def list_workspace_transactions(
                 tags_list=_tags_list(row.tags_csv),
                 tag_ids=tag_ids,
                 attachments=attachments,
-                splits=[TxSplit(account_id=l["account_id"], amount=l["amount"])
+                # ⚠️ **按 key 展开**,不要一个个字段传。
+                # 曾经这里写 `TxSplit(account_id=..., amount=...)`,
+                # 于是上游 `splits_by_tx` 里补好的 `account_name` 在这一步
+                # 又被丢掉 —— 前端拿到的腿还是没有名字,组合支付在详情弹窗里
+                # 依然「零展示」。加字段要在**每一层**都接住,漏一层就白改。
+                splits=[TxSplit(**l)
                         for l in splits_by_tx.get(f"{row.ledger_id}::{row.sync_id}", [])],
                 exclude_from_stats=bool(row.exclude_from_stats),
                 exclude_from_budget=bool(row.exclude_from_budget),
