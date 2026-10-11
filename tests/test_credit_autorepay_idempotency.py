@@ -295,8 +295,16 @@ def test_partial_payment_still_cannot_double_charge(env) -> None:
     assert r2.status != "done", f"第二次不该成功:{r2}"
 
 
-def test_barrier4_is_only_reachable_under_true_concurrency() -> None:
-    """防线 4(条件锁)**顺序调用永远测不到** —— 这一条把事实钉住。
+def test_barrier4_is_ordered_after_barrier2() -> None:
+    """防线 2 必须排在防线 4 **之前** —— 顺序调用时防线 2 一定先拦。
+
+    顺带说明**为什么不能只用顺序调用**验防线 4(实测三次才搞清):
+    顺序调用时 `last_period` 已等于 `pkey`,防线 2 先返回
+    `skipped_already_repaid`,根本走不到锁。
+
+    真要验防线 4,用下面那条**重入**的测试
+    (`test_barrier4_blocks_a_real_interleaved_race`)——
+    它能造出两个调用都在对方提交前读到旧值的真实竞态。
 
     ## 实测过程(三次尝试才搞清,别重走)
 
@@ -323,7 +331,11 @@ def test_barrier4_is_only_reachable_under_true_concurrency() -> None:
     而它一次都没被真正执行过。**没测到的防线比坏掉的防线更危险**,
     因为它给人虚假的安全感(与 CLAUDE.md 记的「比没有护栏更糟」同源)。
 
-    真要验它,得上两个真连接 + 显式交错(且 SQLite 还要处理锁竞争)。
+    ⚠️ **更新**:当时我写「真要验它得上两个真连接 + 显式交错」,以为不可行。
+    后来想通了 —— 用**重入**(在 `compute_statement` 里跑完另一个
+    `repay_one`)就精确造出交错,见
+    `test_barrier4_blocks_a_real_interleaved_race`。四道防线现已全部覆盖。
+    「顺序调用测不到」仍然成立 —— 但那不等于「测不到」,别混淆。
     """
     from pathlib import Path
 
@@ -337,3 +349,142 @@ def test_barrier4_is_only_reachable_under_true_concurrency() -> None:
     assert i_bar2 < i_bar4, (
         "防线 4 现在排在防线 2 **之前** —— 顺序调用就能拦住重复扣钱。"
         f"若这是有意调整,请同步更新本文件的结论与 CLAUDE.md 的说明。")
+
+
+def test_barrier4_blocks_a_real_interleaved_race() -> None:
+    """两个 session **真交错** —— 防线 4 必须只让一个赢。
+
+    ## 怎么造出这个状态
+
+    上一条测试说防线 4「顺序调用原理上测不到」—— 那是对的,但**不是测不到**,
+    只是不能用「调两次」这种顺序法。
+
+    真实竞态要求:**两个调用都在对方提交之前读到旧的 `last_period`**。
+    单线程里怎么造?用**重入**。
+
+    `repay_one` 内部的顺序是:
+
+        防线 2(`last_period == pkey`?)  ->  防线 1(`compute_statement`)
+          ->  payable  ->  **防线 4(条件 UPDATE)**  ->  self_call 写交易
+
+    我把 `compute_statement` 包一层,在**它里面**先把另一个 session 的
+    `repay_one` 整个跑完。于是:
+
+    - A:过了防线 2(此刻 `last_period` 还是 None)
+    - A:调 `compute_statement` -> 里面完整跑一遍 B
+      -> B 也过了防线 2、拿到锁、**提交**、写完交易
+    - A:从 `compute_statement` 返回,拿着**过期的**余额/欠款去抢锁
+      -> `WHERE last_period IS NOT '2026-11'` 匹配 **0 行**
+      -> `rowcount == 0` -> `skipped_locked`
+
+    这就是多 worker 抢同一期时的真实路径。
+
+    ## 为什么要两个独立 session
+
+    `StaticPool` 的内存库**所有 session 共用一个连接** —— 一个 session 的
+    未提交事务对另一个「看得见」,造不出竞态。必须用**文件库**两个引擎。
+    """
+    import tempfile
+    import uuid
+    from pathlib import Path
+
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import sessionmaker
+
+    from src.models import Ledger, ReadTxProjection, UserAccountProjection
+    from src.services.credit_card import repay as repay_mod
+    from src.services.credit_card.repay import repay_one
+
+    db_path = Path(tempfile.gettempdir()) / f"bc_race_{uuid.uuid4().hex[:8]}.db"
+    url = f"sqlite:///{db_path.as_posix()}"
+    eng_a = create_engine(url)
+    eng_b = create_engine(url)
+    SA, SB = sessionmaker(bind=eng_a), sessionmaker(bind=eng_b)
+
+    from src.models import Base
+    Base.metadata.create_all(bind=eng_a)
+
+    with SA() as db:
+        db.add(Ledger(id="lg", user_id="u1", external_id="e",
+                      name="L", currency="JPY"))
+        db.add(UserAccountProjection(
+            sync_id="card1", user_id="u1", name="卡", account_type="credit_card",
+            currency="JPY", hidden=False, billing_day=1, payment_due_day=15,
+            autorepay_enabled=True,
+            autorepay_from_account_sync_id="bank1",
+            initial_balance=Decimal("0")))
+        db.add(UserAccountProjection(
+            sync_id="bank1", user_id="u1", name="工资卡",
+            account_type="bank_card", currency="JPY", hidden=False,
+            initial_balance=Decimal("100000")))
+        db.add(ReadTxProjection(
+            sync_id="tx1", ledger_id="lg", user_id="u1", tx_type="expense",
+            amount=30000.0, note="消费", account_sync_id="card1",
+            account_name="卡",
+            happened_at=__import__("datetime").datetime(2026, 10, 5, 9, 0)))
+        db.commit()
+
+    calls: list[str] = []
+
+    def make_self_call(tag: str):
+        def f(db, *, method, path, body, headers, user, **kw):
+            calls.append(tag)
+            from src.projection import upsert_tx
+            upsert_tx(db, ledger_id="lg", user_id="u1", source_change_id=999,
+                      payload={"id": f"gen-{tag}", "type": body["tx_type"],
+                               "amount": body["amount"],
+                               "happenedAt": "2026-11-15T09:00:00Z",
+                               "fromAccountId": body.get("from_account_id"),
+                               "toAccountId": body.get("to_account_id"),
+                               "note": "自动还款"})
+            db.commit()
+            return {"entity_id": f"gen-{tag}"}
+        return f
+
+    # ⚠️ 先取真实实现再定义包装 —— 反过来写(包装里引用后面才赋值的
+    # 名字)会 NameError,而那个错在**定义时不报**、调用时才炸。
+    _real_compute_statement = repay_mod.compute_statement
+    fired = {"b": False}
+
+    def racing_compute_statement(*a, **kw):
+        """A 跑到防线 1 时,把 B 整个跑完(制造真实交错)。"""
+        if not fired["b"]:
+            fired["b"] = True
+            with SB() as dbb:
+                card_b = dbb.scalar(select(UserAccountProjection).where(
+                    UserAccountProjection.sync_id == "card1"))
+                dbb.refresh(card_b)
+                b_out = repay_one(dbb, user_id="u1", card=card_b, today=TODAY,
+                                  self_call=make_self_call("B"))
+                racing_compute_statement.b_outcome = b_out
+        return _real_compute_statement(*a, **kw)
+
+    racing_compute_statement.b_outcome = None
+    repay_mod.compute_statement = racing_compute_statement
+
+    try:
+        with SA() as db:
+            card = db.scalar(select(UserAccountProjection).where(
+                UserAccountProjection.sync_id == "card1"))
+            db.refresh(card)
+            a_out = repay_one(db, user_id="u1", card=card, today=TODAY,
+                              self_call=make_self_call("A"))
+    finally:
+        repay_mod.compute_statement = _real_compute_statement
+
+    b_out = racing_compute_statement.b_outcome
+
+    assert b_out is not None and b_out.status == "done", (
+        f"B 应该先跑成功,实际 {b_out} —— 夹具本身有问题")
+    assert a_out.status == "skipped_locked", (
+        f"A 应该被防线 4 挡下(skipped_locked),实际 {a_out.status}"
+        f" —— **两个进程各扣一次钱**,多 worker 部署下就是重复扣款。")
+    assert sorted(calls) == ["B"], (
+        f"self_call 被调了 {calls} —— 只能有一个赢家。重复扣钱。")
+
+    eng_a.dispose()
+    eng_b.dispose()
+    try:
+        db_path.unlink()
+    except OSError:
+        pass
