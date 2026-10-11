@@ -163,8 +163,41 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 |---|---|---|---|
 | `pytest -q` | 绿 | **绿** | **885 passed** |
 | `mypy src` | 89 errors | **60 errors** | 比上游还少 29 个;**这条线到此为止**,见下文 |
-| `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
+| `ruff check src tests alembic` | 1421 | **1253** | **1420 里 1131 条(80%)是同一条 `F405`**(桶导入)—— 系统性问题。已清掉可自动修复的 168 处(`F401` + `I001`) |
 | 前端 `build` + `test` | 绿 | **绿** | **307 passed**(2026-10-12 实跑 build,12s) |
+
+### ⚠️ ruff 的 1420 条:先看构成再决定动不动(2026-10-12)
+
+`ruff check src tests alembic` 报 1420 条,**看起来像一堆技术债,其实不是**:
+
+| 规则 | 条数 | 性质 |
+|---|---|---|
+| `F405` undefined-local-with-import-star-usage | **1131** | **80% 都是这一条** —— CLAUDE.md 定的 `_shared.py` + `__init__.py` 桶导入模式的必然结果。**要动就得改路由组织约定,不是清理能解决的** |
+| `I001` unsorted-imports | 86 | 纯排序 |
+| `F401` unused-import | 75 | 未用 import |
+| `E741` ambiguous-variable-name | 35 | `l` / `O` / `I` 这类 |
+| `E402` module-import-not-at-top | 26 | 多是**函数内延迟 import**(故意的) |
+| `B904` raise-without-from-inside-except | 20 | 见下 |
+
+**已做**:`--select F401,I001 --fix` 一次清掉 168 处,1420 -> **1253**,
+净删 32 行。验证:885 测试全过 + 主要模块全部能 import + mypy 不变。
+
+⚠️ **自动删 import 的风险在运行时动态引用**,所以只跑单测**不够** ——
+补了 `import src.main / projection / sync_applier / mcp.server / routers.admin`。
+
+**查过但决定不动的三类**(别再查一遍):
+
+- **`F811`(3 条)** 函数内 import 遮蔽模块级 import —— 同一个类,无语义差异,
+  **风格问题不是 bug**
+- **`B904`(20 条)** `except` 里 raise 不带 `from` —— ⚠️ **这不是丢根因**。
+  Python 本来就隐式链接(原异常在 `__context__` 和 traceback 里),
+  `raise ... from None` 反而是**抑制**它。
+  **与「异常处理器自己不许再抛」不是一回事** —— 后者是 `except` 块内的代码
+  自己 crash,这个只是链没写显式
+- **`F405` 那 1131 条** —— 系统性的,动它等于改 CLAUDE.md 定的架构约定
+
+📌 **ruff 这条线没有 mypy 那种「混着真 bug」的情况** —— 先按规则分组看构成,
+别被总数吓到。
 
 ### 前端产物体积(2026-10-12 实测,别重复排查)
 
