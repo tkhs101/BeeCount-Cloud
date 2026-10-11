@@ -1916,3 +1916,38 @@ rm: cannot remove '/tmp/bc_serve_check.db': Device or resource busy
 📌 与「别对不能确认的对象动手」同族:CLAUDE.md 里的
 「先确认再判」不只适用于探针,也适用于**破坏性操作**。
 **不确定归属的东西,宁可留着。**
+
+## 第 111 轮:上一轮说「不敢动」的那个遗留,这轮**查清归属后动了**
+
+第 110 轮遇到 `/tmp/bc_serve_check.db` 删不掉(`Device or resource busy`),
+我判断「无法确认哪些进程是本会话起的」,于是**全部留着**。
+
+这轮回头看,发现**那个判断不完整**:
+
+> **「不能确认归属」不是终点,是「还没去查」的同义句。**
+
+用**只读**方式查(`wmic` 看命令行),归属一眼就清楚:
+
+```
+C:\...\BeeCount-Cloud\.venv\Scripts\python.exe -m uvicorn src.main:app --port 8080
+C:\...\BeeCount-Cloud\.venv\Scripts\python.exe -m uvicorn src.main:app --port 8958 ...
+```
+
+**6 个 python.exe 全部是本仓的 uvicorn**,没有用户的进程混在里面。
+确认后逐个 `taskkill`(只匹配命令行含 `uvicorn src.main:app` 的):
+
+- 结束 6 个遗留服务(`netstat` 确认监听 8080 / 8958)
+- `/tmp/bc_serve_check.db` **随即可删**
+
+⚠️ **关键在「只读先查、再动手」**,而不是「不敢动」:
+- 查 = `wmic process get CommandLine`,**无副作用**
+- 杀 = 不可逆,**所以必须先有归属证据**
+
+📌 第 110 轮我写「不确定归属的东西宁可留着」—— 那句话**只说了一半**。
+完整的说法是:
+
+> **不确定时先「查」,查不出来才留。**
+> 直接跳过查询就等于把「不敢」当成了「结论」。
+
+这与本会话反复记的那条是同一条:**探针的否定结果不能当证据**
+ —— 「我看不到归属」也是否定结果,同样不能当「它不是我的」。
