@@ -6,6 +6,7 @@ projection 做聚合(tx 计数 / balance / category 排行等)。
 去重 / 跨账本 dedup / owner 信息回填的逻辑也在这里。"""
 from __future__ import annotations
 
+import logging
 import statistics as _stats
 
 from pydantic import BaseModel
@@ -640,6 +641,9 @@ def false_literal():
     return literal(False)
 
 
+logger = logging.getLogger(__name__)
+
+
 @router.get("/workspace/accounts", response_model=list[WorkspaceAccountOut])
 def list_workspace_accounts(
     ledger_id: str | None = Query(default=None),
@@ -709,6 +713,11 @@ def list_workspace_accounts(
         expense_total = float(bucket.get("expense", 0.0)) if bucket else 0.0
         tx_count = int(bucket.get("count", 0)) if bucket else 0
         movement = float(bucket.get("balance", 0.0)) if bucket else 0.0
+        # 本期应还(0022):只对设了还款日的信用卡算。
+        # 累计口径的余额要扫该账本全部交易,给每张卡都算一遍会把接口拖慢
+        # (37 张卡的账本 ≈ 37 次全扫)。所以**门开在还款日**:
+        # 没填还款日的卡そもそも没有「这期」的概念。
+        statement = _statement_out(db, user_id=current_user, acct=acct)
         all_accounts.append(
             WorkspaceAccountOut(
                 id=sync_id,
@@ -729,6 +738,9 @@ def list_workspace_accounts(
                 autorepay_enabled=bool(acct.autorepay_enabled),
                 autorepay_from_account_sync_id=acct.autorepay_from_account_sync_id,
                 autorepay_last_period=acct.autorepay_last_period,
+                statement_bill=statement.bill,
+                statement_outstanding=statement.outstanding,
+                next_due_date=statement.next_due,
                 bank_name=acct.bank_name,
                 card_last_four=acct.card_last_four,
                 hidden=acct.hidden,
@@ -1530,3 +1542,69 @@ def workspace_net_worth_history(
         series = filled
 
     return NetWorthHistoryOut(series=series, multi_currency=multi_currency)
+
+
+def _statement_out(db: Session, *, user_id: User,
+                   acct: UserAccountProjection) -> _StatementOut:
+    """这张卡的「本期应还」;不算或算不出来就全 None。
+
+    ## 为什么用 `current_billing_period` 而不是 `period_for_payment_due_date`
+
+    **展示要回答的是「这期要还多少」,不是「今天该还哪一期」。**
+
+    `period_for_payment_due_date` 是给**执行器**用的:它先由
+    `is_due_on` 确认今天是还款日,再反查该还哪一期。对**非还款日**它会直接
+    raise —— 用户 10/11 打开卡片详情而还款日是 25 号,调用就炸。
+    第一版就是这么写的,于是非还款日永远算不出金额(异常被吞成 None)。
+
+    `current_billing_period` 是正向的:「截止目前已出的最近一期账单」,
+    任何一天都能算,且正是用户想看的那个数。
+
+    执行器仍用它自己那一套 —— 它的输入(「今天是还款日」)是确定的,
+    两条路径服务两个不同的问题,不要互相替代。
+
+    ## 为什么 catch 住异常返回 None
+
+    这个字段是**展示用**的加分项。它不该让整个 `/workspace/accounts`
+    挂掉 —— 那个接口还喂着账户页、转账表单、预算页。展示字段失败就
+    当没有,静默返回 None,由详情弹窗不显示那一行。
+    """
+    from datetime import date
+
+    out = _StatementOut()
+    if (acct.account_type or "") != "credit_card":
+        return out
+    due = int(acct.payment_due_day or 0)
+    bill = int(acct.billing_day or 0)
+    if not (1 <= due <= 31) or not (1 <= bill <= 31):
+        return out
+
+    try:
+        from ...services.credit_card.billing import current_billing_period
+        from ...services.credit_card.statement import compute_statement
+
+        today = date.today()
+        period = current_billing_period(today, billing_day=bill, due_day=due)
+        out.next_due = period.payment_due_date.isoformat()
+        ledger_ids = [str(l) for l in db.scalars(
+            select(Ledger.id).where(Ledger.user_id == acct.user_id)).all()]
+        stmt = compute_statement(
+            db, user_id=str(acct.user_id), ledger_ids=ledger_ids,
+            card_account_sync_id=acct.sync_id, period=period, today=today)
+        out.bill = float(stmt.bill)
+        out.outstanding = float(stmt.outstanding)
+    except Exception:  # noqa: BLE001 —— 展示字段不许拖垮整个接口
+        logger.debug("credit.statement_out failed for %s",
+                     acct.sync_id, exc_info=True)
+    return out
+
+
+class _StatementOut:
+    """`_statement_out` 的结果容器。全 None = 不算/算不出。"""
+
+    __slots__ = ("bill", "outstanding", "next_due")
+
+    def __init__(self) -> None:
+        self.bill: float | None = None
+        self.outstanding: float | None = None
+        self.next_due: str | None = None

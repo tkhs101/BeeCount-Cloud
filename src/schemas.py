@@ -584,6 +584,18 @@ class ReadAccountOut(BaseModel):
     #: 扣款账户 **sync_id**。不是名字 —— 改名会让按名定位静默失效。
     autorepay_from_account_sync_id: str | None = None
     autorepay_last_period: str | None = None
+    # ---- 本期应还(0022 的展示出口)---------------------------------------- #
+    # 用户此前完全看不到「这期要还多少」—— `compute_statement` 只被
+    # `repay_one` 调用过一次,用来决定扣多少,**没有任何出口给用户**。
+    # 详情弹窗只有「账单日 X / 还款日 Y / 还有 N 天」这类静态日号。
+    #
+    # 只在 `account_type == 'credit_card'` 且填了还款日时才算:
+    # 其他账户算它一次是白扫全表(累计口径要扫该账本全部交易)。
+    statement_bill: float | None = None
+    #: 本期**还没还**的部分。已手动还过就小于 bill。
+    statement_outstanding: float | None = None
+    #: 本期还款日(`YYYY-MM-DD`)。None = 不是信用卡 / 没填还款日。
+    next_due_date: str | None = None
     bank_name: str | None = None
     card_last_four: str | None = None
     # 账户隐藏(issue #240):只影响前端选择器/列表呈现,服务端不做任何统计
