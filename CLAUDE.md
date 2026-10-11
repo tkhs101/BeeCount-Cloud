@@ -565,6 +565,34 @@ import zhTW from './zh-TW'
 ⚠️ `_UpdateTransactionKw` 第一遍**漏写了 `tx_type`**,mypy 当场报出来。
 这就是这个模式的价值:**字段写漏/写错名/类型不匹配,都变成编译期错误。**
 
+**⚠️ 走不通的一条(试过了,别再试):给 `_MergeSpec.model` 换精确类型**
+
+`sync_applier.py` 的 4 条 `"type" has no attribute "ledger_id"` 看着像该修
+(`model: type` 太宽,mypy 不知道上面有什么属性)。我试了三版:
+
+| 做法 | mypy |
+|---|---|
+| 原地(`model: type`) | 63 |
+| 一个 Protocol(只要 `ledger_id` + `sync_id`) | **65** |
+| 两个 Protocol + union + 两处 `cast` | **81** |
+
+**三条都变差**,已全部回退。原因:
+
+1. 单个 Protocol 会把**四张 user-global 表**判成不兼容 ——
+   `UserAccountProjection` / `UserTagProjection` / `UserCategoryProjection` /
+   `UserExchangeRateProjection` **没有 `ledger_id`**,它们走 `_merge_user_scoped`。
+   我第一版根本没意识到**两条路径的模型形状不同**,这是我的错,不是代码的错
+2. 加了 union 之后,整张 `_LEDGER_MERGE_SPECS` 登记表(几十个 `_MergeSpec(...)`
+   字面量)和它的全部下游都被拖进来 —— 7 条变 25 条
+
+**结论:这 4 条 attr-defined 的净收益是负的,保持原样。**
+`model: type` 虽然宽,但它诚实地描述了「运行时就是一个类」——
+比半个协议 + 两个 cast 更贴近真相。
+
+⚠️ **教训:改类型标注前先量「会波及多少下游」。** 我凭直觉以为
+「收紧一个标注只会少几条」,结果整张登记表一起被拖进来。
+**先量再改**,和查首屏大小一个道理。
+
 **规则:mypy 的 `| None` 与 `**kw` arg-type 要当真读** ——
 前者常常是真能走到的路径,后者是「同一形状写了很多遍」的指示器。
 
