@@ -1,0 +1,26 @@
+test(vite): 给 manualChunks 加行为护栏 —— 突变验证抓到
+
+`vite.config.ts` 里那段「⚠️ **不要**给 recharts 配 manualChunks」的注释,
+记着一次实测省下 399 kB 的改动。但**注释不强制任何东西**:有人加回
+`if (id.includes('recharts')) return 'recharts'`,首屏就涨回 409 kB,
+而 build 照样成功、tsc 照样 0 错、**所有测试照样全绿**。
+
+这正是 bundle 那几轮反复出现的失败模式 —— 「产物变了,但没有任何一道门会红」。
+
+## 判据是真调函数,不是 grep 配置文本
+
+⚠️ 写成 `expect(src).not.toContain('recharts')` 是**假护栏** ——
+注释里就写着 recharts,测试会永远红(或者被人改配置绕过)。
+这里 import 真实的 vite config,用**真实的 pnpm node_modules 路径**
+调用 `manualChunks`,断言返回值。
+
+三条断言:
+1. recharts 与 d3-* 的 id **必须返回 undefined**(被指定 chunk 就会被
+   modulepreload 成首屏资源)
+2. **react 核心仍然进 `react-vendor`** —— 上一条只说「别加 recharts」,
+   不是「把 manualChunks 全删了」,这条防的是过度修正
+3. 应用源码永远 undefined
+
+突变验证:把那两条有害规则加回去 -> **变红**;还原 -> 319 全过。
+
+**316 -> 319 passed**。
