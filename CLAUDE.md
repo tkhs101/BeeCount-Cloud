@@ -265,6 +265,39 @@ grep -oE 'from"\./[a-zA-Z-]+\.js"' <入口块>.js | sort -u
 代价是所有预取都没了。这属于**用我验不了的性能权衡**去换确定的字节数,
 不做。真要优化得先有 RUM 或浏览器的 network 面板数据。
 
+#### ✅ 浏览器复验已具备(`playwright-cli`),改打包配置后**必须**跑一次
+
+本会话我改了两次打包配置(去掉 recharts 的 `manualChunks` 规则、
+换掉 `Amount.tsx` 的 framer-motion import),**之前一直没在浏览器里验证过
+应用还能不能启动**。第 27 轮那个部署复验只看了 HTTP 200 ——
+**坏掉的 bundle 同样返回 200**。
+
+现在用 `playwright-cli` 补上了:
+
+```bash
+# 起真服务器(WEB_STATIC_DIR 指向 dist),然后:
+playwright-cli open http://127.0.0.1:8921/
+playwright-cli console error          # -> Total messages: 0
+playwright-cli --raw eval "JSON.stringify(performance.getEntriesByType('resource')
+  .filter(r=>r.name.endsWith('.js'))
+  .map(r=>({f:r.name.split('/').pop(),kb:Math.round(r.encodedBodySize/1024)})))"
+```
+
+实测结果:应用**正常启动并跳到 `/login`**,标题 `蜜蜂记账 · Web`,
+**控制台 0 错误**,浏览器实际下载 4 个 JS:
+
+| 文件 | kB |
+|---|---|
+| `index` | 1223 |
+| `react-vendor` | 176 |
+| `cmdk` | 44 |
+| `poster` | 36 |
+| **合计** | **1479 kB** |
+
+⚠️ **这个 1479 和上面三轮用 `modulepreload` 推算的完全一致** ——
+所以那套「看 `index.html` 的 rel,不看 assets 目录」的度量方法是**对的**,
+可以放心用。反过来,**光看 HTTP 200 证明不了 bundle 能跑**,别再拿它当验收。
+
 #### i18n 231 kB:第二次评估,**仍然暂缓**(理由比上次更具体)
 
 `Amount.tsx` 那种「一个核心组件为一个钩子拖进整库」的问题修完后,
@@ -282,7 +315,7 @@ grep -oE 'from"\./[a-zA-Z-]+\.js"' <入口块>.js | sort -u
 一个我**只能靠 build + 单测**验证的改动,而风险恰好落在**验不到的那部分**
 上 —— 这条我不做。
 
-要做的先决条件:能跑起浏览器复验(或 Playwright),再按这个顺序动:
+**先决条件已满足**(见上节 `playwright-cli`)。再按这个顺序动:
 先给 provider 加「词典未加载」的显式状态(别靠 `?? key` 兜底 ——
 那会把加载失败变成满屏原始 key 而没人发现),再按需 `import`,
 最后**实测**首屏 chunk 变小 + 切换语言无闪烁。
