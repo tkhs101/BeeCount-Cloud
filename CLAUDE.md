@@ -538,6 +538,35 @@ node_modules 路径调用),**不能**写 `expect(src).not.toContain('recharts')`
 `react-vendor`**(防「为了躲第一条把整个 manualChunks 删了」的过度修正);
 应用源码永远 `undefined`。
 
+#### ✅ 真实金额 + 时区在浏览器里验过了(第 49 轮)
+
+建了 3 笔真实交易(含税额),在 `playwright-cli` 里看渲染结果:
+
+| 输入(UTC) | 页面显示 | 核对 |
+|---|---|---|
+| `2026-10-10T12:00:00Z` | `2026-10-10 21:00` | +9 ✅ |
+| `2026-10-11T09:30:00Z` | `2026-10-11 18:30` | +9 ✅ |
+| `2026-10-12T08:00:00Z` | `2026-10-12 17:00` | +9 ✅ |
+
+金额:`-42.50` / `-88,000.00` / `-1,234.56` —— 千分位与两位小数都对。
+分类(交通/购物/餐饮)、账户(招行卡)、备注都正常,`rawKeys: 0`。
+
+⚠️ **浏览器在 Asia/Tokyo,所以 +9 是正确的** —— 别看到「时间变了」就当 bug。
+**先确认时区再下结论**(与「浏览器探针不可靠」同族)。
+
+**这条验的是 CLAUDE.md 记了四次同类事故的那条 UTC 归一链** —— 单测
+`test_happened_at_timezone.py` 只证明函数返回值对,这条证明了**经过
+写入 → 投影 → 读端 → 前端渲染**整条链之后时刻仍然正确。
+
+⚠️ **用 `curl` 建带中文的数据会失败**(报 `error parsing the body`)——
+**不是产品 bug**。判决性对照:同一个端点、ASCII 账本名**成功**、
+中文名失败 = shell 编码把中文弄成了非法 UTF-8。
+**发中文 payload 用 Python `urllib` 显式 `.encode("utf-8")`**。
+
+⚠️ 写路径的真实路径是 `/write/ledgers/{ledger_id}/transactions`,
+字段是 **snake_case**(`category_name` / `account_name` / `base_change_id`
+必填),**不是 camelCase** —— 猜字段名会连撞 400 和 405。
+
 #### `useReducedMotion` 的**护栏**(突变验证过,2/2 抓到)
 
 护栏:`frontend/apps/web/src/useReducedMotion.behavior.test.ts`。
