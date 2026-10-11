@@ -91,20 +91,43 @@ def _as_bool(v: Any, default: bool = True) -> bool:
 
 
 def _parse_happened_at(raw: Any):
-    """happenedAt 通常是 ISO 8601 字符串,偶见 datetime 对象。"""
+    """happenedAt 通常是 ISO 8601 字符串,偶见 datetime 对象。
+
+    ⚠️ **必须归一到 UTC** 再交给 ORM。
+
+    SQLite 没有原生 datetime 类型:SQLAlchemy 存的是**墙钟字符串**,
+    而墙钟是哪片墙上的由 tzinfo 决定。写一个 aware `18:00+09:00`
+    (= UTC 09:00) 进去,库里落的是 `18:00` —— **UTC 的那 9 个小时消失了**。
+
+    读回来是 naive `18:00`,而读路径的 `_to_utc` 对 naive 一律
+    「假设是 UTC」→ 序列化成 `18:00Z` → 前端按本地时区渲染成
+    **次日 03:00**。整体 **+9h**,且不报错、不告警。
+
+    `snapshot_mutator._to_iso8601` 早就做了这个归一,而这里没有 ——
+    同一个转换两份实现,一份对一份错。凡是看到「两个函数做同一件事」,
+    先确认它们的行为一致。
+
+    naive 输入按 UTC 解释(与 `_to_utc` / `_to_iso8601` 同一约定):
+    库里存的是 UTC 墙钟,naive → UTC 才不会引入第二次偏移。
+    """
     from datetime import datetime, timezone
+
+    def _to_utc(dt: datetime) -> datetime:
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
 
     if raw is None:
         return datetime.now(timezone.utc)
     if isinstance(raw, datetime):
-        return raw if raw.tzinfo is not None else raw.replace(tzinfo=timezone.utc)
+        return _to_utc(raw)
     if isinstance(raw, str):
         s = raw.strip()
         if not s:
             return datetime.now(timezone.utc)
         # Python 3.11+ fromisoformat 吃 "Z" 结尾
         try:
-            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+            return _to_utc(datetime.fromisoformat(s.replace("Z", "+00:00")))
         except ValueError:
             return datetime.now(timezone.utc)
     return datetime.now(timezone.utc)
