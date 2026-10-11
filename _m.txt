@@ -1,5 +1,0 @@
-docs: 补「改了 projection.py 就要想一遍 sync」+「单跑绿全量红」第四种来源
-
-模块级全局 DB engine:第二个测试文件设的 DATABASE_URL 根本没生效
-(engine 在 src.main 第一次 import 时就建好了,pytest 按文件名顺序收集)。
-根治 = 自建 engine + dependency_overrides,不依赖全局状态。
