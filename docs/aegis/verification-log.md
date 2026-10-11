@@ -2315,3 +2315,32 @@ CLAUDE.md 记载过的那条 —— `_projection_row_to_tx_dict` 漏掉 `tax_amo
 > 📌 **顺序很重要**:
 > 「跑护栏 -> 看颜色」会同时得到两种可能(护栏失效 / 变异没落地),
 > **无法区分**。「先确认变异落地 -> 再跑护栏」才有唯一解释。
+
+## 第 128 轮:用新工具把「老护栏复验」做完 —— 5/5 全部仍然有效
+
+第 127 轮写了 `scripts/mutation_check.py`(把「变异没落地就不许跑护栏」
+固化成硬约束),这轮就用它把第 125-126 轮开的头收完。
+
+| 护栏 | 变异 | 结果 |
+|---|---|---|
+| `test_shared_all_registry.py` | 从 `__all__` 删掉 `AutoRepayRunResult` | **1 条红** |
+| `test_account_reverse_bridge_coverage.py` | 抽掉 `autorepay_from_account_sync_id` 列 | **2 条红**(含测判据自身) |
+| `test_projection_reverse_bridge_coverage.py` | 漏 `tax_amount` | 3 条红 |
+| `test_truncate_ledger_coverage.py` | 删 `ReadTxSplitProjection` | 2 条红 |
+| `test_sync_merge_spec_coverage.py` | 删 `("taxAmount", ...)` | 1 条红 |
+
+### 第一条是本会话最该验的
+
+`_shared.py` 的 `__all__` 那条护栏 —— 它是**唯一一条本会话我亲手改过其目标**的:
+第 75 轮加护栏,第 81 轮给 `AutoRepayRunResult` **同时**加进 import 块和
+`__all__`。CLAUDE.md 警告的正是「改了一层忘了另一层」—— 而那条漏了会变成
+`NameError` 指向另一个文件,极难查。
+
+### 工具的拒绝路径也顺带验了两次
+
+验账户那条时我先用了 `"autorepay_from_account_sync_id"`(带引号)当锚点,
+而真实写法是 `UserAccountProjection.autorepay_from_account_sync_id`(列选取)。
+工具直接 **exit 2 + 「变异没有发生」**,文件零改动 —— 换成正确锚点后立刻抓到。
+
+> 📌 这正是 126 轮那个坑的**工具化**:以前我是「跑完看颜色」才发现不对,
+> 现在是**写入阶段就拒绝**,连护栏都不跑。
