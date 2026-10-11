@@ -1,8 +1,0 @@
-docs: poster 的范围收窄到「Vite 给动态 import 的共享 chunk 也发 modulepreload」
-
-入口块实测只 import cmdk,并没有 import poster —— 所以它不在「入口静态依赖」
-那一类。剩下的合理解释是 Vite 会预取入口的动态 import 之间的共享 chunk
-(html-to-image + qrcode 被年度报告页和设置页共用,两页都 lazy)。
-
-并写明别急着关 build.modulePreload:收益 36 kB,代价是所有预取都没了,
-属于用验不了的性能权衡换确定字节数,不做。
