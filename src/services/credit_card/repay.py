@@ -150,18 +150,33 @@ def run_daily(db: Session, *, user_id: str, today: date,
 def repay_one(db: Session, *, user_id: str, card: UserAccountProjection,
               today: date, self_call: Any) -> RepayOutcome:
     card_id = card.sync_id
+
+    def _done(out: RepayOutcome) -> RepayOutcome:
+        """**每次都留一句**,不管走到哪个状态。
+
+        之前只有 failed / invalid_config 有日志,其余 8 个状态静默返回 ——
+        于是「我的钱为什么没动」接口不说、日志也不说,排查只能靠猜
+        (本会话为此浪费三轮,先后猜错 `is_due_on`、账期窗口、夹具)。
+        手动触发与调度器共用这一条,两边都受益。
+        """
+        logger.info("autorepay.done card=%s status=%s detail=%s",
+                    card_id, out.status, out.detail)
+        return out
+
     try:
-        return _repay_inner(db, user_id=user_id, card=card, today=today,
-                            self_call=self_call)
+        return _done(_repay_inner(db, user_id=user_id, card=card,
+                                     today=today, self_call=self_call))
     except AutoRepayConfigError as e:
         # 配置非法 → 跳过这张卡 + 可见的错误,**不让整个批次崩掉**
         logger.warning(
             "autorepay.skip card=%s invalid_config: %s", card_id, e)
-        return RepayOutcome(card_id, "skipped_invalid_config", detail=str(e))
+        return _done(RepayOutcome(card_id, "skipped_invalid_config",
+                                 detail=str(e)))
     except Exception as e:  # noqa: BLE001 - 一张卡失败不该拖垮整个批次
         db.rollback()
         logger.exception("autorepay.failed card=%s", card_id)
-        return RepayOutcome(card_id, "failed", detail=f"{type(e).__name__}: {e}")
+        return _done(RepayOutcome(card_id, "failed",
+                              detail=f"{type(e).__name__}: {e}"))
 
 
 def _repay_inner(db: Session, *, user_id: str, card: UserAccountProjection,
