@@ -17,6 +17,16 @@ export type ImportFieldMapping = {
   currency?: string | null
   /** 消费税税额列(0020,可选)。导出 CSV 的第 13 列;不传 = 不导入税额。 */
   tax_amount?: string | null
+  /**
+   * 组合支付分账列(0021,可选)。导出 CSV 的第 14 列,形如
+   * `招行卡:3000.00|现金:2000.00`。
+   *
+   * **必须在这里声明** —— 前端映射编辑器会把整个 mapping 原样回传,
+   * 而 Pydantic 的 `extra=ignore` 会静默丢掉没声明的字段。
+   * 后端 `FieldMappingPayload` / `to_internal()` / `_mapping_to_payload`
+   * 三层都已支持(见父仓 2638cef),缺的只是这一侧。
+   */
+  splits?: string | null
   tx_type: string | null
   amount: string | null
   happened_at: string | null

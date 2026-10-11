@@ -262,3 +262,36 @@ describe('splits —— 两个「控件打架」的组合', () => {
     }
   })
 })
+
+
+describe('splits —— 导入映射 UI 与导出列必须对得上', () => {
+  const _read = (rel: string) =>
+    fs.readFileSync(path.resolve(__dirname, rel), 'utf8')
+
+  it('api-client 的 ImportFieldMapping 声明了 splits', () => {
+    // 后端三层管道(FieldMappingPayload / to_internal /
+    // _mapping_to_payload)都支持 splits,而前端映射编辑器会把整个 mapping
+    // 原样回传 —— 类型不声明的话,Pydantic extra=ignore 静默丢掉它。
+    const t = _read('../../../packages/api-client/src/import.ts')
+    expect(t).toMatch(/splits\?:\s*string \| null/)
+  })
+
+  it('映射 UI 的 OPTIONAL_FIELDS 包含 tax_amount 和 splits', () => {
+    // 漏一个字段不是「用默认值」,而是**静默不导入**:表头叫「支付拆分」
+    // 而非「拆分」时别名匹配不到 → 那一列整列消失 → 组合支付变
+    // 「无账户的支出」,账户余额全错,而预览表里连这一列都没有。
+    const src = _read('components/import/FieldMappingDialog.tsx')
+    expect(src).toMatch(/'tax_amount'/)
+    expect(src).toMatch(/'splits'/)
+  })
+
+  it('i18n 三语都有 import.mapping.field.{tax_amount,splits}', () => {
+    for (const f of ['en.ts', 'zh-CN.ts', 'zh-TW.ts']) {
+      const src = _read(path.join('i18n', f))
+      for (const k of ['tax_amount', 'splits']) {
+        expect(src, `${f} 缺 import.mapping.field.${k}`)
+          .toMatch(new RegExp(`'import\.mapping\.field\.${k}'`))
+      }
+    }
+  })
+})

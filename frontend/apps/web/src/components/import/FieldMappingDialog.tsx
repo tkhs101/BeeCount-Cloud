@@ -37,12 +37,19 @@ const REQUIRED_FIELDS: Array<keyof ImportFieldMapping> = [
   'category_name',
 ]
 
+// ⚠️ 这里必须与导出 CSV 的列**一一对应**。漏一个字段的后果不是
+// 「那一列用默认值」,而是**静默不导入**:用户自己的 CSV 表头叫「支付拆分」
+// 而不是「拆分」时,服务端别名匹配不到 → 那一列整列消失 →
+// 组合支付变「无账户的支出」,账户余额全错,而预览表里连这一列都没有,
+// 用户没有任何机会发现。
 const OPTIONAL_FIELDS: Array<keyof ImportFieldMapping> = [
   'subcategory_name',
   'account_name',
   'from_account_name',
   'to_account_name',
   'currency',
+  'tax_amount',
+  'splits',
   'note',
 ]
 
