@@ -545,7 +545,7 @@ node_modules 路径调用),**不能**写 `expect(src).not.toContain('recharts')`
 
 ## 逐轮验证日志 -> [docs/aegis/verification-log.md](./docs/aegis/verification-log.md)
 
-第 49-60 轮的**逐条验证记录**(每轮实测了什么、哪个探针坏在我自己身上、
+第 49-62 轮的**逐条验证记录**(每轮实测了什么、哪个探针坏在我自己身上、
 哪条护栏做了变异验证)都在那个文件里,按时间倒序追加。
 
 ⚠️ **为什么移出来**:CLAUDE.md 一度长到 **82 kB**,而单轮上下文预算只有
