@@ -97,15 +97,49 @@ function parse(relPath: string): ts.SourceFile {
   return ts.createSourceFile(abs, fs.readFileSync(abs, 'utf8'), ts.ScriptTarget.ESNext, true)
 }
 
-describe('hook placement (no unreachable hooks)', () => {
-  // 这些是本次改动涉及 hook 的文件 —— 覆盖到就是够用,别把全仓都扫进来
-  const watched = [
-    'pages/sections/TransactionsPage.tsx',
-    'components/GlobalEditDialogs.tsx',
-    'pages/sections/ShareIncomingPage.tsx',
-  ]
+/** 递归收集目录下的所有 `.tsx`(跳过测试文件与 node_modules)。 */
+function collectTsx(dir: string, acc: string[] = []): string[] {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue
+    const abs = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      collectTsx(abs, acc)
+    } else if (entry.name.endsWith('.tsx') && !entry.name.includes('.test.')) {
+      acc.push(path.relative(SRC_DIR, abs).split(path.sep).join('/'))
+    }
+  }
+  return acc
+}
 
-  for (const rel of watched) {
+describe('hook placement (no unreachable hooks)', () => {
+  // ⚠️ **自动发现所有 .tsx**,不是硬编码名单。
+  //
+  // 原先是 3 个文件的硬编码列表,理由是「本次改动涉及 hook 的文件,覆盖到
+  // 就是够用,别把全仓都扫进来」。变异审计时实测:全仓 **79 个**文件里有
+  // hook,护栏只盯 **3 个** —— 覆盖 3.8%。
+  //
+  // 硬编码名单与我在反向桥护栏里批评过的「opt-in 列表默认放行」是同一个
+  // 反模式:**新文件加 hook 时默认不被检查**,而那正是要防的情况。
+  // 扫全仓的代价只是测试慢一点(79 个小文件解析,亚秒级)。
+  const watched = collectTsx(SRC_DIR)
+
+  /** 真正含顶层组件的文件(入口文件如 `main.tsx` 是 `createRoot().render()`,
+   * 没有组件定义,断言它们会误报)。 */
+  const withComponents = watched.filter(
+    (rel) => topLevelComponents(parse(rel)).length > 0,
+  )
+
+  it('自动发现确实扫到了足够多的文件(防扫描逻辑本身失效)', () => {
+    // 这一条是给「扫描范围」上的护栏:`collectTsx` 返回空/极少时,
+    // 下面的逐文件断言会**全部静默通过** —— 一个都不检查的护栏
+    // 看起来和全绿一模一样。
+    expect(watched.length).toBeGreaterThan(50)
+    // 且其中要有足够多的**含组件**文件,否则「跳过无组件文件」这条
+    // 规则可能把所有文件都跳掉了,同样等于没检查。
+    expect(withComponents.length).toBeGreaterThan(20)
+  })
+
+  for (const rel of withComponents) {
     it(`${rel} 的 hook 都在组件函数体内直接执行`, () => {
       const sf = parse(rel)
       const components = topLevelComponents(sf)

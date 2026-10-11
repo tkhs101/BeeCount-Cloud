@@ -1,0 +1,48 @@
+test(frontend): hookPlacement 扫描范围从 3 个文件扩到 79 个
+
+## 变异审计的连带发现
+
+审计 amountBasisGuard 时顺手测了另外两条既有护栏。
+
+**amountBasisGuard 是真护栏**:往 web-features/src/lib/ 塞一个全新的违规
+聚合点,立刻被抓到并指名文件行号。它用 TypeScript AST 扫描而不是正则 ——
+这正是它比本会话那些字符串护栏强的地方。
+
+**hookPlacement 的检测逻辑也是对的**:hook 埋在 useMemo 回调里 /
+事件回调里 -> 变红;合法写法 -> 全绿。3/3 含阴性对照。
+
+**但它的扫描范围是 3 个硬编码文件。** 全仓有 79 个文件用 hook,
+护栏只盯 3 个 —— 覆盖 3.8%。
+
+## 硬编码名单是「opt-in 列表默认放行」
+
+与我在反向桥护栏里批评过的反模式完全相同:新文件加 hook 时默认不被检查,
+而那正是要防的情况。原先的理由是「本次改动涉及 hook 的文件,覆盖到就是够用,
+别把全仓都扫进来」—— 代价小,风险大。
+
+改成 collectTsx() 递归自动发现。代价只是测试慢一点(79 个小文件解析,
+亚秒级),测试数 215 -> 307。
+
+## 扫描范围本身也要有护栏
+
+「逐文件断言」有个致命特性:扫到 0 个文件时会全部静默通过 ——
+一个都不检查的护栏看起来和全绿一模一样。所以加了:
+
+    expect(watched.length).toBeGreaterThan(50)
+    expect(withComponents.length).toBeGreaterThan(20)
+
+第二条尤其重要:「跳过无组件文件」这条规则可能把所有文件都跳掉,
+同样等于没检查。
+
+## 顺带修一个误报
+
+自动发现后 main.tsx 红了 —— 它是 createRoot().render() 入口,
+没有组件定义,toBeGreaterThan(0) 误报。改为跳过无组件文件,
+并用上面的 withComponents.length 断言保证跳过规则没有把范围跳空。
+
+## 验证
+
+在新纳入的文件(AboutDialog.tsx,原先不在受盯名单)里埋 hook
+-> 变红并指名 AuditProbe:428 useEffect;还原 -> 全绿。
+
+0 TS 错误 / 307 前端通过
