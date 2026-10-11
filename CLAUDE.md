@@ -162,7 +162,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
 | `pytest -q` | 绿 | **绿** | **885 passed** |
-| `mypy src` | 89 errors | **63 errors** | 比上游还少 26 个 |
+| `mypy src` | 89 errors | **60 errors** | 比上游还少 29 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **307 passed**(2026-10-12 实跑 build,12s) |
 
@@ -592,6 +592,25 @@ import zhTW from './zh-TW'
 ⚠️ **教训:改类型标注前先量「会波及多少下游」。** 我凭直觉以为
 「收紧一个标注只会少几条」,结果整张登记表一起被拖进来。
 **先量再改**,和查首屏大小一个道理。
+
+**✅ 筛错误类型时看最稀有的那一类,不是最多的**
+
+给 `_MergeSpec.model` 换精确类型是净负的(63 -> 81),说明 `[arg-type]` /
+`[attr-defined]` 这些**大类大多是系统性噪音**,硬改只会拖更多下游进来。
+
+反过来筛 `[valid-type]` / `[misc]`(一共 6 条),两处都是真问题:
+
+| 位置 | 问题 |
+|---|---|
+| `services/data_cleanup/cleaner.py` | `list[callable]` —— 把内置**函数**当类型用,后面 `# type: ignore` 压着,`op()` 报「callable? not callable」 |
+| `routers/admin.py` `data_cleanup_clean` | 塞 `dict` + `# type: ignore`,靠 Pydantic 强转 —— **给 `DataCleanupFailure` 加个必填字段就变运行时 422,而 mypy 因为有 ignore 不报** |
+
+第二条与本仓反复出现的「同一件事两份实现 / 契约没在契约点强制」是同一族:
+**`# type: ignore` 就是在契约点放弃强制**。
+
+**规则:错误数量多的那一类基本是系统性噪音;数量少的(尤其
+`valid-type` / `misc`)才值得逐条读。** 先按类型分组,
+再按「条数升序」决定从哪看起。
 
 **规则:mypy 的 `| None` 与 `**kw` arg-type 要当真读** ——
 前者常常是真能走到的路径,后者是「同一形状写了很多遍」的指示器。

@@ -1,41 +1,8 @@
-fix(admin,cleanup): 修两处「没被强制的类型契约」—— mypy 63 -> 60
+docs: 记「筛 mypy 错误要按条数升序看」这个策略
 
-## 策略:看最稀有的错误类型,不是最多的
+给 _MergeSpec.model 换精确类型净负(63->81),说明 arg-type/attr-defined
+这些大类多是系统性噪音。反过来筛 valid-type/misc(共 6 条),两处都是真问题:
+list[callable] 把内置函数当类型用;admin.py 塞 dict + type:ignore 靠
+Pydantic 强转,模型加必填字段就变运行时 422 而 mypy 不报。
 
-上一轮给 `_MergeSpec.model` 换精确类型是净负的(63->81),说明
-`[arg-type]` / `[attr-defined]` 这些大类大多是系统性噪音。
-这轮反过来筛 `[valid-type]` / `[misc]`,一共才 6 条 —— 反而两处是真问题。
-
-## 1. `list[callable]` —— 把内置函数当类型用
-
-`services/data_cleanup/cleaner.py`:
-```python
-pending_file_ops: list[callable] = []  # type: ignore[type-arg]
-...
-op()      # -> mypy: callable? not callable
-```
-
-`callable` 是内置**函数**,不是类型,所以 mypy 说它 not valid as a type,
-而 `op()` 那行又报出一个看不懂的「callable? not callable」——
-整个是被 `# type: ignore` 压着的。实际语义就是「DB commit 之后再调的
-无参函数」,改成 `list[Callable[[], None]]`,顺带把 `_dispatch` 的
-签名也精确了。
-
-## 2. 塞 dict + type: ignore 换 Pydantic 强制转换
-
-`routers/admin.py` 的 `data_cleanup_clean`:
-```python
-failures=[{"record_key": ..., "error": ...}],   # type: ignore[arg-type]
-```
-
-`DataCleanupResult.failures` 期望 `list[DataCleanupFailure]`。
-今天字段刚好对得上所以能跑,但**哪天给 `DataCleanupFailure` 加一个必填字段,
-这里就变成运行时 422,而且 mypy 因为有 ignore 不会报**。
-
-改成直接 `DataCleanupFailure(record_key=..., error=...)` —— 类型契约
-回到编译期。这与本仓反复出现的「同一件事两份实现 / 契约没在契约点强制」
-是同一族。
-
-## 验证
-
-885 条测试全过 / mypy 60(本轮开始 63,上一轮 63,会话开始 80)。
+规则:错误多的那类是系统性噪音,少的才值得逐条读。
