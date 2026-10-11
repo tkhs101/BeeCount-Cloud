@@ -1887,3 +1887,32 @@ CLAUDE.md 早写着不变式 #1:
 ⚠️ 插入那一节时我的锚点又多写了 `⚠️ ` 前缀(真实标题没有),第一次直接失败。
 这跟第 107 轮那条规则是同一个问题的两面:**别用方便的那个** ——
 锚点要用 `grep` 确认过的,不能凭印象写。
+
+## 第 110 轮:完整收尾验证 —— 四道门全绿,一处遗留**故意不处理**
+
+| 门 | 结果 |
+|---|---|
+| `pytest tests/` | **892 passed**(127s) |
+| `ruff check src tests alembic` | 1255 |
+| `mypy src` | **60** |
+| `pnpm -C apps/web test` | **319 passed** |
+| `pnpm -C apps/web build` | **built in 9.43s**,无类型错误 |
+
+工作区 0 未提交 / 0 未推送。
+
+## 一处遗留:`/tmp/bc_serve_check.db` 删不掉,**故意不处理**
+
+```
+rm: cannot remove '/tmp/bc_serve_check.db': Device or resource busy
+```
+
+`tasklist` 里有多个 `python.exe`,其中两个占 131MB / 139MB —— 像是早前起的
+服务。CLAUDE.md 早记过这个形状(「全局 engine 还持有连接 -> 删临时库
+`PermissionError (WinError 32)`」)。
+
+⚠️ **但我没有杀它们** —— 我无法确认哪些是本会话起的,盲杀可能杀掉
+**用户自己**的进程。12 字节的临时文件留在 `/tmp`,由系统清理,代价可忽略。
+
+📌 与「别对不能确认的对象动手」同族:CLAUDE.md 里的
+「先确认再判」不只适用于探针,也适用于**破坏性操作**。
+**不确定归属的东西,宁可留着。**
