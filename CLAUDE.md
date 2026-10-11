@@ -1214,7 +1214,7 @@ target 是 **Name** —— 于是「什么都没找到」= 空集合 = 「没有
 
 ### 备份/还原:原来只测了状态文件管理
 
-`tests/test_backup_restore.py` 的 11 条全是 `status.json` 读法、
+`tests/test_backup_restore.py` 的 10 条全是 `status.json` 读法、
 目录清理、排序 —— `admin restore_backup` **真正走的数据路径零覆盖**。
 
 而还原是**运维真会执行**的操作:出事时数据已经错了,不是界面难看。
