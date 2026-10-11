@@ -2254,3 +2254,35 @@ Pydantic Settings **按约定大写**出来的。**我又忘了这条** —— �
 > 📌 所以「写个脚本扫一遍」的**默认假设应该是「它会报错」,而不是
 > 「文档有问题」。报出来的每一条,先问「我的判据站得住吗」,再问
 > 「它是不是真的」。
+
+## 第 125 轮:验「老护栏还咬不咬得住」—— 这比「文件还在不在」重要
+
+上一轮验了文档点名的 15 个测试文件**都存在**。但那只证明文件在,不证明它
+**还有效** —— 护栏最危险的失效不是消失,而是**代码变了、它却悄悄不再报错**。
+本会话动过 `src/`(`_shared.__all__`、`AutoRepayRunResult`)和 `tests/` 好几轮。
+
+### 重验一条老护栏
+
+`tests/test_projection_reverse_bridge_coverage.py` 是很多轮前写的。变异掉
+CLAUDE.md 记载过的那条 —— `_projection_row_to_tx_dict` 漏掉 `tax_amount`:
+
+```python
+    if row.tax_amount is not None:
+        item["taxAmount"] = row.tax_amount   # <- 换成 pass
+```
+
+**三条测试同时变红**:
+
+- `test_tax_amount_and_splits_across_...`
+- `test_a_column_is_not_just_mentioned_in_source`  <- 专门抓「复制了但没接线」
+- `test_guard_mechanism_itself_w...`  <- **测护栏机制本身的那条**
+
+第三条特别值钱:它证明**不是某条断言碰巧命中**,而是**判据本身**在报错。
+
+### 这条线的结论
+
+> 📌 **护栏要在引入时验证,还要在「它守护的代码变过之后」再验一次。**
+> 前者证明「它当时有效」,后者证明「它**现在**有效」。
+
+第 114-120 轮连续动了 `src/` 与 `tests/`,而那些护栏是第 60-80 轮写的 ——
+「引入时验证过」不能替代「现在还咬得住」。
