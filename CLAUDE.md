@@ -162,7 +162,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
 | `pytest -q` | 绿 | **绿** | **885 passed** |
-| `mypy src` | 89 errors | **60 errors** | 比上游还少 29 个 |
+| `mypy src` | 89 errors | **60 errors** | 比上游还少 29 个;**这条线到此为止**,见下文 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **307 passed**(2026-10-12 实跑 build,12s) |
 
@@ -607,6 +607,23 @@ import zhTW from './zh-TW'
 
 第二条与本仓反复出现的「同一件事两份实现 / 契约没在契约点强制」是同一族:
 **`# type: ignore` 就是在契约点放弃强制**。
+
+**⚠️ 剩下的稀有类型我逐条验过 —— 3 条全是假阳性,别加 cast 去消**
+
+| 位置 | mypy 说 | 运行时为什么安全 |
+|---|---|---|
+| `routers/profile.py:344` | `Path / None` | 上一行 `not (profile.avatar_file_id or "").strip()` 已经排除 None(None -> `""` -> falsy -> raise 404)。mypy 窄化不出 `or ""` 蕴含「非 None」 |
+| `routers/write/_shared.py:775` | `object` 不可索引 | `minimal_snap["items"][0]` 看着像 IndexError,但 `snapshot_mutator._find_by_sync_id` 找不到时**必然抛 `KeyError`**(调用方捕获成 404),返回时 `items` 恒为 1 个元素 |
+| `routers/import_data/endpoints.py:862` | 两个 list 类型不匹配 | 见下 |
+
+**⚠️ 给这三处加 `# type: ignore` 或 cast 是错的** —— 那会把
+「mypy 窄化不出来」变成「类型检查彻底放弃这一行」。假阳性要**记下来**，
+不是要**消掉**。
+
+📌 **这条 mypy 线到此为止(60 条,会话开始 80,上游 89)**:
+稀有类型已验完(2 真 3 假),大类里唯一有价值的 `union-attr` 也处理过了,
+剩下的 `arg-type` / `attr-defined` 是系统性噪音,硬改会拖更多下游
+(见上面 `_MergeSpec.model` 那条 63->81 的实测)。
 
 **规则:错误数量多的那一类基本是系统性噪音;数量少的(尤其
 `valid-type` / `misc`)才值得逐条读。** 先按类型分组,
