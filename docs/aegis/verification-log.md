@@ -808,9 +808,17 @@ grep -ohE 'RepayOutcome\([^,]+, *"[^"]+"' src/services/credit_card/*.py
 `skipped_no_schedule` / `skipped_not_due` / `skipped_zero_outstanding`,
 **加上运行期观测到的 `done`,共 10 个**。
 
-⚠️ 注意 `partial`(部分还款)**不在这份清单里** —— CLAUDE.md 文档里提到它,
-但源码里没有这个字面量。**很可能它由 `done` + detail 表达**,而不是
-单独一个 status。⚠️ **没查之前不要写进清单**(这正是第 68 轮那个毛病)。
+✅ `partial`(部分还款)**已查清:它不是状态**。`repay.py:300` 里
+`partial = payable < outstanding` 是一个**局部布尔值**;
+`payable = min(outstanding, source_balance)`(233 行)—— 余额不足就少还,
+但**状态仍是 `done`**,靠 detail 表达「还了部分」。
+
+所以:**10 个状态的清单是对的**,CLAUDE.md 那句「余额不足 → 部分还款」
+在语义上也准确。**上一轮留的疑点到此关闭** —— 当时写「很可能」,
+这次查过了。
+
+📌 这正是上一轮该做而没做完的一步:**别把「很可能」留在文档里**。
+一个查一下就 5 秒钟的疑问,留成「很可能」就会在下一轮被当成事实用。
 
 📌 顺带:`repay.py:321` 还有一处 `logger.exception("autorepay: failed to
 release ...")` —— 那是**锁释放**的异常,不是状态机的一部分。
