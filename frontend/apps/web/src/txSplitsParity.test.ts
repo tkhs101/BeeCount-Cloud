@@ -377,3 +377,38 @@ describe('「本期应还」必须真的显示出来', () => {
     }
   })
 })
+
+
+describe('splits —— 导入预览表的两列', () => {
+  const _read = (rel: string) =>
+    fs.readFileSync(path.resolve(__dirname, rel), 'utf8')
+
+  it('预览表有 tax / splits 两列', () => {
+    // 没有这两列,用户保存后才发现父交易的「账户」是空的 ——
+    // 那正是本 fork 记录过的静默账目损坏(CLAUDE.md 里那条)。
+    const src = _read('components/import/TransactionsPreviewCard.tsx')
+    expect(src).toContain('import.preview.col.tax')
+    expect(src).toContain('import.preview.col.splits')
+  })
+
+  it('腿的形状是 [name, amount] 二元组,不是对象', () => {
+    // 后端 preview 阶段给的是二元组 —— 那时快照里还没有那些账户、
+    // 给不出 account_id(`endpoints.py::_tx_to_payload` 的注释写明)。
+    // 我第一版按对象读 `leg.account_name`,全 undefined,
+    // 而 tsc 靠 `as any` 之外的方式查不出来。
+    const types = _read('../../../packages/api-client/src/import.ts')
+    expect(types).toMatch(/splits\?:\s*Array<\[string, string\]> \| null/)
+    const src = _read('components/import/TransactionsPreviewCard.tsx')
+    expect(src).toMatch(/\.map\(\(\[name, amount\], i\) =>/)
+  })
+
+  it('i18n 三语都有 import.preview.col.{tax,splits}', () => {
+    for (const f of ['en.ts', 'zh-CN.ts', 'zh-TW.ts']) {
+      const src = _read(path.join('i18n', f))
+      for (const k of ['tax', 'splits']) {
+        expect(src, `${f} 缺 import.preview.col.${k}`)
+          .toMatch(new RegExp(`'import\.preview\.col\.${k}'`))
+      }
+    }
+  })
+})

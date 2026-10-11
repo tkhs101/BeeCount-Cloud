@@ -98,6 +98,16 @@ export type ImportTransactionSample = {
   to_account_name: string | null
   tag_names: string[]
   source_row_number: number
+  /** 消费税税额(0020)。 仍是含税实付总额。 */
+  tax_amount?: number | null
+  /**
+   * 组合支付的腿(0021),**`[账户名, 金额]` 二元组**而不是对象。
+   * 因为这个阶段快照里还没有那些账户、给不出 `account_id`
+   * (`endpoints.py::_tx_to_payload` 的注释写明了)。
+   * >= 2 条时父交易的账户字段会被服务端清空 —— 预览表必须显示出来,
+   * 否则用户保存后才发现「账户」是空的。
+   */
+  splits?: Array<[string, string]> | null
 }
 
 export type ImportSummary = {
