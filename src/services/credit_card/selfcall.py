@@ -48,23 +48,39 @@ def make_self_call() -> Any:
     """**同步**上下文用(APScheduler 线程池)。
 
     返回的 `self_call(...)` 是普通函数,内部 `asyncio.run()` 起独立 loop。
+    这与 `call_async` 的签名**完全一致**,执行器不关心拿到哪个。
     """
 
     def self_call(db: Session, *, method: str, path: str,
                   body: dict[str, Any], headers: dict[str, str],
                   user: Any) -> Any:
-        # 参数名统一用 (与执行器一致); 需要 httpx 的
-        #  关键字,在这里转换一次。名字不统一过一次,端点报
-        # TypeError 才发现。
+        # 参数名与执行器一致(`body` 不是 `json`)—— 名字不统一过一次,
+        # 端点报 TypeError 才发现。
         return asyncio.run(call_async(
-            method=method, path=path, body=body, headers=headers, user=user))
+            db, method=method, path=path, body=body, headers=headers,
+            user=user))
 
     return self_call
 
 
-async def call_async(*, method: str, path: str, body: dict[str, Any],
-                     headers: dict[str, str], user: Any) -> Any:
-    """**async** 上下文用(FastAPI 端点)—— 复用当前 loop,不起新的。"""
+async def call_async(db: Session, *, method: str, path: str,
+                     body: dict[str, Any], headers: dict[str, str],
+                     user: Any) -> Any:
+    """**async** 上下文用(FastAPI 端点)—— 复用当前 loop,不起新的。
+
+    ## 签名必须和 `make_self_call()` 返回的那个**完全一致**(含 `db`)
+
+    执行器的调用约定是 `self_call(db, *, method, path, body, headers, user)`
+    —— 它不知道拿到的同步还是异步。
+
+    第一版 `call_async` 不收 `db`,于是端点里必须套一层 wrapper 把它转过去。
+    两个入口签名不一致,我在写测试时当场踩到:`TypeError: call_async() takes
+    0 positional arguments but 1 positional argument ... were given`。
+    同一种东西有两个签名,迟早有人(包括我自己)套错。
+
+    `db` 在这里**用不到** —— self-call 不经过这个 session,它自己起请求。
+    收下它只是为了签名对齐。
+    """
     from ...mcp.tools.write_tools import _self_call
 
     return await _self_call(method, path, user, json=body, headers=headers)

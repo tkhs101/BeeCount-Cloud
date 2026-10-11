@@ -252,13 +252,12 @@ async def run_autorepay_now(
     # 不能在这个 async 端点里 `run_until_complete`:同一个线程已经有一个
     # loop 在跑,httpx 会找到它并抛
     # `Cannot run the event loop while another loop is running`。
-    async def self_call(db, *, method, path, body, headers, user):
-        return await call_async(method=method, path=path, body=body,
-                                headers=headers, user=user)
-
+    #
+    # 不需要包装一层:两个入口(`make_self_call` 的返回值 / `call_async`)
+    # 签名现在完全一致,执行器不关心拿到的是哪一个。
     outcome = repay_one(
         db, user_id=current_user.id, card=card, today=_local_today(),
-        self_call=self_call,
+        self_call=call_async,
     )
     # **失败必须让用户看到**。`repay_one` 把所有异常包成 `status="failed"`
     # 返回,端点若照常返回 200,用户看到的是「点了没反应」——

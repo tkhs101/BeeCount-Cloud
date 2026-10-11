@@ -33,7 +33,11 @@ from ...models import (
     UserExchangeRateProjection,
     UserTagProjection,
 )
-from ...security import SCOPE_APP_WRITE, _create_token
+from ...security import (
+    SCOPE_APP_WRITE,
+    SCOPE_WEB_WRITE,
+    _create_token,
+)
 from .read_tools import (
     _parse_dt,
     _resolve_ledger,
@@ -59,11 +63,48 @@ _MCP_DEFAULT_TAG_COLOR = "#00BCD4"
 
 
 def _internal_token(user: User) -> str:
+    """self-call **写**端点用的短期 token。
+
+    ## 为什么要同时给两个 scope
+
+    写端点的门是(`write/_shared.py`):
+
+    ```python
+    _WRITE_SCOPE_DEP = (
+        require_any_scopes(SCOPE_WEB_WRITE, SCOPE_APP_WRITE)
+        if settings.allow_app_rw_scopes
+        else require_scopes(SCOPE_WEB_WRITE)
+    )
+    ```
+
+    `allow_app_rw_scopes` 默认 True,所以只签 `SCOPE_APP_WRITE` 时
+    self-call 一直是通的 —— 这也是它为什么一年多没被发现。
+
+    但**把它设成 false 的部署会静默废掉 self-call**:
+    - 所有 MCP 写工具(22 个)403
+    - **信用卡自动还款** —— 每期该还的钱一分不还,而唯一的痕迹是
+      `beecount.credit_autorepay` logger 里一条 INFO(ring buffer
+      1000 条、纯内存、重启即丢,admin 面板默认还筛 ERROR)
+
+    用户看到的是「点了没反应」/「还款日过了但没还」,而排查方向会
+    指向金额算法,不会指向 scope。
+
+    同时给两个 scope 让 self-call 在两种配置下都通。安全性不受影响:
+    - `expires_delta` 只有 60 秒
+    - token 只在本进程内用(`_mcp_internal_client` 的 ASGITransport),
+      **不出网卡**
+    - 没有端点按 `client_type` 区分(`require_scopes` /
+      `require_any_scopes` 只看 scope 集合)
+
+    这与 `bulk_tools._internal_read_token` 是同一个模式:读端点那条
+    早就踩过(`require_scopes(SCOPE_WEB_READ)` 不认 app token),
+    当时是给读单独签一个。写这边只补了半截。
+    """
     return _create_token(
         sub=user.id,
         token_type="access",
         expires_delta=timedelta(seconds=_SELF_TOKEN_TTL_SEC),
-        scopes=[SCOPE_APP_WRITE],
+        scopes=[SCOPE_WEB_WRITE, SCOPE_APP_WRITE],
         client_type="app",
     )
 
