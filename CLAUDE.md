@@ -563,6 +563,14 @@ node_modules 路径调用),**不能**写 `expect(src).not.toContain('recharts')`
 中文名失败 = shell 编码把中文弄成了非法 UTF-8。
 **发中文 payload 用 Python `urllib` 显式 `.encode("utf-8")`**。
 
+⚠️ **REST 响应的字段是 snake_case,查的时候别用 camelCase。** 第 50 轮查
+税额时用 `"taxAmount" in x` 判定,拿到 **False**,一度以为是 CLAUDE.md 警告的
+「反向桥漏新列」静默丢失。真名是 **`tax_amount`** —— camelCase 转换在前端
+`api-client` 里做,不在服务端。
+
+三层证据排除了 bug(schema 有该字段 → DB 里 `113.56` → 响应里
+`tax_amount: 113.56`)。**税额链路写入/投影/读端全通。**
+
 ⚠️ 写路径的真实路径是 `/write/ledgers/{ledger_id}/transactions`,
 字段是 **snake_case**(`category_name` / `account_name` / `base_change_id`
 必填),**不是 camelCase** —— 猜字段名会连撞 400 和 405。
