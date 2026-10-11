@@ -41,6 +41,7 @@ from ..schemas import (
     AdminBackupCreateRequest,
     AdminBackupCreateResponse,
     AdminBackupRestoreRequest,
+    DataCleanupFailure,
     AdminBackupRestoreResponse,
     AdminBackupUploadSnapshotRequest,
     AdminDeviceListOut,
@@ -568,10 +569,13 @@ def data_cleanup_clean(
     result = data_cleanup_svc.clean(db, records)
     return DataCleanupResult(
         success_count=result.success_count,
+        # 直接构造 DataCleanupFailure,不要塞 dict 再靠 Pydantic 强转 ——
+        # 那条 type: ignore 会让「模型加了必填字段但这里没跟上」变成
+        # 运行时 422,而不是编译期错误。
         failures=[
-            {"record_key": f.record_key, "error": f.error}
+            DataCleanupFailure(record_key=f.record_key, error=f.error)
             for f in result.failures
-        ],  # type: ignore[arg-type]
+        ],
     )
 
 

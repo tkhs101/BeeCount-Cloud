@@ -9,7 +9,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Iterable
+from collections.abc import Callable, Iterable
 
 from sqlalchemy import update
 from sqlalchemy.orm import Session
@@ -80,7 +80,11 @@ def clean(db: Session, records: Iterable[OrphanRecord]) -> CleanResult:
     success = 0
     failures: list[CleanFailure] = []
     for record in records:
-        pending_file_ops: list[callable] = []  # type: ignore[type-arg]
+        # ⚠️ 别写 list[callable] —— 那是把内置**函数**当类型用,
+        # mypy 会报 not valid as a type,而 op() 那行还会变成
+        # 「callable? not callable」这种看不懂的错误(靠 type: ignore 压着)。
+        # 实际语义就是「DB commit 之后再调的无参函数」。
+        pending_file_ops: list[Callable[[], None]] = []
         try:
             _dispatch(db, record, pending_file_ops)
             db.commit()
@@ -108,7 +112,9 @@ def clean(db: Session, records: Iterable[OrphanRecord]) -> CleanResult:
     return CleanResult(success_count=success, failures=failures)
 
 
-def _dispatch(db: Session, r: OrphanRecord, file_ops: list) -> None:
+def _dispatch(
+    db: Session, r: OrphanRecord, file_ops: list[Callable[[], None]]
+) -> None:
     """跑 record 类型对应的 DB 操作;文件 IO append 到 file_ops 列表,由
     caller 在 db.commit 之后跑(避免长事务持锁)。"""
     t = r.type
