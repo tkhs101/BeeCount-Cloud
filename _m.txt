@@ -1,0 +1,7 @@
+docs: 记前端产物体积实测,排除 lucide 与 i18n 两个嫌疑
+
+主块 850 kB(gzip 243 kB)是应用自身代码:
+lucide-react 已被 tree-shake 到零(临时加 manualChunks 后主块大小不变),
+i18n 词典总共 1.3 kB。要再压得先装 analyzer 定位,别凭猜拆包。
+
+顺带:CLAUDE.md 的「前端 build 绿」这次是真跑过的,此前一直引用旧数字。

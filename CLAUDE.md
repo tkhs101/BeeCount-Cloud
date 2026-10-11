@@ -164,7 +164,33 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 | `pytest -q` | 绿 | **绿** | **860 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
-| 前端 `build` + `test` | 绿 | **绿** | **307 passed** |
+| 前端 `build` + `test` | 绿 | **绿** | **307 passed**(2026-10-12 实跑 build,12s) |
+
+### 前端产物体积(2026-10-12 实测,别重复排查)
+
+`dist/assets/` 按大小排:
+
+| chunk | raw | gzip | 说明 |
+|---|---|---|---|
+| `index-*.js` | **850 kB** | **243 kB** | 应用壳 + 未被manualChunks 命中的部分 |
+| `recharts-*.js` | 400 kB | 118 kB | 已拆出,**懒加载** |
+| `react-vendor-*.js` | 180 kB | 59 kB | 长期可缓存 |
+| `framer-motion-*.js` | 128 kB | 42 kB | 年度报告/动画 |
+| `poster-*.js` | 60 kB | 20 kB | html-to-image + qrcode |
+| `cmdk-*.js` | 44 kB | 14 kB | 命令面板 |
+
+**已经排除的两个嫌疑**(我各花了一轮才确认):
+
+- **`lucide-react` 不是问题**:临时给它加一条 `manualChunks` 重新 build,
+  主块**大小不变**(849.99 kB)、也没生成对应分块 —— 它已被 tree-shake
+  到几乎为零。53 处 `from 'lucide-react'` 桶导入**不用改**。
+- **i18n 不是问题**:词典总共 **1.3 kB**(`packages/ui/src/locale`)。
+
+所以主块那 850 kB 是**应用自身代码**。要再压就得先装 bundle analyzer
+定位到具体模块 —— 别凭猜拆包,`manualChunks` 已经处理过所有大依赖了。
+
+⚠️ `dist/` 是 **gitignore** 的,不在仓库里 —— 部署时现 `pnpm build`。
+本地产物过期无所谓,但这也意味着 **CI 的 build 结果才是发布依据**。
 
 mypy 那边本 fork 用 `TypedDict` 声明各工具的 kwargs（`kw = dict(...)` 会让
 `**kw` 展开每一行都报 arg-type，上游 `parse_and_create_from_text` 就是这么
