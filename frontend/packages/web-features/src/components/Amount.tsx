@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 
-import { useReducedMotion } from 'framer-motion'
+import { useReducedMotion } from '../lib/useReducedMotion'
 
 import { useLocale, useT } from '@beecount/ui'
 
