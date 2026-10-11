@@ -404,9 +404,14 @@ def _setup_stale_card(TS, *, last_period):
     那边用模块级 `db` fixture,而这里的 SessionLocal 被 monkeypatch 掉了,
     必须用同一份 sessionmaker 才看得见数据。
     """
-    from src.models import Ledger, UserAccountProjection
+    from src.models import Ledger, User, UserAccountProjection
 
     with TS() as db:
+        # ⚠️ **必须建 User 行** —— `_detect_gaps` 遍历 `User` 表拿 user_ids,
+        # 没有 User 行就一个卡都看不到,`gaps` 恒空。
+        # 我第一版漏了这一条,测试在真实 bug 下全绿、还原后也全绿 ——
+        # 两种情况下它都没在验证任何东西。
+        db.add(User(id="u1", email="gap@e2e.com", password_hash="x"))
         db.add(Ledger(id="lg-gap", user_id="u1", external_id="g", name="G",
                       currency="JPY"))
         db.add(UserAccountProjection(
@@ -477,3 +482,72 @@ def test_gap_detection_runs_on_non_due_day(monkeypatch) -> None:
     _setup_stale_card(TS, last_period="2026-04")   # 落后 2 期
     gaps = AutoRepayScheduler()._detect_gaps()
     assert gaps, "非还款日上缺口检测没有结果 —— 它只在一个月的 1/25 有效"
+
+
+def test_detect_gaps_runs_through_safe_run(monkeypatch) -> None:
+    """缺口检测必须能**经 `_safe_run` 执行** —— 真服务就是这条路调它的。
+
+    ## 这条是补一个真实事故
+
+    第一版 `_detect_gaps(self)` 不接受 `catch_up`,而 `_safe_run` 无条件用
+    `fn(catch_up=catch_up)` 调它驱动的每个函数。真服务一启动就抛:
+
+        TypeError: _detect_gaps() got an unexpected keyword argument 'catch_up'
+
+    而当时 **848 条单测全绿** —— 因为它们全都直接调 `self._detect_gaps()`,
+    从没走过 `_safe_run`。
+
+    这正是 `CLAUDE.md` 写的「分层测试全绿 != 拼起来能工作」。
+    """
+    import src.services.credit_card.scheduler as sched_mod
+    from src.services.credit_card.scheduler import (
+        AutoRepayScheduler, _safe_run)
+
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    TS = sessionmaker(bind=engine)
+    monkeypatch.setattr(sched_mod, "SessionLocal", TS)
+    _setup_stale_card(TS, last_period="2026-04")
+
+    sched = AutoRepayScheduler()
+
+    # ⚠️ **不要 monkeypatch 掉 `_detect_gaps`** —— 我第一版这么做了,
+    # 结果这条测试在真实 bug 下**照样全绿**:被换掉的是 wrapper,
+    # 签名对不对根本没被验证。
+    #
+    # 这里走**真函数**:它内部会读库(SessionLocal 已指向上面那个内存库),
+    # 所以签名不对时 `_safe_run` 会在 `fn(catch_up=...)` 那一刻抛 TypeError
+    # —— 而 `_safe_run` 的 `except Exception: logger.exception(...); return`
+    # 把它**吞掉并 return**,所以外面看到的是「静默什么都没发生」。
+    #
+    # 因此断言必须落在**「真的产出了缺口」**上:签名错时 gaps 恒为空。
+    gaps: list = []
+
+    # 这个包装函数**也**必须接受 catch_up ——  无条件传它。
+    # （我第一版写成无参的,结果自己撞上了同一个 TypeError。）
+    def _probe(*, catch_up: bool = False) -> None:
+        gaps.extend(sched._detect_gaps(catch_up=catch_up))
+
+    _safe_run(_probe, catch_up=False)
+
+    assert gaps, (
+        "经 `_safe_run` 跑出来是空的。第一版 monkeypatch 掉了 `_detect_gaps`,"
+        "签名错也照样全绿 —— 被换掉的是 wrapper。"
+        "而 `_safe_run` 的 `except Exception: return` 会把 TypeError "
+        "**吞掉**,外面只看到「什么都没发生」。"
+        "最可能的原因:`_detect_gaps` 不接受 `_safe_run` 无条件传的 "
+        "`catch_up=`。")
+
+
+def test_detect_gaps_accepts_the_catch_up_kwarg() -> None:
+    """它**必须**接受 `catch_up`(`_safe_run` 无条件传它)。"""
+    import inspect
+
+    from src.services.credit_card.scheduler import AutoRepayScheduler
+
+    sig = inspect.signature(AutoRepayScheduler._detect_gaps)
+    assert "catch_up" in sig.parameters, (
+        f"签名缺 catch_up:{sig} —— `_safe_run` 会传它,真服务上直接 TypeError")

@@ -201,7 +201,7 @@ class AutoRepayScheduler:
                                    exc_info=True)
             self._started = False
 
-    def _detect_gaps(self) -> list[dict[str, Any]]:
+    def _detect_gaps(self, *, catch_up: bool = False) -> list[dict[str, Any]]:
         """找出「该还但没还上、而且已经出了补跑窗口」的卡。
 
         ## 为什么只提示不自动扣
@@ -213,6 +213,19 @@ class AutoRepayScheduler:
         计划文档明确反对**无界补跑**,理由是对的:补几十笔真钱。
         所以这里只**检测并告警**,让用户自己决定要不要手动补
         (有 `/autorepay/run` 手动触发端点)。
+
+        ## `catch_up` 参数是被迫接受的
+
+        `_safe_run` 无条件用 `fn(catch_up=catch_up)` 调它驱动的每个函数,
+        所以任何经它执行的函数都必须接受这个关键字参数 —— 哪怕毫无意义。
+
+        第一版我没加,结果**真服务一启动就抛**
+        `TypeError: _detect_gaps() got an unexpected keyword argument 'catch_up'`,
+        而 848 条单测全绿 —— 因为它们都直接调 `self._detect_gaps()`,
+        从没走过 `_safe_run` 这条路。
+
+        这正是 `CLAUDE.md` 写的「分层测试全绿 != 拼起来能工作」。
+        护栏 `test_detect_gaps_runs_through_safe_run` 补的就是那条路径。
 
         ## 判据
 
