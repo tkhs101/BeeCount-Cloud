@@ -1,8 +1,0 @@
-docs: 记「筛 mypy 错误要按条数升序看」这个策略
-
-给 _MergeSpec.model 换精确类型净负(63->81),说明 arg-type/attr-defined
-这些大类多是系统性噪音。反过来筛 valid-type/misc(共 6 条),两处都是真问题:
-list[callable] 把内置函数当类型用;admin.py 塞 dict + type:ignore 靠
-Pydantic 强转,模型加必填字段就变运行时 422 而 mypy 不报。
-
-规则:错误多的那类是系统性噪音,少的才值得逐条读。
