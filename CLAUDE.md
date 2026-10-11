@@ -492,7 +492,33 @@ viteConfig.build?.rollupOptions?.output?.manualChunks
 
 ⚠️ 只跑 vitest 就提交,会把**类型不过的代码**推上远端。**两道都要跑。**
 
+⚠️ 同一次里我还栽了**假阴性**:查「三个包单独编译有没有错」时,`find` 没找到
+`tsc`,但 `grep -c "error TS"` 在**空输出**上数出 **0**,于是输出
+「0 个错误」—— **命令根本没跑成**。换成 `node apps/web/node_modules/
+typescript/bin/tsc`(真的有 5.9.3)才拿到真结果。
+**「0 个错误」和「没有错误」不是一回事**,尤其在管道里。
+
 （这两道门在 CI 里是同一个 `build` + `test` 步骤,但本地别只跑一个。）
+
+#### 三个 `packages/*/tsconfig.json` 是**装饰性配置**(实测,别再加门)
+
+查「`tsc -b` 到底检查不检查 packages」的结果:
+
+- `apps/web/tsconfig.json` 的 **`include` 显式列了三个包的 `src`**,
+  `paths` 也映射了 —— 所以 `tsc -b` **本来就检查这三个包**
+- 三个包**各自**的 `tsconfig.json` **没有任何脚本或 CI 引用**
+(`package.json` 里只有 `apps/web` 的 `tsc -b`)
+
+⚠️ 实测它们单独编译**也是 0 错误**,但那有点侥幸:包自己的配置**没写
+`lib: ["DOM"]`**(apps/web 写了)。DOM 类型是从 `@types/*` **传递泄漏**进来的
+—— 实测 `document.title` 在包配置下**不报错**就是证据。哪天依赖树一变
+就可能翻车。
+
+⚠️ `packages/ui/tsconfig.json` 还**漏了 `noEmit: true`**(另外两个有),
+像复制粘贴时漏的。因为没人跑它,一直没暴露。
+
+📌 **决定不加 `typecheck:packages` 脚本** —— 包**已经被 `tsc -b` 覆盖**,
+单独跑一遍验证的只是那三份装饰配置本身。**别给零收益加仪式。**
 
 #### `manualChunks` 的**行为护栏**(突变验证过,1/1 抓到)
 
