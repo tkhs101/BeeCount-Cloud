@@ -14,7 +14,7 @@ import {
 } from '@beecount/ui'
 
 import { App } from './App'
-import { dictionaries } from './i18n'
+import { initialDictionaries, loadDictionary, prepareInitialDictionary } from './i18n'
 import { setupInstallPrompt } from './lib/pwa-install'
 import { setupLaunchQueue } from './lib/pwa-launch'
 import { setupServiceWorkerUpdates } from './lib/pwa-sw-update'
@@ -50,16 +50,24 @@ if ('serviceWorker' in navigator) {
   })
 }
 
-createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <LocaleProvider dictionaries={dictionaries}>
-      <ThemeProvider>
-        <PrimaryColorProvider>
-          <ToastProvider>
-            <App />
-          </ToastProvider>
-        </PrimaryColorProvider>
-      </ThemeProvider>
-    </LocaleProvider>
-  </React.StrictMode>
-)
+// 首屏渲染**前**先把用户实际使用的语言词典准备好。
+// zh-CN / zh-TW 是动态 import(见 i18n/index.ts)——不 await 的话,
+// 中文用户会先看到一屏英文再跳中文。加载失败不阻塞渲染:
+// 兜底走 en,好过什么都不显示。
+prepareInitialDictionary()
+  .catch(() => initialDictionaries)
+  .then((dictionaries) => {
+    createRoot(document.getElementById('root')!).render(
+      <React.StrictMode>
+        <LocaleProvider dictionaries={dictionaries} loadDictionary={loadDictionary}>
+          <ThemeProvider>
+            <PrimaryColorProvider>
+              <ToastProvider>
+                <App />
+              </ToastProvider>
+            </PrimaryColorProvider>
+          </ThemeProvider>
+        </LocaleProvider>
+      </React.StrictMode>
+    )
+  })
