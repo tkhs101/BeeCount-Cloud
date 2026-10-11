@@ -1,8 +1,0 @@
-docs: 补「先改 import 图,不是改 chunk 名字」+ framer-motion 的修法
-
-recharts 靠去掉 manualChunks 规则修好;但 framer-motion 同样去掉规则
-首屏一点没变 —— 因为问题不在 chunk 划分,而在谁静态 import 了它。
-Amount.tsx 只为一个 useReducedMotion 钩子拖进 126 kB 动画引擎,
-换成原生 matchMedia 即可。
-
-首屏从 1672 kB 降到 1479 kB。
