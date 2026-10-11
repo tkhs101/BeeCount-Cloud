@@ -25,10 +25,22 @@ import viteConfig from '../vite.config'
 /** pnpm workspace 下真实的模块 id 形状 */
 const NM = '/repo/frontend/node_modules/.pnpm'
 
+/**
+ * ⚠️ `output` 在 rollup 的类型里是**联合类型** `OutputOptions | OutputOptions[]`,
+ * 所以直接 `.manualChunks` 过不了 `tsc`(而 vitest 能过 —— **它不做类型检查**)。
+ * 这就是为什么「vitest 绿」不等于「build 绿」,两个都得跑。
+ */
+function resolveManualChunks(): ((id: string) => string | undefined) | undefined {
+  const output = viteConfig.build?.rollupOptions?.output
+  const one = Array.isArray(output) ? output[0] : output
+  const fn = one?.manualChunks
+  return typeof fn === 'function'
+    ? (fn as (id: string) => string | undefined)
+    : undefined
+}
+
 function chunkFor(id: string): string | false | undefined {
-  const fn = viteConfig.build?.rollupOptions?.output?.manualChunks
-  if (typeof fn !== 'function') return undefined
-  return (fn as (id: string) => string | undefined)(id)
+  return resolveManualChunks()?.(id)
 }
 
 describe('manualChunks 不得把懒加载库提进入口静态图', () => {
