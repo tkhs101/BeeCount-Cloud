@@ -1,9 +1,0 @@
-docs: 更正首屏真实开销 —— 1.6 MB 而不是主块的 850 kB
-
-dist/index.html 里有 5 个 rel="modulepreload",把 recharts(409 kB)、
-framer-motion(129 kB)、poster(37 kB)、cmdk(45 kB) 全部拉回首屏。
-manualChunks 和 lazy 路由的成果在 HTML 层被抵消了。
-
-我优化了三轮的目标本身选错了 —— 主块只占首屏的 55%。
-附带记下验证方法:起真服务器 + 看 HTML 的 rel 属性,
-只看 dist/assets 的文件列表看不出这件事。
