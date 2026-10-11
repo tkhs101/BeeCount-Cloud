@@ -261,6 +261,7 @@ def test_two_paths_agree_on_split_payments():
         db = TS()
         try:
             from sqlalchemy import select
+
             from src.models import ReadTxProjection, ReadTxSplitProjection
 
             legs = {}

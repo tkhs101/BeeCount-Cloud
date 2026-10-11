@@ -544,6 +544,32 @@ node_modules 路径调用),**不能**写 `expect(src).not.toContain('recharts')`
 灌 225 笔 / 193 天后,概览页实测:本月结余 `¥4.66万`、本月收入 `¥38.5万`、
 账本 `日常`、货币 **JPY**(`¥` 是日元符号,不是人民币 —— 别当成币种错)。
 
+#### 全量门状态(第 60 轮实测)—— 以及我自己的 lint 债
+
+四道门一次性跑完:
+
+| 门 | 结果 |
+|---|---|
+| `pytest tests/` | **889 passed** |
+| `mypy src` | 60 errors(已定稿的存量线) |
+| `ruff check src tests alembic` | **1253** |
+| `pnpm -C apps/web test` | **319 passed** |
+| `pnpm -C apps/web build` | **`tsc -b` 0 错 + `built in 9.25s`** |
+| 首屏 JS | **4 个文件 / 1314 kB** |
+
+⚠️ **ruff 一度变成 1254,是我自己两轮前埋的**:第 57 轮编辑
+`test_account_balance_paths.py` 时带进一个 `I001`(import 排序),
+而第 58/59 轮我**没跑 ruff**,直到这轮全量体检才看到。
+
+📌 **教训:改了任何被 lint 覆盖的文件,提交前把 lint 也跑一遍** ——
+「这轮只改了测试」不等于「lint 不会变」。更具体:**按文件跑 ruff
+会漏**(`ruff check tests/新文件.py` 报 All checks passed,问题在
+**另一个**我改过的文件里)。**要么全量跑,要么确认你改的每个文件都被覆盖。**
+
+⚠️ build 输出里有一条 framer-motion 的
+`Module level directives cause errors when bundled, "use client"` ——
+**是打包器的已知提示,不是错误**(build 成功、`tsc` 0 错)。别去追。
+
 #### 审计:CLAUDE.md 里的「护栏」引用有没有指向不存在的文件
 
 第 58 轮发现「failed→502」**声称有保护、实际裸奔**,于是怀疑这是**系统性**的。
