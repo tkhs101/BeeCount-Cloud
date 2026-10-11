@@ -161,7 +161,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | **838 passed** |
+| `pytest -q` | 绿 | **绿** | **842 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **191 passed** |
@@ -239,7 +239,18 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 | `_truncate_ledger` 漏子表 | rebuild / 还原后父交易没腿、旧腿还在 → 余额「凭空多出来」 |
 | CSV 不导出 Splits 列 | 导出→导入后组合支付变「无账户的支出」,账户余额全错 |
 
-护栏:`tests/test_tx_split_invariants.py`(20 条)、
+**通用护栏(加新列时立刻红)**:`tests/test_projection_reverse_bridge_coverage.py`
+枚举 `ReadTxProjection.__table__.columns` 全部列,减去白名单后要求**每一列**
+都被反向桥引用 —— 加新列忘了改反向桥,这条立刻点名漏了哪一列。
+
+用**白名单**而不是黑名单是关键:黑名单在加新列时**默认通过**(而那正是要防的
+情况),白名单默认**拒绝**,新列必须显式论证为什么可以不接。
+白名单带数量上限,防止有人为了「让测试绿」把真列塞进去。
+
+(此前每一次都是**事后**补一条专用测试 —— 那是症状处理不是解决方案。
+第 6 列被加进来时同样的事会再发生一次,仍然要等用户发现数据被抹了才有人查。)
+
+专用护栏:`tests/test_tx_split_invariants.py`(20 条)、
 `tests/test_account_balance_paths.py`(两条余额路径必须一致)、
 `frontend/apps/web/src/txSplitsParity.test.ts`(两条提交路径不许只改一处)。
 
