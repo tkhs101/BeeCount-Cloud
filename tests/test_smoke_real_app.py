@@ -111,6 +111,15 @@ def client():
     # 不删 DB:engine 还持有连接,删会 PermissionError(WinError 32)
 
 LEDGER = "smoke-ledger"
+
+# `repay_one` 的状态全集。⚠️ **成功那个叫 `done`,不是 `paid`** —— 我曾照着
+# 字面写成 `paid` 并写进文档,查源码才发现。改动前请重新 grep 源码确认。
+_REPAY_STATUSES = frozenset({
+    "done", "failed",
+    "skipped_already_repaid", "skipped_disabled", "skipped_invalid_config",
+    "skipped_locked", "skipped_no_funds", "skipped_no_schedule",
+    "skipped_not_due", "skipped_zero_outstanding",
+})
 SYNC_LEDGER = "sync-ledger"
 
 
@@ -187,6 +196,19 @@ def test_smoke_full_chain(smoke) -> None:
         f"/api/v1/write/ledgers/{LEDGER}/accounts/{ids['招行信用卡']}"
         "/autorepay/run", headers=H)
     assert r.status_code < 500, f"{r.status_code}: {r.text[:300]}"
+
+    # ⚠️ 光断言 `< 500` 是**不区分**的:还了 30000 和什么都没还,响应一模一样。
+    # 端点从第 81 轮起返回 `status`(AutoRepayRunResult),所以现在能断言到
+    # 产出物上 —— 这正是 CLAUDE.md 要求的「不能是『没抛异常』」。
+    #
+    # 这里断言的是**全集成员资格**,不是某个具体值:本测试没有把日期设成
+    # 还款日,拿到的可能是 done 也可能是 skipped_not_due,**两者都是对的**。
+    # 钉死某一个值只会让这条测试在别的日期/配置下假红。
+    body = r.json()
+    assert "status" in body, f"响应里没有 status: {sorted(body)}"
+    assert body["status"] in _REPAY_STATUSES, (
+        f"status={body['status']!r} 不在 repay_one 的状态全集里: "
+        f"{sorted(_REPAY_STATUSES)}")
 
 
 def test_admin_me_requires_admin(smoke) -> None:
