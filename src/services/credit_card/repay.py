@@ -436,6 +436,7 @@ def _balance_of(db: Session, *, user_id: str, account_sync_id: str) -> float:
 
 def _ledgers_of(db: Session, *, user_id: str) -> list[str]:
     from sqlalchemy import select
+
     from ...models import Ledger
 
     return [str(r) for r in db.scalars(

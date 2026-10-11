@@ -18,7 +18,6 @@ outcome —— 静默 return 就等于「用户以为还了,其实没还」。
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -29,7 +28,6 @@ from src.database import Base
 from src.models import Ledger, ReadTxProjection, UserAccountProjection
 from src.services.credit_card.repay import (
     AUTO_REPAY_DEVICE_ID,
-    RepayOutcome,
     period_key,
     repay_one,
 )
@@ -64,7 +62,7 @@ class FakeCall:
         # 全局单调编号 —— 每次 FakeCall 都从 1 开始会撞主键
         tx_id = f"tx-auto-{next(_SEQ)}"
         if self.apply:
-            from datetime import datetime, timezone
+            from datetime import datetime
             db.add(ReadTxProjection(
                 ledger_id=LEDGER, sync_id=tx_id, user_id="u1",
                 tx_type="transfer", amount=float(body["amount"]),
@@ -541,12 +539,10 @@ def test_claim_is_checked_before_self_call(monkeypatch, db) -> None:
     这里用 **monkeypatch 把条件更新打成「0 行」** —— 精确模拟「另一个进程
     抢先了」,而防线 1/2 全部正常通过。然后断言 self_call **一次都没被调用**。
     """
-    from sqlalchemy.engine import CursorResult
 
     _setup(db)
     _spend(db, "t1", 5000.0, date(2026, 9, 20))
 
-    import src.services.credit_card.repay as rp
 
     real_execute = type(db).execute
 

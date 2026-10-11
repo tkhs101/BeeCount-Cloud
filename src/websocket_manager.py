@@ -106,7 +106,8 @@ async def broadcast_to_user_ledgers(
     去重,但跨设备(用户在 mobile 推,自己 web 同步)需要推。所以推所有 member
     包含 actor 自己,由 client 用 device_id 去重。设置 False 关闭去重。
     """
-    from sqlalchemy import select, func
+    from sqlalchemy import func, select
+
     from .models import Ledger, LedgerMember
 
     # 该用户作为 owner 的 ledger,且 member_count > 1(共享账本)

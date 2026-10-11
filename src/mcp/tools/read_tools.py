@@ -12,13 +12,16 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+# 复用 read 端的唯一权威"软删除"判定 —— 保证 MCP 与 web/mobile 账本可见性口径
+# 一致(issue #31)。read._shared 不依赖 mcp,无循环 import。
+from ...config import get_settings
 from ...database import SessionLocal
 from ...models import (
     Ledger,
@@ -29,10 +32,6 @@ from ...models import (
     UserCategoryProjection,
     UserTagProjection,
 )
-
-# 复用 read 端的唯一权威"软删除"判定 —— 保证 MCP 与 web/mobile 账本可见性口径
-# 一致(issue #31)。read._shared 不依赖 mcp,无循环 import。
-from ...config import get_settings
 from ...routers.read._shared import _is_ledger_deleted, tax_in_base_currency
 
 # ---------- helpers ----------------------------------------------------------

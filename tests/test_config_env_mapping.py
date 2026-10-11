@@ -20,8 +20,6 @@
 """
 from __future__ import annotations
 
-import importlib
-
 import src.config as config_mod
 from src.config import Settings
 

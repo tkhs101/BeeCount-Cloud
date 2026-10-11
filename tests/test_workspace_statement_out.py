@@ -215,8 +215,6 @@ def test_statement_out_does_not_call_date_today() -> None:
     """
     import inspect
 
-    import src.routers.read.workspace as ws
-
     # **先剥掉注释和 docstring** —— 否则警告里写的 `date.today()` 字面量
     # 会被当成真代码(我自己踩了一次:实现明明改对了,断言却红了)。
     #
@@ -226,6 +224,8 @@ def test_statement_out_does_not_call_date_today() -> None:
     # 这与 CLAUDE.md 记的「hook 看着对实际不可达」是同一类。
     import io
     import tokenize
+
+    import src.routers.read.workspace as ws
 
     raw = inspect.getsource(ws._statement_out)
     kept = [t for t in tokenize.generate_tokens(io.StringIO(raw).readline)

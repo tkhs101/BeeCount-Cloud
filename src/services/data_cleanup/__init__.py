@@ -14,8 +14,8 @@
 
 from .cleaner import clean
 from .models import (
-    CleanResult,
     CleanFailure,
+    CleanResult,
     OrphanRecord,
     OrphanType,
     ScanReport,

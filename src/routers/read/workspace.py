@@ -10,9 +10,9 @@ import logging
 import statistics as _stats
 
 from pydantic import BaseModel
-from sqlalchemy import false as sa_false, literal_column
+from sqlalchemy import false as sa_false
+from sqlalchemy import literal_column
 
-from ._shared import *  # noqa: F401,F403 — imports + helpers + router
 from ...config import get_settings
 from ...models import (
     ExchangeRateCache,
@@ -20,6 +20,7 @@ from ...models import (
     ReadTxSplitProjection,
     UserExchangeRateProjection,
 )
+from ._shared import *  # noqa: F401,F403 — imports + helpers + router
 
 # ---------------------------------------------------------------------------
 # 净值历史 — 响应 schema
@@ -394,8 +395,9 @@ def export_workspace_transactions_csv(
     - 文件名:`beecount-<ledger>-<date_from>_<date_to>.csv`,中文走 RFC 5987
     """
     from urllib.parse import quote
-    from sqlalchemy.orm import aliased
+
     from fastapi.responses import StreamingResponse
+    from sqlalchemy.orm import aliased
 
     is_admin = _is_admin(current_user)
     lang_key = _normalize_lang(lang)
@@ -1580,9 +1582,6 @@ def _statement_out(db: Session, *, user_id: User,
         return out
 
     try:
-        from ...services.credit_card.billing import current_billing_period
-        from ...services.credit_card.statement import compute_statement
-
         # ⚠️ **不能**用 `date.today()` —— 那是**服务器 OS 时区**。
         #
         # 调度器(`credit_card/scheduler.py`)和执行器用
@@ -1594,6 +1593,8 @@ def _statement_out(db: Session, *, user_id: User,
         # CLAUDE.md 第三条自检写的就是这个:「一致的口径要有唯一来源」。
         # 第一版就是 `date.today()`,自己写的自己违反了。
         from ...services.backup.scheduler import _resolve_scheduler_tz
+        from ...services.credit_card.billing import current_billing_period
+        from ...services.credit_card.statement import compute_statement
 
         today = datetime.now(_resolve_scheduler_tz()).date()
         period = current_billing_period(today, billing_day=bill, due_day=due)

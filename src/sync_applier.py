@@ -41,7 +41,8 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Optional
 
-from sqlalchemy import delete as sa_delete, select
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import projection
@@ -56,7 +57,6 @@ from .models import (
     UserTagProjection,
 )
 from .services.category_icon import resolve_icon_by_name
-
 
 # 哪些 entity_type 可以走单条 change 的 projection 应用(其它 entity
 # 比如 ``ledger_snapshot`` 是 sync_changes 里的元数据行,不走这条路径)。

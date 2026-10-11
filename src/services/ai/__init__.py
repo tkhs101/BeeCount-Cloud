@@ -8,6 +8,11 @@
 设计文档:.docs/web-cmdk-ai-doc-search.md
 """
 from .docs_index import DocsIndex, get_docs_index, reset_docs_index_cache
+from .prompts import (
+    build_ask_messages,
+    build_parse_tx_image_messages,
+    build_parse_tx_text_messages,
+)
 from .provider_client import (
     ChatProviderConfig,
     ChatProviderError,
@@ -20,11 +25,6 @@ from .provider_client import (
     resolve_chat_provider,
     resolve_vision_provider,
     stream_chat_completion,
-)
-from .prompts import (
-    build_ask_messages,
-    build_parse_tx_image_messages,
-    build_parse_tx_text_messages,
 )
 
 __all__ = [

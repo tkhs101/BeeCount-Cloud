@@ -236,6 +236,7 @@ def test_get_analytics_summary_empty_ledger(monkeypatch) -> None:
 def test_mcp_currency_fields_base_currency_no_fields(monkeypatch) -> None:
     """交易币种==账本本位币 → 不产生两字段(server 落 NULL,统计 COALESCE 回退)。"""
     import asyncio
+
     from src.mcp.tools import write_tools
 
     client, sm = _make_client_and_engine(monkeypatch)
@@ -256,6 +257,7 @@ def test_mcp_currency_fields_foreign_auto_rate(monkeypatch) -> None:
     """外币无 override、走自动源:1 CNY = 0.14 USD(fetcher base→quote) →
     12 USD 折 CNY = 12 / 0.14 ≈ 85.7(方向:quote 金额折 base 要除)。"""
     import asyncio
+
     from src.mcp.tools import write_tools
     from src.services.exchange_rate import fetcher as rate_fetcher
 
@@ -287,6 +289,7 @@ def test_mcp_currency_fields_missing_rate_falls_back_to_amount(monkeypatch) -> N
     """外币且拉不到汇率 → native=amount(1:1),currency_code 仍落
     (Web 改主币种重算 / App L11 横幅可捞回,绝不丢币种)。"""
     import asyncio
+
     from src.mcp.tools import write_tools
     from src.services.exchange_rate import fetcher as rate_fetcher
 

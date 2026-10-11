@@ -32,7 +32,6 @@ from ...database import SessionLocal
 from ...models import BackupSchedule
 from .runner import run_backup
 
-
 logger = logging.getLogger(__name__)
 
 

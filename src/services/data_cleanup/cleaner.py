@@ -8,8 +8,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from pathlib import Path
 from collections.abc import Callable, Iterable
+from pathlib import Path
 
 from sqlalchemy import update
 from sqlalchemy.orm import Session

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from ._shared import *  # noqa: F401,F403 — 拉取所有 imports / helpers / router / constants
 
+
 @router.post("/push", response_model=SyncPushResponse)
 async def push_changes(
     req: SyncPushRequest,
@@ -381,8 +382,10 @@ async def push_changes(
         # 共享账本 fan-out:对 caller 作为 owner 的所有共享账本,推该事件给
         # 非 owner member。Editor 收到后更新本地 SharedLedger* 镜像。
         ws_manager = request.app.state.ws_manager
-        from ...models import Ledger as _L, LedgerMember as _LM
         from sqlalchemy import func as _func
+
+        from ...models import Ledger as _L
+        from ...models import LedgerMember as _LM
         rows = db.execute(
             select(_L.id, _L.external_id)
             .join(_LM, _LM.ledger_id == _L.id)

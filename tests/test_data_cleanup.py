@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,7 +29,6 @@ from src.services.data_cleanup import (
     clean,
     scan_all,
 )
-
 
 # ─────────────────────── fixtures ───────────────────────
 

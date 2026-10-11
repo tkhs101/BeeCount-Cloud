@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import io
 import json
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -74,6 +73,7 @@ def _register_and_login(
     )
     token = r.json()["access_token"]
     from sqlalchemy import select
+
     from src.models import User
     db = next(app.dependency_overrides[get_db]())
     try:
@@ -344,8 +344,8 @@ def test_batch_create_with_ai_tag_and_extra_tag(monkeypatch):
 
 def test_batch_create_with_image_attachment(monkeypatch, tmp_path):
     """attach_image_id → server 转 attachment + 关联到所有 tx。"""
-    from src.services.ai.image_cache import store_image
     from src import config
+    from src.services.ai.image_cache import store_image
 
     # 把 attachment_storage_dir 重定向到 pytest tmp_path,避免 test 跑完留下
     # 13B 的 "fakejpegbytes" 文件污染 dev 的 ./data/attachments/(scanner 会
@@ -416,6 +416,7 @@ def test_batch_create_materializes_auto_tag_entities():
     3. UserTagProjection 写入 + ReadTxProjection.tag_sync_ids_json 完整填充
     """
     from sqlalchemy import select
+
     from src.models import ReadTxProjection, UserTagProjection
 
     client = _make_client()
@@ -491,6 +492,7 @@ def test_batch_create_fills_tag_sync_ids_for_existing_tags():
     后续 tag rename 走 sync_id 路径不再漏掉这笔 tx。
     """
     from sqlalchemy import select
+
     from src.models import ReadTxProjection
 
     client = _make_client()

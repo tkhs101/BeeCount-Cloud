@@ -257,6 +257,7 @@ def test_web_delete_prunes_sync_history_and_attachments(tmp_path) -> None:
 
         # 拿到 ledger 内部 id 直接造一条 attachment_files 行 + 物理文件
         from sqlalchemy import select as sql_select
+
         from src.database import get_db
         from src.models import AttachmentFile, Ledger, SyncChange
 

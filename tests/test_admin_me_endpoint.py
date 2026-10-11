@@ -112,8 +112,8 @@ def test_endpoint_requires_admin_not_just_scope(client) -> None:
     """
     import inspect
 
-    from src.routers.admin import admin_me
     from src.deps import require_admin_user
+    from src.routers.admin import admin_me
 
     src = inspect.getsource(admin_me)
     assert "require_admin_user" in src, (

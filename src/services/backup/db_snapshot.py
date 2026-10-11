@@ -12,12 +12,10 @@ PostgreSQL 后续再加(用 `pg_dump --format=custom`),目前只 SQLite。
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-
 
 logger = logging.getLogger(__name__)
 

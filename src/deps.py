@@ -11,7 +11,6 @@ from .database import SessionLocal, get_db
 from .ledger_access import get_accessible_ledger_by_external_id
 from .models import Device, Ledger, PersonalAccessToken, User
 from .security import (
-    PAT_PREFIX,
     decode_token,
     looks_like_pat,
     verify_pat_hash,

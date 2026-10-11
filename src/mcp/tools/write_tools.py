@@ -41,8 +41,10 @@ from ...security import (
 from .read_tools import (
     _parse_dt,
     _resolve_ledger,
-    _safe_attachments as _load_attachments,
     live_ledgers,
+)
+from .read_tools import (
+    _safe_attachments as _load_attachments,
 )
 
 logger = logging.getLogger(__name__)

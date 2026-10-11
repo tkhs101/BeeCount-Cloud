@@ -22,7 +22,6 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from ..config import get_settings
 
-
 _RECOVERY_CODE_COUNT = 10
 _RECOVERY_CODE_BYTES = 5  # 5 字节 → 8 字符 base32 → 格式化成 4-4 形式
 

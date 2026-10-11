@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from ... import snapshot_builder, snapshot_cache
 from ...concurrency import lock_ledger_for_materialize
 from ...database import get_db
 from ...deps import get_current_user, require_any_scopes, require_scopes
@@ -47,12 +48,11 @@ from ...schemas import (
 )
 from ...security import SCOPE_APP_WRITE, SCOPE_WEB_READ
 from ...sync_applier import (
-    apply_change_to_projection,
-    apply_user_change_to_projection,
     INDIVIDUAL_ENTITY_TYPES,
     USER_GLOBAL_ENTITY_TYPES,
+    apply_change_to_projection,
+    apply_user_change_to_projection,
 )
-from ... import snapshot_builder, snapshot_cache
 
 logger = logging.getLogger(__name__)
 

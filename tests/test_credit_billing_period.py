@@ -25,13 +25,11 @@
 """
 from __future__ import annotations
 
-import calendar
 from datetime import date, timedelta
 
 import pytest
 
 from src.services.credit_card.billing import (
-    BillingPeriod,
     add_months,
     clamp_to_month_end,
     current_billing_period,
@@ -39,7 +37,6 @@ from src.services.credit_card.billing import (
     is_due_on,
     period_for_payment_due_date,
 )
-
 
 # --------------------------------------------------------------------------- #
 # 单点:短月顺延                                                              #

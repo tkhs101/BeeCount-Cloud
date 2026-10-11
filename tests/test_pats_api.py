@@ -422,8 +422,9 @@ def test_pat_token_hash_matches_sha256_hex(monkeypatch) -> None:
         expected_hash = hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
 
         # 直接查 DB(用 mcp_auth.SessionLocal,已被 monkeypatch 到 test engine)
-        from src.models import PersonalAccessToken
         from sqlalchemy import select
+
+        from src.models import PersonalAccessToken
 
         with mcp_auth.SessionLocal() as db:
             row = db.scalar(

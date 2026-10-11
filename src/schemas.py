@@ -4,7 +4,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-
 # 6 位 hex，开头必须有 #；字母大小写都接受，validator 会归一化成大写。
 _HEX6_PATTERN = re.compile(r"^#[0-9A-Fa-f]{6}$")
 

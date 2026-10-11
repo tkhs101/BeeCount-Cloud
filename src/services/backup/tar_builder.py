@@ -24,7 +24,6 @@ from pathlib import Path
 
 import pyzipper
 
-
 logger = logging.getLogger(__name__)
 
 

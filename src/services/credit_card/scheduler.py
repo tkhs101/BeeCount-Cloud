@@ -240,12 +240,10 @@ class AutoRepayScheduler:
 
         from sqlalchemy import select
 
-        from ...models import User, UserAccountProjection
+        from ...models import UserAccountProjection
 
         log = _logging.getLogger("beecount.credit_autorepay")
         today = datetime.now(self._timezone).date()
-
-        from .repay import period_key
 
         # **直接查所有启用自动还款的卡**,而不是先遍历 `User` 再逐个查账户。
         #
@@ -253,6 +251,7 @@ class AutoRepayScheduler:
         # 导入来的、用户行被删的)**完全检测不到** —— 而那些恰恰是最可能
         # 出问题、也最需要告警的。检测逻辑不该依赖一张与它无关的表。
         from ...models import UserAccountProjection
+        from .repay import period_key
 
         cards = SessionLocal().scalars(
             select(UserAccountProjection).where(

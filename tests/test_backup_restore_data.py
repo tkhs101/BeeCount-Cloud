@@ -88,7 +88,7 @@ def test_rebuild_restores_the_legs_exactly_once(TS) -> None:
     「恰好」是重点 —— 多出来就是 `CLAUDE.md` 记的「余额凭空多出来」。
     """
     from src import snapshot_builder
-    from src.models import Ledger, ReadTxProjection, ReadTxSplitProjection
+    from src.models import Ledger, ReadTxSplitProjection
     from src.projection import rebuild_from_snapshot
 
     with TS() as db:

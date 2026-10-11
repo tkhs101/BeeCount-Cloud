@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import calendar
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 
 
 def clamp_to_month_end(year: int, month: int, day: int) -> date:

@@ -12,7 +12,6 @@ from sqlalchemy import and_, or_
 
 from ._shared import *  # noqa: F401,F403 — 拉取所有 imports / helpers / router / constants
 
-
 # user-scope change 在 pull 响应里的 ledger_id 用这个 sentinel 标识。mobile 端
 # 用同一字符串当 sync_cursors 的 ledger_external_id key,实现独立 cursor 跟踪。
 USER_GLOBAL_LEDGER_SENTINEL = "__user_global__"

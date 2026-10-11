@@ -20,7 +20,6 @@ import uuid
 from dataclasses import dataclass
 from threading import Lock
 
-
 _TTL_SECONDS = 30 * 60  # 30 分钟
 
 

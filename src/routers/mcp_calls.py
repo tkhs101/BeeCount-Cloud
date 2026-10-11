@@ -8,11 +8,10 @@ SET NULL 但 pat_prefix 还能识别)。
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, field_serializer
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 

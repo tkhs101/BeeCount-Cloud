@@ -140,6 +140,7 @@ def test_account_name_map_filters_null_names() -> None:
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool
+
     from src.database import Base
 
     engine = create_engine("sqlite://",

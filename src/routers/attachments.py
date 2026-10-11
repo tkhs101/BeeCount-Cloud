@@ -276,9 +276,11 @@ def download_attachment(
     #    04-server-details.md §3.5)
     # 4) row.ledger_id 非 NULL(tx 附件)→ 走 LedgerMember accessible
     if not current_user.is_admin:
+        from sqlalchemy import and_
+        from sqlalchemy import exists as sa_exists
+
         from ..ledger_access import get_accessible_ledger_ids
         from ..models import LedgerMember
-        from sqlalchemy import and_, exists as sa_exists
 
         if row.user_id == current_user.id:
             pass  # 自己上传的,允许

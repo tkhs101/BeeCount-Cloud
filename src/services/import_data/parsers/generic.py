@@ -7,7 +7,6 @@ import re
 
 from ..schema import ImportFieldMapping
 
-
 # 全集 alias 表 —— 合并了原 alipay / wechat / generic 三套规则。
 # 注意 tx_type 的 pattern 限制为整列名匹配,否则会吃掉"交易类型"(实为
 # wechat 的 category 列)。category_name pattern 则容许子串(因为分类列

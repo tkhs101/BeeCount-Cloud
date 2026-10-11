@@ -30,7 +30,6 @@ from src.services.credit_card.scheduler import (
     _safe_run,
 )
 
-
 # --------------------------------------------------------------------------- #
 # 多进程检测                                                                  #
 # --------------------------------------------------------------------------- #
@@ -323,7 +322,6 @@ def test_detect_gaps_flags_two_months_behind(monkeypatch) -> None:
     import src.services.credit_card.scheduler as sched_mod
     from src.services.credit_card.scheduler import (
         AutoRepayScheduler,
-        _months_behind,
     )
 
     engine = create_engine(
@@ -500,8 +498,7 @@ def test_detect_gaps_runs_through_safe_run(monkeypatch) -> None:
     这正是 `CLAUDE.md` 写的「分层测试全绿 != 拼起来能工作」。
     """
     import src.services.credit_card.scheduler as sched_mod
-    from src.services.credit_card.scheduler import (
-        AutoRepayScheduler, _safe_run)
+    from src.services.credit_card.scheduler import AutoRepayScheduler, _safe_run
 
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False},

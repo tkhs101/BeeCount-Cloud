@@ -20,9 +20,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
-from collections.abc import Mapping
 from typing import Any, TypedDict
 
 from mcp.server.fastmcp import Context, FastMCP

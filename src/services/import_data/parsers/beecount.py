@@ -8,10 +8,7 @@
 """
 from __future__ import annotations
 
-import re
-
 from ..schema import ImportFieldMapping
-
 
 # 表头同义词(按语言)— 跟 web export `_CSV_HEADERS_BY_LANG` 对齐
 _HEADER_ALIASES = {

@@ -12,6 +12,7 @@ from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
+from .. import projection, snapshot_builder, snapshot_cache
 from ..config import get_settings
 from ..database import get_db
 from ..deps import get_current_user, require_admin_user, require_any_scopes, require_scopes
@@ -20,7 +21,6 @@ from ..ledger_access import (
 )
 from ..logging_ring import get_ring_buffer
 from ..models import (
-    AttachmentFile,
     AuditLog,
     BackupArtifact,
     BackupSnapshot,
@@ -29,11 +29,11 @@ from ..models import (
     ReadTxProjection,
     RefreshToken,
     SyncChange,
+    User,
     UserAccountProjection,
     UserCategoryProjection,
-    UserTagProjection,
-    User,
     UserProfile,
+    UserTagProjection,
 )
 from ..schemas import (
     AdminBackupArtifactOut,
@@ -41,7 +41,6 @@ from ..schemas import (
     AdminBackupCreateRequest,
     AdminBackupCreateResponse,
     AdminBackupRestoreRequest,
-    DataCleanupFailure,
     AdminBackupRestoreResponse,
     AdminBackupUploadSnapshotRequest,
     AdminDeviceListOut,
@@ -51,6 +50,7 @@ from ..schemas import (
     AdminMeOut,
     AdminOverviewOut,
     BackupArtifactKind,
+    DataCleanupFailure,
     DataCleanupRecord,
     DataCleanupRequest,
     DataCleanupResult,
@@ -61,10 +61,9 @@ from ..schemas import (
     UserAdminPasswordChangeRequest,
     UserAdminPatchRequest,
 )
+from ..security import SCOPE_APP_WRITE, SCOPE_OPS_WRITE, hash_password, verify_password
 from ..services import data_cleanup as data_cleanup_svc
 from ..services.ai.docs_refresh import get_docs_refresh_service
-from ..security import SCOPE_APP_WRITE, SCOPE_OPS_WRITE, hash_password, verify_password
-from .. import projection, snapshot_builder, snapshot_cache
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,6 @@ no-lost-updates properties that the advisory lock backs up in production.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient

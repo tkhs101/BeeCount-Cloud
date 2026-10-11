@@ -42,16 +42,15 @@ from ..schemas import (
     BackupScheduleUpdateRequest,
 )
 from ..services.backup import RcloneConfigManager
-from ..services.backup.rclone_config import reveal_password
 from ..services.backup.rclone_config import (
     AGE_PASSPHRASE_KEY,
     ALLOWED_BACKEND_FIELDS,
     SENSITIVE_FIELDS,
+    reveal_password,
     sanitize_config_summary,
 )
 from ..services.backup.runner import run_backup_to_remotes
 from ..services.backup.scheduler import get_scheduler
-
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

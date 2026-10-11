@@ -11,9 +11,9 @@
 """
 from __future__ import annotations
 
-import sqlalchemy as sa
 from datetime import datetime, timezone
 
+import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -21,8 +21,7 @@ from sqlalchemy.pool import StaticPool
 
 from src.database import Base, get_db
 from src.main import app
-from src.models import Ledger, ReadTxProjection, UserAccountProjection
-
+from src.models import Ledger, ReadTxProjection
 
 # --------------------------------------------------------------------------- #
 # Test helpers                                                                 #

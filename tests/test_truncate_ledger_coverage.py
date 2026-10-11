@@ -29,10 +29,7 @@
 from __future__ import annotations
 
 import ast
-import inspect
 from pathlib import Path
-
-import pytest
 
 from src import models
 from src import projection as projection_mod
@@ -123,6 +120,7 @@ def test_truncate_actually_deletes_rows_at_runtime() -> None:
     万一循环体被改坏(比如加了 `if False:`),静态判据看不出来。
     """
     from datetime import datetime, timezone
+
     from sqlalchemy import create_engine, func, select
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool

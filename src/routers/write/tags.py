@@ -6,7 +6,7 @@ WRITE 响应表。Endpoint 自身只管参数校验 + mutate lambda 的构造。
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, Request
 
 from ._shared import *  # noqa: F401,F403 — 集中从 _shared 取所有 symbol
 

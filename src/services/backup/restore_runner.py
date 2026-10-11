@@ -28,15 +28,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from sqlalchemy.orm import Session
-
 from ...config import get_settings
 from ...database import SessionLocal
 from ...models import BackupRemote, BackupRun
 from .rclone_config import get_age_passphrase, remote_path
 from .rclone_runner import RcloneError, RcloneRunner
 from .tar_builder import extract_zip
-
 
 logger = logging.getLogger(__name__)
 

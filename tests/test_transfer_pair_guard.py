@@ -26,7 +26,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -197,9 +196,9 @@ def test_name_fallback_never_yields_one_sided_transfer() -> None:
     修复后:若 transfer 的一端解析不出,另一端也必须一并放弃(宁可漏算,
     不可单边扣钱),由后续的孤儿扫描/对账兜住。
     """
-    from src.projection import _resolve_account_sync_id_by_name
+
     from src.models import UserAccountProjection
-    from sqlalchemy import select
+    from src.projection import _resolve_account_sync_id_by_name
 
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
@@ -262,6 +261,7 @@ def test_projection_drops_one_sided_name_resolution() -> None:
     修复后两端都必须留 NULL。
     """
     from sqlalchemy import select
+
     from src import projection as proj
     from src.models import ReadTxProjection, UserAccountProjection
     from src.projection import _resolve_account_sync_id_by_name
@@ -308,6 +308,7 @@ def test_projection_drops_one_sided_name_resolution() -> None:
 def test_projection_keeps_both_sides_when_both_resolve() -> None:
     """两端都能解析时**正常保留** —— 不能为了防 bug 把转账算没了。"""
     from sqlalchemy import select
+
     from src import projection as proj
     from src.models import ReadTxProjection, UserAccountProjection
 
@@ -342,6 +343,7 @@ def test_expense_one_sided_is_unaffected() -> None:
     """普通支出只有**一个**账户字段 —— 「全有或全无」约束**只对 transfer 生效**。
     支出解析不出就该留 NULL(宁缺勿错),不能被误伤。"""
     from sqlalchemy import select
+
     from src import projection as proj
     from src.models import ReadTxProjection, UserAccountProjection
 

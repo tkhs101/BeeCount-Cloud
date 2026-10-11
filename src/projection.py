@@ -17,12 +17,10 @@ from typing import Any, Iterable
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from .models import (
     AttachmentFile,
-    Ledger,
     ReadBudgetProjection,
     ReadTxProjection,
     ReadTxSplitProjection,
@@ -879,7 +877,6 @@ def rebuild_all(db: Session) -> int:
     """遍历所有 ledger,按各自 latest snapshot 重建 projection。
     返回处理的 ledger 个数。救急脚本 `scripts/rebuild_all_projections.py` 用。
     """
-    from sqlalchemy import func
 
     from .models import Ledger, SyncChange
 

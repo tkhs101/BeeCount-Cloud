@@ -39,7 +39,6 @@ from ...models import (
     User,
     UserTagProjection,
 )
-from ...security import SCOPE_APP_WRITE, SCOPE_WEB_WRITE
 from ...services.ai.image_cache import consume_image
 from ...snapshot_mutator import create_tag, create_transaction
 from ._shared import (

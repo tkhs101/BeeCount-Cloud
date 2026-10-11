@@ -26,7 +26,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -37,11 +37,9 @@ from src.models import (
     UserAccountProjection,
 )
 from src.services.credit_card.billing import (
-    current_billing_period,
     period_for_payment_due_date,
 )
 from src.services.credit_card.statement import compute_statement
-
 
 # --------------------------------------------------------------------------- #
 # 夹具                                                                        #

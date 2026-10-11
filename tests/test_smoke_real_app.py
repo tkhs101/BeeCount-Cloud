@@ -34,7 +34,6 @@
 """
 from __future__ import annotations
 
-import os
 import pathlib
 import tempfile
 import uuid
@@ -51,21 +50,18 @@ import pytest
 _TMP_DB = (pathlib.Path(tempfile.gettempdir())
            / f"beecount_smoke_{uuid.uuid4().hex}.db")
 
-import sys                                                    # noqa: E402
+import sys  # noqa: E402
 
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
-from alembic import command                                   # noqa: E402
-from alembic.config import Config                             # noqa: E402
-from fastapi.testclient import TestClient                     # noqa: E402
-from sqlalchemy import create_engine                           # noqa: E402
-from sqlalchemy.orm import sessionmaker                       # noqa: E402
-from sqlalchemy.pool import StaticPool                        # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import create_engine  # noqa: E402
+from sqlalchemy.orm import sessionmaker  # noqa: E402
+from sqlalchemy.pool import StaticPool  # noqa: E402
 
 from src.database import get_db
-import src.database as _sdb                             # noqa: E402
-from src.main import app                                      # noqa: E402
+from src.main import app  # noqa: E402
 
 #: 这条测试**自建 engine**,不靠 `DATABASE_URL` 环境变量。
 #:
@@ -502,8 +498,9 @@ def _sync_txs(c, H):
 
 def _stored_happened_at(sync_id: str):
     """直接读 projection —— 见下面「为什么不在读端断言」。"""
-    from src.models import ReadTxProjection
     from sqlalchemy import select
+
+    from src.models import ReadTxProjection
 
     with SessionLocal() as db:
         return db.scalar(
@@ -659,9 +656,9 @@ def _seed_accounts(ledger_id: str, names) -> list:
     """
     import uuid
 
-    from src.models import Ledger, UserAccountProjection
-
     from sqlalchemy import select
+
+    from src.models import Ledger, UserAccountProjection
 
     with SessionLocal() as db:
         # ⚠️ 按 **external_id** 查,不是主键 —— push 物化出来的 Ledger
@@ -681,8 +678,9 @@ def _seed_accounts(ledger_id: str, names) -> list:
 
 def _split_leg_count(tx_sync_id: str) -> int:
     """数某笔交易的腿(直接读库,理由同 `_stored_happened_at`)。"""
-    from src.models import ReadTxSplitProjection
     from sqlalchemy import func, select
+
+    from src.models import ReadTxSplitProjection
 
     with SessionLocal() as db:
         return db.scalar(

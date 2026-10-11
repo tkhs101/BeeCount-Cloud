@@ -16,7 +16,6 @@ from datetime import datetime
 
 from .docs_index import RetrievedChunk
 
-
 _SYSTEM_ZH = """\
 你是 BeeCount(蜜蜂记账)的助手,只基于下面提供的「相关文档」回答用户的问题。
 

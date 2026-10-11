@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Iterable
@@ -24,9 +25,6 @@ from ...models import (
     UserTagProjection,
 )
 from .models import OrphanRecord, OrphanType, ScanReport
-
-
-import logging
 
 logger = logging.getLogger("beecount.data_cleanup")
 

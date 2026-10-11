@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import Device, RecoveryCode, User
+from ..models import RecoveryCode, User
 from ..schemas import (
     AuthLoginResponse,
     TwoFAConfirmRequest,

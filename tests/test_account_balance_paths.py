@@ -26,9 +26,6 @@ MCP 的重复 SQL、净值历史的 `_apply`),只有 workspace 和 MCP 那两份
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -146,6 +143,7 @@ def test_aggregate_and_per_transaction_balances_agree():
         ledger_internal = None
         with TS() as db:
             from sqlalchemy import select
+
             from src.models import Ledger
             ledger_internal = db.scalar(
                 select(Ledger).where(Ledger.external_id == "lg1")).id

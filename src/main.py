@@ -8,30 +8,44 @@ from pathlib import Path
 # 导入、再 ensure_jwt_secret,settings 已经缓存了默认占位符,后续 env 变更
 # 不再被反映,下面 production 校验就会 raise。
 from .bootstrap import ensure_jwt_secret
+
 ensure_jwt_secret()
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.routing import Route
 from fastapi.responses import FileResponse, PlainTextResponse
 from sqlalchemy import text
+from starlette.routing import Route
 
+from .bootstrap_admin import ensure_admin
 from .config import get_settings
 from .database import SessionLocal
 from .error_handling import register_exception_handlers
 from .logging_ring import install_ring_buffer
+from .mcp import server as mcp_server
 from .metrics import metrics
 from .observability import configure_logging, install_request_middleware
-from .bootstrap_admin import ensure_admin
-from .routers import admin, attachments, auth, devices, pats, profile, read, sync, write, ws
-from .routers import admin_backup, mcp_calls, two_factor
+from .routers import (
+    admin,
+    admin_backup,
+    attachments,
+    auth,
+    devices,
+    mcp_calls,
+    pats,
+    profile,
+    read,
+    sync,
+    two_factor,
+    write,
+    ws,
+)
 from .routers import ai as ai_router
 from .routers import import_data as import_router
 from .routers import invites as invites_router
-from .routers import members as members_router
 from .routers import member_stats as member_stats_router
+from .routers import members as members_router
 from .routers import shared_resources as shared_resources_router
-from .mcp import server as mcp_server
 from .websocket_manager import WSConnectionManager
 
 # 日志配置提前 —— stdout handler 必须在 ensure_admin() 之前就绪,
@@ -59,7 +73,8 @@ if settings.app_env != "development":
     if settings.has_wildcard_cors:
         raise RuntimeError("CORS_ORIGINS cannot contain wildcard '*' in non-development environments")
 
-from .version import __version__ as _beecount_cloud_version, APP_NAME as _beecount_cloud_name
+from .version import APP_NAME as _beecount_cloud_name
+from .version import __version__ as _beecount_cloud_version
 
 app = FastAPI(
     title=settings.app_name,
@@ -254,6 +269,7 @@ if _static_dir.exists():
 @app.on_event("startup")
 async def _start_backup_scheduler() -> None:  # noqa: B008
     import asyncio
+
     from .services.backup.scheduler import get_scheduler
 
     # 让 admin_backup.run-now 的 thread 能用 run_coroutine_threadsafe 把 WS
@@ -377,6 +393,7 @@ async def _start_mcp_log_retention() -> None:  # noqa: B008
 
 def _prune_mcp_logs() -> None:
     from datetime import datetime, timedelta, timezone
+
     from sqlalchemy import delete
 
     from .models import MCPCallLog

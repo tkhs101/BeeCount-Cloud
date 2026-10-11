@@ -93,7 +93,6 @@ def _resolve_pat_sync(
     用于后续 tool 调用审计日志(MCPCallLog)。
     """
     import hashlib
-    import hmac
 
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     with SessionLocal() as db:

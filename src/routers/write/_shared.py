@@ -32,6 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
+from ... import projection, snapshot_builder, snapshot_cache
 from ...concurrency import lock_ledger_for_materialize
 from ...config import get_settings
 from ...database import get_db
@@ -67,8 +68,6 @@ from ...schemas import (
     WriteTransactionUpdateRequest,
 )
 from ...security import SCOPE_APP_WRITE, SCOPE_WEB_WRITE
-from ... import projection, snapshot_builder, snapshot_cache
-from ...sync_applier import USER_GLOBAL_ENTITY_TYPES
 from ...snapshot_mutator import (
     create_account,
     create_budget,
@@ -87,6 +86,7 @@ from ...snapshot_mutator import (
     update_tag,
     update_transaction,
 )
+from ...sync_applier import USER_GLOBAL_ENTITY_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -1204,9 +1204,11 @@ async def _broadcast_shared_resource_events(
 ) -> None:
     """对 owner 作为 owner 的所有共享账本(member_count > 1),给非 owner member
     推送 shared_resource_change 事件。复刻 sync/push.py:356-381 的逻辑。"""
-    from ...models import Ledger as _L, LedgerMember as _LM
     from sqlalchemy import func as _func
+
     from ...ledger_access import list_ledger_members
+    from ...models import Ledger as _L
+    from ...models import LedgerMember as _LM
 
     ws_manager = request.app.state.ws_manager
     rows = db.execute(

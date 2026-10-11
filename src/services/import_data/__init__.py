@@ -12,10 +12,10 @@
 from __future__ import annotations
 
 from .cache import (
+    cancel_token,
     consume_token,
     get_token_data,
     save_token_data,
-    cancel_token,
 )
 from .parser import (
     detect_source_format,

@@ -16,8 +16,9 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -25,8 +26,6 @@ from ... import snapshot_builder
 from ...concurrency import lock_ledger_for_materialize
 from ...database import get_db
 from ...deps import get_current_user
-from sqlalchemy import select
-
 from ...models import AuditLog, SyncPushIdempotency, User
 from ...snapshot_mutator import delete_transaction
 from ._shared import (

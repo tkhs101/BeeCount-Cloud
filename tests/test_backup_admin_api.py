@@ -2,7 +2,6 @@
 DB 写入 / 路由权限 / schema 校验。"""
 from __future__ import annotations
 
-import os
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -12,7 +11,6 @@ from sqlalchemy.pool import StaticPool
 
 from src.database import Base, get_db
 from src.main import app
-
 
 _TEST_SESSION: sessionmaker | None = None
 

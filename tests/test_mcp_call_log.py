@@ -8,7 +8,6 @@
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -22,7 +21,7 @@ from src.main import app
 from src.mcp import auth as mcp_auth
 from src.mcp.server import _summarize_args, _write_call_log
 from src.models import MCPCallLog, PersonalAccessToken, User
-from src.security import generate_pat, hash_password
+from src.security import hash_password
 
 
 def _bootstrap(monkeypatch):

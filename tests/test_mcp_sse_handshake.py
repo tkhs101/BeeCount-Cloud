@@ -19,12 +19,10 @@ test_mcp_streamable_http.py)。本文件保留 —— 这些测试实际覆盖�
 """
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
-import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ._shared import *  # noqa: F401,F403 — imports + helpers + router
 
+
 @router.get("/summary", response_model=ReadSummaryOut)
 def get_summary(
     ledger_id: str = Query(..., min_length=1),

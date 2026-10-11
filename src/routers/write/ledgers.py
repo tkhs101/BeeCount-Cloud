@@ -10,11 +10,11 @@ import os
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
-from ._shared import *  # noqa: F401,F403 — 集中从 _shared 取所有 symbol
 from ...models import AttachmentFile
+from ...services.data_cleanup.cleaner import _remove_empty_parents
 from ...services.exchange_rate import fetcher as _rate_fetcher
 from ...snapshot_mutator import _to_float as _snap_to_float
-from ...services.data_cleanup.cleaner import _remove_empty_parents
+from ._shared import *  # noqa: F401,F403 — 集中从 _shared 取所有 symbol
 
 router = APIRouter()
 
@@ -37,8 +37,8 @@ def _seed_default_categories(db: Session, *, ledger: Ledger, user: User) -> int:
     if not get_settings().seed_default_categories:
         return 0
     try:
-        from sqlalchemy import select as _sa_select
         from sqlalchemy import func as _sa_func
+        from sqlalchemy import select as _sa_select
 
         from ...models import UserCategoryProjection
         from ...services.default_categories import build_default_snapshot

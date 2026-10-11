@@ -16,14 +16,15 @@ _get_latest_change_id / snapshot_cache 相关 / Flutter ↔ server 字段转换 
 
 import json
 import math
-from datetime import datetime, timedelta, timezone
 from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, func, or_, select, true
 from sqlalchemy.orm import Session
 
+from ... import snapshot_cache
 from ...config import get_settings
 from ...database import get_db
 from ...deps import get_current_user, require_any_scopes, require_scopes
@@ -73,7 +74,6 @@ from ...schemas import (
     WorkspaceTransactionPageOut,
 )
 from ...security import SCOPE_APP_WRITE, SCOPE_WEB_READ
-from ... import snapshot_cache
 
 router = APIRouter()
 settings = get_settings()

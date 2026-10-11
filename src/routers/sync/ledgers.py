@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from ._shared import *  # noqa: F401,F403 — 拉取所有 imports / helpers / router / constants
 
+
 @router.get("/ledgers", response_model=list[SyncLedgerOut])
 def list_ledgers(
     _scopes: set[str] = Depends(require_any_scopes(SCOPE_APP_WRITE, SCOPE_WEB_READ)),

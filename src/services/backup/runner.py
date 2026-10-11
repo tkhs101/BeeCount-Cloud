@@ -20,10 +20,8 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import shutil
-import threading
-from concurrent.futures import ThreadPoolExecutor, Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -47,13 +45,12 @@ from .rclone_config import (
     remote_path,
     remote_root,
 )
-from .rclone_runner import RcloneRunner, RcloneError
+from .rclone_runner import RcloneError, RcloneRunner
 from .retention import (
     compute_retention_deletes,
     filter_backup_files,
 )
 from .tar_builder import build_encrypted_zip, build_targz, hardlink_tree
-
 
 logger = logging.getLogger(__name__)
 
