@@ -1042,6 +1042,9 @@ const en = {
   // 护栏:i18nKeyCoverage.test.ts(枚举代码里所有 `t('...')` 与 en.ts 求差集)
   'notice.transactionCreated': 'Transaction created',
   'notice.transactionUpdated': 'Transaction updated',
+  // ⚠️ 别在这儿加 `txFlag*` —— 它们**已经存在**于本文件末尾的「账单标记」块
+  // (写法是 `txFlagXxx: '...'` **不带引号**,所以按 `^  '(\w+)':` 抓不到)。
+  // 我第一轮就是没找到、又加了一遍,被 `tsc` 的 TS1117 当场抓住。
   'notice.accountRestored': 'Restored',
   'notice.categoryCreated': 'Category created',
   'notice.categoryUpdated': 'Category updated',
