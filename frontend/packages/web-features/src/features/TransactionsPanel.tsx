@@ -317,6 +317,32 @@ export function TransactionsPanel({
     }
     return accountOptions
   }
+  // 拆分腿的账户候选 —— **必须把腿当前的账户 pin 进去**。
+  //
+  // `accounts` prop 已被调用方按表单当前币种过滤(`TransactionsPanel` 的
+  // 调用方都这么做)。复制编辑器原来直接用这个列表,没有 pinned 机制 ——
+  // 于是编辑一笔 JPY 组合支付时把币种切成 CNY,两条腿的 accountId 还在
+  // form state 里,而两个下拉都只显示占位符「账户」。
+  //
+  // 用户以为腿丢了 → 重新选一遍。若**不**重新选直接保存,`parseSplits`
+  // 仍会用旧的 accountId 提交 —— **界面显示空、实际提交旧值**。
+  //
+  // 主账户下拉早用 `accountOptionsWithPinned` 解决过同一个问题,
+  // 这里照抄那一半。
+  const legOptions = (
+    leg: { accountId: string; accountName: string },
+  ): Array<{ id: string; name: string; pinned: boolean }> => {
+    const rows = accounts.map((a) => ({ id: a.id, name: a.name, pinned: false }))
+    if (leg.accountId && !rows.some((r) => r.id === leg.accountId)) {
+      rows.unshift({
+        id: leg.accountId,
+        name: leg.accountName || leg.accountId,
+        pinned: true,
+      })
+    }
+    return rows
+  }
+
   const categoryOptions = categories
     .filter((row) => row.kind === form.tx_type)
     .map((row) => row.name.trim())
@@ -612,9 +638,18 @@ export function TransactionsPanel({
                               />
                             </SelectTrigger>
                             <SelectContent>
-                              {accounts.map((a) => (
+                              {legOptions(leg).map((a) => (
                                 <SelectItem key={a.id} value={a.id}>
                                   {a.name}
+                                  {/* 当前腿的账户不在候选里(币种变了/被隐藏)——
+                                      显示出来并标注,而不是只显示一个空白占位符。
+                                      否则「界面显示空、实际提交旧值」,又一处
+                                      界面与实际不符。 */}
+                                  {a.pinned ? (
+                                    <span className="ml-1 text-xs text-muted-foreground">
+                                      {t('transactions.splits.notInFilter')}
+                                    </span>
+                                  ) : null}
                                 </SelectItem>
                               ))}
                             </SelectContent>

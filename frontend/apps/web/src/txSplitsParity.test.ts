@@ -295,3 +295,38 @@ describe('splits —— 导入映射 UI 与导出列必须对得上', () => {
     }
   })
 })
+
+
+describe('splits —— 腿的账户下拉必须 pin 住当前值', () => {
+  const _read = (rel: string) =>
+    fs.readFileSync(path.resolve(__dirname, rel), 'utf8')
+
+  it('腿的下拉用 legOptions,而不是直接吃被过滤的 accounts', () => {
+    // 用户录了一笔 JPY 组合支付,后来编辑时把币种切成 CNY:
+    // 两条腿的 accountId 还在 form state 里,而两个下拉都只显示
+    // 占位符「账户」。用户以为腿丢了 → 重新选一遍。
+    // 若**不**重新选直接保存,parseSplits 仍会用旧的 accountId 提交
+    // —— **界面显示空、实际提交旧值**。
+    //
+    // 主账户下拉早用 accountOptionsWithPinned 解决过同一个问题,
+    // 拆分腿这里漏了。
+    const src = _read('../../../packages/web-features/src/features/TransactionsPanel.tsx')
+    expect(src).toMatch(/legOptions\(leg\)\.map\(/)
+    expect(src).toContain('const legOptions = (')
+  })
+
+  it('pin 进来的项带「不在当前筛选内」标注', () => {
+    // 不加标注的话用户看到一个不在候选里的名字,只会更困惑
+    const src = _read('../../../packages/web-features/src/features/TransactionsPanel.tsx')
+    expect(src).toMatch(/pinned: true/)
+    expect(src).toMatch(/transactions\.splits\.notInFilter/)
+  })
+
+  it('i18n 三语都有 transactions.splits.notInFilter', () => {
+    for (const f of ['en.ts', 'zh-CN.ts', 'zh-TW.ts']) {
+      const src = _read(path.join('i18n', f))
+      expect(src, `${f} 缺 transactions.splits.notInFilter`)
+        .toMatch(/'transactions\.splits\.notInFilter'/)
+    }
+  })
+})
