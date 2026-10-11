@@ -2212,3 +2212,45 @@ MISSING: test_smoke_real_app.py
 值得记的是**探针本身**:第一版报的 38 条如果不追一下,就会变成一条
 「文档有 38 个坏路径」的假结论写进日志 —— 而那会比真问题更糟,
 因为它会让人以为有 38 件事要修。
+
+## 第 124 轮:推广体检到另两个文档 —— 又是「0 个问题」,探针错了两次
+
+| 文档 | 路径引用 | 结论 |
+|---|---|---|
+| `docs/SYNC_ARCHITECTURE.md` | 16 个 | 解析不到 **0** |
+| `docs/SELFHOST-RUNBOOK.md` | 1 个 | 解析不到 **0** |
+
+runbook 只引用 **1 个**路径 —— 对部署手册来说太少了,说明它引用的是**别的东西**。
+于是改查**环境变量**(部署文档真正会腐烂的是这些,不是文件路径)。
+
+### 探针错第一次
+
+我把 runbook 里的 `UPPER_SNAKE` 拿去比 `Settings.model_fields`,报出 20 个
+「不是字段」—— 包括 `WEB_STATIC_DIR` / `TAX_CATEGORY_NAME` 这些**明明有效**的。
+
+根因:**字段名是小写的**,`web_static_dir`。CLAUDE.md 早就写着环境变量名是
+Pydantic Settings **按约定大写**出来的。**我又忘了这条** —— 而它正是
+「grep 搜不到 ≠ 不存在」那条讲的同一个机制。
+
+### 探针错第二次
+
+改成 `field.upper()` 之后,剩下的仍有一堆:`BEAR` / `KING` / `INTO` /
+`POST` / `VACUUM` —— 那是**中文散文里夹的英文词**,被 `[A-Z][A-Z0-9_]{3,}`
+这个正则捞进来了。加了「常见系统词」白名单才干净。
+
+**最终结论:零个无效环境变量。** `DATABASE_URL` / `WEB_STATIC_DIR` /
+`ATTACHMENT_*` / `BACKUP_STORAGE_DIR` / `REGISTRATION_ENABLED` /
+`SCHEDULER_TIMEZONE` / `SEED_DEFAULT_CATEGORIES` / `TAX_CATEGORY_NAME` /
+`JWT_SECRET` **全部对得上**。
+
+## 这轮真正想记的一条
+
+连着两轮净产出都是「0 个问题」。**这不是白跑** —— 它把「CLAUDE.md 干净」
+扩展成了「三个文档的引用面都干净」。
+
+但更值得记的是:**这一场会话我的检查探针错了四次**,每一次都是探针太严或
+太松、而对象是好的。
+
+> 📌 所以「写个脚本扫一遍」的**默认假设应该是「它会报错」,而不是
+> 「文档有问题」。报出来的每一条,先问「我的判据站得住吗」,再问
+> 「它是不是真的」。
