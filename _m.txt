@@ -1,0 +1,22 @@
+docs: 记三个包的 tsconfig 是装饰性配置,以及本轮两次假阴性/错误假设
+
+## 配置发现
+
+apps/web/tsconfig.json 的 include **本来就覆盖三个包的 src**,所以 tsc -b
+已经检查它们了。三个包各自的 tsconfig.json **没有任何脚本或 CI 引用**。
+
+实测它们单独编译也是 0 错误,但**有点侥幸**:包配置没写 lib: ["DOM"],
+DOM 类型是从 @types/* 传递泄漏进来的(document.title 不报错就是证据)。
+packages/ui 还漏了 noEmit: true。
+
+**决定不加 typecheck:packages 脚本** —— 包已被 tsc -b 覆盖,单独跑只验证
+装饰配置本身。别给零收益加仪式。
+
+## 我自己这轮的两个错(都已推翻)
+
+1. **假设 `window.matchMedia` 会因缺 lib: DOM 报错** —— 错的,0 错误
+2. **假阴性**:find 没找到 tsc,但 `grep -c "error TS"` 在空输出上数出 0,
+   输出「0 个错误」—— **命令根本没跑成**。「0 个错误」和「没有错误」
+   不是一回事,尤其在管道里
+
+与「探针的否定结果不能当证据」是同一条。
