@@ -37,6 +37,7 @@ from __future__ import annotations
 import os
 import pathlib
 import tempfile
+import uuid
 
 import pytest
 
@@ -45,8 +46,10 @@ import pytest
 # 文件名带 pid:`src.database` 的 engine 是**模块级全局**,连接会一直
 # 持有,pytest 结束时删不掉(Windows PermissionError WinError 32)。
 # 用唯一名避免与上一次运行撞,残留文件留给系统清理 Temp。
+# 文件名用 **uuid 而不是 pid** —— Windows 会复用 pid,上一次的 DB 还在,
+# 于是注册直接 409 AUTH_EMAIL_EXISTS,而报错与「文件没删干净」看不出关系。
 _TMP_DB = (pathlib.Path(tempfile.gettempdir())
-           / f"beecount_smoke_{os.getpid()}.db")
+           / f"beecount_smoke_{uuid.uuid4().hex}.db")
 
 import sys                                                    # noqa: E402
 
@@ -60,7 +63,8 @@ from sqlalchemy import create_engine                           # noqa: E402
 from sqlalchemy.orm import sessionmaker                       # noqa: E402
 from sqlalchemy.pool import StaticPool                        # noqa: E402
 
-from src.database import get_db                               # noqa: E402
+from src.database import get_db
+import src.database as _sdb                             # noqa: E402
 from src.main import app                                      # noqa: E402
 
 #: 这条测试**自建 engine**,不靠 `DATABASE_URL` 环境变量。
@@ -82,9 +86,18 @@ SessionLocal = sessionmaker(bind=_ENGINE, autocommit=False, autoflush=False)
 @pytest.fixture(scope="module")
 def client():
     """真 app + 真路由 + 真鉴权 + 真 self-call,跑在自己的库上。"""
-    cfg = Config(str(_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(_ROOT / "alembic"))
-    command.upgrade(cfg, "head")
+    # 建表直接用 `Base.metadata.create_all(_ENGINE)`,**不走 alembic**。
+    #
+    # 我先试了 `cfg.set_main_option("sqlalchemy.url", ...)`:alembic 的
+    # `env.py` 用 `engine_from_config(config.get_section(...))`,而 configparser
+    # 会把 `%` 当插值 —— Windows 临时路径经 SQLAlchemy 编码成 `C%3A/...`
+    # 直接 ValueError。绕开编码又落在**另一个库**上(查库确认:0 张表)。
+    #
+    # 权衡:冒烟测试的价值是「真 app + 真路由 + 真鉴权 + 真同步」能跑通;
+    # **迁移链本身的正确性不靠它**(alembic 跑的是仓库根 beecount.db,
+    # 而且专门有迁移测试)。为这一个 fixture 和 configparser 缠三轮不划算。
+    from src.models import Base
+    Base.metadata.create_all(_ENGINE)
 
     def _override():
         db = SessionLocal()
@@ -103,18 +116,6 @@ def client():
 
 LEDGER = "smoke-ledger"
 SYNC_LEDGER = "sync-ledger"
-
-
-@pytest.fixture(scope="module")
-def client():
-    """真 app + 真路由 + 真鉴权 + 真 self-call。"""
-    cfg = Config(str(pathlib.Path(__file__).resolve().parents[1] / "alembic.ini"))
-    cfg.set_main_option("script_location",
-                        str(pathlib.Path(__file__).resolve().parents[1] / "alembic"))
-    command.upgrade(cfg, "head")
-    with TestClient(app) as c:
-        yield c
-    # 不删 DB:engine 是模块级全局,连接仍持有,删会 PermissionError(WinError 32)
 
 
 @pytest.fixture(scope="module")
@@ -501,7 +502,6 @@ def _sync_txs(c, H):
 
 def _stored_happened_at(sync_id: str):
     """直接读 projection —— 见下面「为什么不在读端断言」。"""
-    from src.database import SessionLocal
     from src.models import ReadTxProjection
     from sqlalchemy import select
 
@@ -590,3 +590,101 @@ def test_sync_push_naive_timestamp_is_treated_as_utc(app_client) -> None:
     iso = got.isoformat() if hasattr(got, "isoformat") else str(got)
     assert iso.startswith("2026-10-21T07:00"), (
         f"naive 没按 UTC 解释:{iso}")
+
+
+def test_sync_push_keeps_splits_on_a_later_partial_update(app_client) -> None:
+    """mobile 推组合支付 -> 再推一次「只改备注」-> **腿必须还在**。
+
+    ## 为什么这条最该有
+
+    `CLAUDE.md` 把「`upsert_tx` 无条件 `replace_tx_splits(None)` →
+    `/sync/push` 部分更新把腿全删」列为组合支付**五个静默丢失的坑**之一,
+    后果是「余额**永久漂移**」。
+
+    分层测试(`test_tx_split_invariants.py`)直接写 projection 行,
+    证明不了「**经过 sync 的 merge 之后**腿还在」——
+    `sync_applier._merge_tx_splits_after_merge` 那段「payload 不带 splits
+    就带上现有腿」是另一份实现,必须真跑。
+
+    ## 这个场景用户实际会碰到
+
+    手机上给一笔组合支付改个备注 —— 那是**极其常见**的操作,
+    而它一次就会把腿删光。父交易的 `account_*` 是空的(0021 的契约),
+    所以余额直接少掉一部分,**且不报错**。
+    """
+    c, H = app_client
+    _ensure_ledger(c, H)
+
+    # 建两个账户。**直接写库**:app token 走不了 REST 写路径
+    # (conftest 的 ALLOW_APP_RW_SCOPES=false),而腿要指向真实账户才有意义。
+    ids = _seed_accounts(SYNC_LEDGER, ("同步卡A", "同步卡B"))
+
+    # 第一次推送:带 legs
+    _push(c, H, [{
+        "ledger_id": SYNC_LEDGER, "entity_type": "transaction",
+        "entity_sync_id": "sync-split-1", "action": "upsert",
+        "payload": {
+            "id": "sync-split-1", "type": "expense", "amount": 5000.0,
+            "happenedAt": "2026-10-20T09:00:00Z", "note": "便利店",
+            "splits": [{"accountId": ids[0], "amount": 3000.0},
+                       {"accountId": ids[1], "amount": 2000.0}],
+        },
+        "updated_at": "2026-10-20T09:00:00Z",
+    }])
+    assert _split_leg_count("sync-split-1") == 2, "第一次推送的腿没落库"
+
+    # 第二次推送:**只改备注**,payload 不带 splits —— 就是这个会踩坑
+    _push(c, H, [{
+        "ledger_id": SYNC_LEDGER, "entity_type": "transaction",
+        "entity_sync_id": "sync-split-1", "action": "upsert",
+        "payload": {
+            "id": "sync-split-1", "type": "expense", "amount": 5000.0,
+            "happenedAt": "2026-10-20T09:00:00Z", "note": "便利店(改备注)",
+            # **刻意不带 splits**
+        },
+        "updated_at": "2026-10-20T10:00:00Z",
+    }])
+
+    n = _split_leg_count("sync-split-1")
+    assert n == 2, (
+        f"只改备注就把腿删了(剩 {n} 条)—— 余额会**永久漂移**且不报错。"
+        f"这正是 CLAUDE.md 记的五个静默丢失的坑之一。")
+
+
+def _seed_accounts(ledger_id: str, names) -> list:
+    """直接写库建账户,返回它们的 sync_id。
+
+    app token 在 pytest 里走不了 REST 写路径(见上),而组合支付的腿必须
+    指向真实账户 —— 否则腿落库时找不到账户,余额那侧就全错了。
+    """
+    import uuid
+
+    from src.models import Ledger, UserAccountProjection
+
+    from sqlalchemy import select
+
+    with SessionLocal() as db:
+        # ⚠️ 按 **external_id** 查,不是主键 —— push 物化出来的 Ledger
+        # 主键是自生成的 uuid, 只是 external_id。
+        led = db.scalar(select(Ledger).where(Ledger.external_id == ledger_id))
+        assert led is not None, f"账本 {ledger_id} 不存在"
+        ids = []
+        for name in names:
+            sid = f"smoke-acct-{uuid.uuid4().hex[:12]}"
+            db.add(UserAccountProjection(
+                sync_id=sid, user_id=led.user_id, name=name,
+                account_type="bank_card", currency="JPY", hidden=False))
+            ids.append(sid)
+        db.commit()
+    return ids
+
+
+def _split_leg_count(tx_sync_id: str) -> int:
+    """数某笔交易的腿(直接读库,理由同 `_stored_happened_at`)。"""
+    from src.models import ReadTxSplitProjection
+    from sqlalchemy import func, select
+
+    with SessionLocal() as db:
+        return db.scalar(
+            select(func.count()).select_from(ReadTxSplitProjection).where(
+                ReadTxSplitProjection.tx_sync_id == tx_sync_id))
