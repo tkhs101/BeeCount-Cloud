@@ -1,0 +1,4 @@
+docs: 记三条结构性护栏 + 备份还原原来只测了状态文件管理
+
+test_backup_restore.py 的 11 条全是 status.json / 目录清理 / 排序,
+admin restore_backup 真正走的数据路径零覆盖 —— 而还原是运维真会执行的操作。

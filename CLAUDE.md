@@ -161,7 +161,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | **860 passed** |
+| `pytest -q` | 绿 | **绿** | **874 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **307 passed**(2026-10-12 实跑 build,12s) |
@@ -711,6 +711,35 @@ for k, v in _PRE.items():                       # import 后立刻还原
 还有一条:`src.database` 的 engine 是**模块级全局**,连接一直持有,
 pytest 结束时删临时库会 `PermissionError (WinError 32)`。DB 文件名带 pid,
 残留交给系统清理 Temp。
+
+### 加 projection 表时:三条**结构性**护栏(别再事后补)
+
+本会话前两条组合支付的坑都是**事后**补测试 —— 而 `CLAUDE.md` 自己写着
+「下一次同样的事还会发生」。现在补上三条默认红的结构性护栏:
+
+| 护栏 | 挡住什么 |
+|---|---|
+| `test_projection_reverse_bridge_coverage.py` | 漏了新列的反向桥 |
+| `test_truncate_ledger_coverage.py` | 忘了把新表登记进 `_truncate_ledger` |
+| `test_backup_restore_data.py` | 还原路径真的丢数据 |
+
+`_truncate_ledger` 那条是**白名单式**:新增 `Read*` 表时默认红。
+用「有 `ledger_id` 列」区分 ledger-scoped 与 per-user ——
+`UserAccountProjection` 是跨账本共享的,按 `ledger_id` 清会**误删别的账本**。
+
+⚠️ 写这类判据时我又一次犯了「恒真」:第一版把
+`isinstance(sub.target, ast.Tuple)` 当条件,而 `for model in (...)` 的
+target 是 **Name** —— 于是「什么都没找到」= 空集合 = 「没有表被清」=
+**全绿**。所以每条判据都要有**自检**:判据找不到东西时必须自己红。
+
+### 备份/还原:原来只测了状态文件管理
+
+`tests/test_backup_restore.py` 的 11 条全是 `status.json` 读法、
+目录清理、排序 —— `admin restore_backup` **真正走的数据路径零覆盖**。
+
+而还原是**运维真会执行**的操作:出事时数据已经错了,不是界面难看。
+新增的 `test_backup_restore_data.py` 补的是 build -> truncate -> rebuild
+的完整往返(腿恰好 2 条、父 `account_name` 仍为空)。
 
 ### 变异审计脚本
 
