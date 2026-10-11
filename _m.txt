@@ -1,9 +1,0 @@
-docs: 记 mypy 存量错误里混着真 bug,以及 TypedDict 必须配 Mapping 签名
-
-两轮实测:runner.py 的未判空是真 bug(80->70),server.py 的 **kw 是类型
-噪音(70->63)。
-
-记下一处配套缺失:_logged_call 写 dict[str,Any] 会把 TypedDict 全判成
-不兼容,等于逼人退回 dict(...) —— 只加 TypedDict 不改它,14 条会变 20 条。
-
-CLAUDE.md 的 mypy 数字同步更新为 63。
