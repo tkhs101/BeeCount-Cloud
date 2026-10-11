@@ -1,23 +1,6 @@
-test(i18n): 补按需加载的行为护栏 —— 突变验证三次全部被抓
+docs: 记 i18n 护栏补齐(原测试静态导入三个词典,没测按需加载)
 
-上一版 `i18n.test.ts` **静态导入三个词典**,按需加载那条路一条都没测 ——
-而那正是首屏省 164 kB 的实现。等于上线后没有任何回归保护。
+新增 i18nLazy.test.ts,三次突变全部被抓:动态 import 指错模块 / 退回静态
+import / en 兜底变空 —— 三种失效都不报错且上线后才暴露。
 
-## 锁住的是两种「上线后才暴露、且不报错」的失效
-
-| 变异 | 后果 | 抓到? |
-|---|---|---|
-| `loadDictionary('zh-CN')` 悄悄返回 `en` | 界面全是英文,**无任何报错** —— 中文用户以为切换没生效 | ✅ |
-| zh-CN 退回静态 import(不再是空壳) | 懒加载失效,首屏又变大 | ✅ |
-| `initialDictionaries.en` 变空 | `t()` 的 `active[key] \|\| fallback[key] \|\| key` 兜底失效,**任何词典没覆盖到的 key 直接显示 `shell.language` 这种原始 key 名** | ✅ |
-
-三条都是**真跑**(`vitest` 直接 import 模块 + 动态 `import()`),
-不是字符串存在性检查 —— 符合 CLAUDE.md 记的「前端 45% 的护栏是假的」
-那条教训。
-
-另外把 `{}` 是**真值**这件事也断言了
-(`expect(Boolean(initialDictionaries['zh-CN'])).toBe(true)`),
-因为这正是 `LocaleProvider` 里必须用 `Object.keys().length` 而不是
-`if (!dictionaries[locale])` 的原因。
-
-**307 -> 311 passed**(变异全部还原后实测)。
+前端测试数同步更新为 311。

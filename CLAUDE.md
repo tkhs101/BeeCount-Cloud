@@ -164,7 +164,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 | `pytest -q` | 绿 | **绿** | **885 passed** |
 | `mypy src` | 89 errors | **60 errors** | 比上游还少 29 个;**这条线到此为止**,见下文 |
 | `ruff check src tests alembic` | 1421 | **1253** | **1420 里 1131 条(80%)是同一条 `F405`**(桶导入)—— 系统性问题。已清掉可自动修复的 168 处(`F401` + `I001`) |
-| 前端 `build` + `test` | 绿 | **绿** | **307 passed**(2026-10-12 实跑 build,12s) |
+| 前端 `build` + `test` | 绿 | **绿** | **311 passed**(2026-10-12 实跑 build,12s) |
 
 ### ⚠️ ruff 的 1420 条:先看构成再决定动不动(2026-10-12)
 
@@ -450,6 +450,26 @@ playwright-cli click f1e37            # 用户菜单(那个 "B" 头像按钮)
 ⚠️ 应用内语言菜单是 **popover**(标题就是语言名本身,如 `title="English"`),
 **不是**落地页那种循环切换按钮(`title="切换语言: 简体"`)。
 按「切换语言」找会找不到 —— 这是两种不同的组件。
+
+#### i18n 按需加载的**护栏**(突变验证过,3/3 抓到)
+
+护栏:`frontend/apps/web/src/i18nLazy.test.ts`。⚠️ 原来的 `i18n.test.ts`
+**静态导入三个词典**,按需加载那条路一条都没测 —— 等于上线后零回归保护。
+
+三条断言各自锁住一种**上线后才暴露、且不报错**的失效:
+
+| 变异 | 后果 |
+|---|---|
+| `loadDictionary('zh-CN')` 悄悄返回 `en` | 界面全英文,**无任何报错** |
+| zh-CN 退回静态 import(不再是空壳) | 懒加载失效,首屏又变大 |
+| `initialDictionaries.en` 变空 | `t()` 兜底失效 -> **漏 `shell.language` 这种原始 key 名** |
+
+**都是真跑**(vitest 直接 import 模块 + 动态 `import()`),
+不是字符串存在性检查 —— 这正是上面那条「前端 45% 的护栏是假的」的反面例子。
+
+⚠️ 顺便断言了 `Boolean({}) === true` —— 因为这**就是**
+`LocaleProvider` 里必须用 `Object.keys().length` 而不能写
+`if (!dictionaries[locale])` 的原因。空壳「看起来像没值」但**它是真的**。
 
 #### (存档)已修:`manualChunks` 给 recharts 的规则反而害了它
 
