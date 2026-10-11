@@ -162,7 +162,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
 | `pytest -q` | 绿 | **绿** | **885 passed** |
-| `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
+| `mypy src` | 89 errors | **63 errors** | 比上游还少 26 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **307 passed**(2026-10-12 实跑 build,12s) |
 
@@ -544,6 +544,29 @@ import zhTW from './zh-TW'
 
 ⚠️ `dist/` 是 **gitignore** 的,不在仓库里 —— 部署时现 `pnpm build`。
 本地产物过期无所谓,但这也意味着 **CI 的 build 结果才是发布依据**。
+
+### mypy 存量错误里**混着真 bug**(2026-10-12 两轮实测)
+
+我把 80 条存量错误当「存量门」放着,错了 —— 按类型筛一遍发现:
+
+| 轮次 | 处理 | mypy |
+|---|---|---|
+| 1 | `backup/runner.py` 的未判空(14 条 `union-attr`) | 80 -> **70** |
+| 2 | `mcp/server.py` 的 `**kw` 噪音(14 条 `arg-type`) | 70 -> **63** |
+
+第 1 轮是**真 bug**:`except` 块自身没保护,失败的备份记不下来(见上节)。
+第 2 轮是纯类型问题,但改的过程中**又发现一处配套缺失**:
+
+`_logged_call(kwargs: dict[str, Any])` 会把**每个**传 TypedDict 的 tool
+判成不兼容 —— TypedDict 在类型层面不是 dict 的子类。改成
+`Mapping[str, Any]` 才是对的。**只加 TypedDict 不改它,14 条变 20 条,
+而且下一个人会把 TypedDict 全删掉** —— 一个「修错工具反而逼人用回坏模式」的坑。
+
+⚠️ `_UpdateTransactionKw` 第一遍**漏写了 `tx_type`**,mypy 当场报出来。
+这就是这个模式的价值:**字段写漏/写错名/类型不匹配,都变成编译期错误。**
+
+**规则:mypy 的 `| None` 与 `**kw` arg-type 要当真读** ——
+前者常常是真能走到的路径,后者是「同一形状写了很多遍」的指示器。
 
 mypy 那边本 fork 用 `TypedDict` 声明各工具的 kwargs（`kw = dict(...)` 会让
 `**kw` 展开每一行都报 arg-type，上游 `parse_and_create_from_text` 就是这么
