@@ -22,6 +22,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from collections.abc import Mapping
 from typing import Any, TypedDict
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -129,7 +130,10 @@ async def _logged_call(
     *,
     name: str,
     scope: str,
-    kwargs: dict[str, Any],
+    # 用 Mapping 而不是 dict:TypedDict 在类型层面不是 dict 的子类,
+    # 写 dict[str, Any] 会把每个传了 TypedDict 的 tool 都判成不兼容 ——
+    # 那等于逼着大家退回 dict(...),正是本文件要消灭的模式。
+    kwargs: Mapping[str, Any],
     body: Callable[[User], Awaitable[Any]],
 ) -> Any:
     """所有 tool 共用的封装 — scope check + 计时 + 审计落库。
@@ -213,6 +217,46 @@ class _AttachReceiptKw(TypedDict):
     image_base64: str
     file_name: str | None
     mime_type: str | None
+
+
+class _ListTransactionsKw(TypedDict):
+    """`list_transactions` 的 kwargs(见 _CreateBudgetKw 的说明)。"""
+
+    ledger_id: str | None
+    date_from: str | None
+    date_to: str | None
+    category: str | None
+    account: str | None
+    min_amount: float | None
+    max_amount: float | None
+    q: str | None
+    limit: int
+
+
+class _GetAnalyticsSummaryKw(TypedDict):
+    """`get_analytics_summary` 的 kwargs(见 _CreateBudgetKw 的说明)。"""
+
+    scope: str
+    period: str | None
+    ledger_id: str | None
+
+
+class _UpdateTransactionKw(TypedDict):
+    """`update_transaction` 的 kwargs(见 _CreateBudgetKw 的说明)。
+
+    字段必须与 `write_tools.update_transaction` 的签名一一对应 ——
+    这正是这个 TypedDict 存在的意义:少写一个字段 mypy 会立刻报出来。
+    """
+
+    sync_id: str
+    amount: float | None
+    tx_type: str | None
+    category: str | None
+    account: str | None
+    happened_at: str | None
+    note: str | None
+    tags: list[str] | None
+    tax_amount: float | None
 
 
 class _CreateTxKw(TypedDict):
@@ -389,7 +433,7 @@ async def list_transactions(
         q: Substring match against note.
         limit: Max items returned (1..200, default 50).
     """
-    kw = dict(
+    kw: _ListTransactionsKw = dict(
         ledger_id=ledger_id, date_from=date_from, date_to=date_to,
         category=category, account=account, min_amount=min_amount,
         max_amount=max_amount, q=q, limit=limit,
@@ -476,7 +520,7 @@ async def get_analytics_summary(
         period: For month: 'YYYY-MM'. For year: 'YYYY'. Defaults to current.
         ledger_id: Optional, uses active ledger if omitted.
     """
-    kw = {"scope": scope, "period": period, "ledger_id": ledger_id}
+    kw: _GetAnalyticsSummaryKw = {"scope": scope, "period": period, "ledger_id": ledger_id}
     return await _logged_call(
         ctx, name="get_analytics_summary", scope=SCOPE_MCP_READ, kwargs=kw,
         body=lambda user: asyncio.to_thread(read_tools.get_analytics_summary, user, **kw),
@@ -693,7 +737,7 @@ async def update_transaction(
     it, pass a positive number to set it. Pass the absolute figure from the
     receipt rather than deriving it from a rate — retailers round differently.
     """
-    kw = dict(
+    kw: _UpdateTransactionKw = dict(
         sync_id=sync_id, amount=amount, tx_type=tx_type, category=category,
         account=account, happened_at=happened_at, note=note, tags=tags,
         tax_amount=tax_amount,

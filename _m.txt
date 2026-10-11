@@ -1,0 +1,32 @@
+refactor(mcp): 用 TypedDict 消灭 `**kw` 的 arg-type 噪音 —— mypy 80 -> 63
+
+## 这批不是类型洁癖,是 CLAUDE.md 自己记的那个模式
+
+`CLAUDE.md` 里写着「mypy 那边本 fork 用 TypedDict 声明各工具的 kwargs
+(`kw = dict(...)` 会让 `**kw` 展开每一行都报 arg-type)」——
+但 `server.py` 里还剩 3 处没按这个做,占了 14 条错误。
+
+照着文件里已有的 `_CreateBudgetKw` 范式补了
+`_ListTransactionsKw` / `_GetAnalyticsSummaryKw` / `_UpdateTransactionKw`。
+
+## 顺带修了一个「逼人退回坏模式」的签名
+
+`_logged_call(kwargs: dict[str, Any])` 会把**每个**传 TypedDict 的 tool
+都判成不兼容 —— 因为 TypedDict 在类型层面不是 dict 的子类。
+那等于逼着大家写 `dict(...)`。改成 `Mapping[str, Any]`(只读,
+审计路径不需要可变)。
+
+**这一条是必要的配套改动**:只加 TypedDict 不改这个签名,净效果是把
+14 条错误变成 20 条,而且下一个人会把 TypedDict 全删掉。
+
+## 一个立刻见效的验证
+
+`_UpdateTransactionKw` 我第一遍**漏写了 `tx_type`**,mypy 当场报出来。
+这正是这个模式的价值:字段写漏/写错名字/类型不匹配,都变成编译期错误。
+
+**885 条测试全过。**
+
+## 顺带
+
+上一点提交修了 `backup/runner.py` 的异常处理器自身会抛(mypy 80->70),
+本提交 70->63。存量错误里仍然混着真 bug,继续按同一方式筛。
