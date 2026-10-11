@@ -543,6 +543,32 @@ node_modules 路径调用),**不能**写 `expect(src).not.toContain('recharts')`
 灌 225 笔 / 193 天后,概览页实测:本月结余 `¥4.66万`、本月收入 `¥38.5万`、
 账本 `日常`、货币 **JPY**(`¥` 是日元符号,不是人民币 —— 别当成币种错)。
 
+#### ⚠️ 组合支付:**两条余额路径的「互相比对」没有带 splits**(第 56 轮查证)
+
+按 CLAUDE.md 自己的规则去查组合支付(0021)的护栏,逐条读判据而不是数文件。
+**覆盖比预想的好,但有一个窄缺口**:
+
+| 侧 | 覆盖 |
+|---|---|
+| `_split_legs`(SQL 聚合) | ✅ `test_credit_statement_amount.py::test_rule2_split_legs_are_counted` |
+| `account_balance_delta`(逐笔) | ✅ `tx_split_invariants::test_split_balance_delta_matches_leg_sum` |
+| **两条路径互相比对(带 splits)** | ❌ **没有** |
+
+⚠️ `test_account_balance_paths.py` 里 **`splits` 出现 0 次** —— 那条
+「SQL 聚合 == 逐笔 delta,逐账户比对」只在**没有组合支付**的交易上验过。
+
+而 `test_split_balance_delta_matches_leg_sum` 的 **docstring 写的是
+「逐笔 delta 与 SQL 聚合对腿的口径一致」,断言却只比了 delta vs 腿和**,
+**SQL 那侧不在这个测试里**。
+
+📌 **风险形状**:两条路径可以各自自洽、却在 splits 上互相不一致 ——
+而 CLAUDE.md 把「两条余额路径必须一致」列为必守不变式。
+要补的话,判据应该是:同一笔带 splits 的交易,
+`account_balance_delta(..., splits=legs)` 的结果 == SQL 聚合的结果。
+
+(不急着补 —— 两条路径的输入不同、SQL 那侧要走真库,成本不低。
+但**别以为这条已经验过了**。)
+
 #### ✅ 默认分类种子实测:0 → 181,且**只播撒一次**(第 55 轮)
 
 本 fork 最关键的部署前提:**放弃 App 只用 Web 时,新账本不能一个分类都没有**。
