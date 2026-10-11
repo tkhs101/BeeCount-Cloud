@@ -161,7 +161,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | **879 passed** |
+| `pytest -q` | 绿 | **绿** | **884 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **307 passed**(2026-10-12 实跑 build,12s) |
@@ -373,6 +373,38 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
    200,用户什么都看不到。现在 failed→502 / 配错→400
 3. **一致的口径要有唯一来源** —— 时区走 `_resolve_scheduler_tz()`,
    别用 `date.today()`
+
+### 四道幂等防线:防线 4 **顺序测试原理上测不到**
+
+`tests/test_credit_autorepay_idempotency.py` 里有一条
+`test_barrier4_is_only_reachable_under_true_concurrency`,专门把这件事钉住。
+
+把 `if getattr(claimed, "rowcount", 0) != 1:` 改成 `if False:`,
+测试**全绿**。我调了三次前置条件仍抓不到:
+
+| 前置条件 | 谁挡住了 |
+|---|---|
+| 全额还款 | 防线 1(`outstanding == 0`) |
+| 部分还款 | 扣款账户**余额归零**,`payable <= 0` |
+| 部分还款 + 再充钱 | **防线 2**(`last_period == pkey`) |
+
+读源码才看清:`repay.py` 里**防线 2 排在防线 4 之前**。防线 4 防的是
+**真正的并发**(两个进程同时读到旧 `last_period`,都过防线 2,再竞争
+那一条条件 UPDATE)—— 顺序调用产生不了那个状态。
+
+**为什么要专门写这条测试**:否则下一个人会拿顺序测试「验证」防线 4,
+拿到全绿,以为它有效,而它**一次都没被真正执行过**。
+**没测到的防线比坏掉的防线更危险** —— 与「比没有护栏更糟」同源。
+
+真要验它得上两个真连接 + 显式交错(SQLite 还要处理锁竞争)。
+
+### 调 `repay_one` 的两个坑(白折腾两轮才搞清)
+
+1. **`today` 必须正好是还款日** —— `is_due_on(today, payment_due_day)`
+   这一关卡的是「今天**是**还款日」,不是「过了还款日」。取错日期得到
+   `skipped_not_due`
+2. **`self_call` 的真实签名**是 `(db, *, method, path, body, headers, user)`
+   —— 猜错会被 `repay_one` 吞成 `status="failed"`,报错信息绕一圈才看到
 
 ### 缺口检测只告警,永不自动补跑
 
