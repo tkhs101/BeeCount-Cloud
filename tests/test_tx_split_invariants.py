@@ -19,6 +19,8 @@ taxAmount 又踩过一次。splits 比那两次更隐蔽:它们在**子表**里,
 """
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -420,3 +422,107 @@ def test_csv_import_alias_registered():
 
     assert "splits" in _HEADER_ALIASES
     assert "拆分" in _HEADER_ALIASES["splits"]
+
+
+# --------------------------------------------------------------------------
+# 20: MCP update_transaction 的 splits —— 这条链此前**三层都漏了**
+# --------------------------------------------------------------------------
+# create 有 splits、update 没有,于是 agent 建了拆分交易却改不了,只能删了重建。
+# 底层 mutator 一直支持(payload 是 dict)。
+#
+# ⚠️ 三件事必须对齐,否则测试会「看起来在跑、其实什么都没执行」:
+#
+#   1. **它是 async** —— 同步调用只会拿到一个**从未被 await 的 coroutine**,
+#      什么都没发生,而测试照样往下走。要 `asyncio.run`。
+#   2. **`write_tools` 用模块级 `SessionLocal` 做预检查**,不是 `get_db`
+#      —— 不注入测试库的话它查的是另一个库,报 "Transaction not found"。
+#   3. **sync_id 既不在写响应、也不在读响应里** —— MCP 按 `(user_id, sync_id)`
+#      查,只能从库里取。
+
+
+def _mcp_leg_shape(client, H):
+    """读列表端点挑出那笔 5000 的拆分交易,返回 (读端 id, {account_id: 金额})。"""
+    txs = client.get("/api/v1/read/ledgers/lg1/transactions", headers=H).json()
+    tx = next(t for t in txs if t["amount"] == 5000.0)
+    legs = {s["account_id"]: float(s["amount"]) for s in (tx.get("splits") or [])}
+    return tx["id"], legs
+
+
+def _split_tx_sync_id(db, user):
+    from src.models import ReadTxProjection
+    row = (
+        db.query(ReadTxProjection)
+        .filter(ReadTxProjection.user_id == user.id,
+                ReadTxProjection.amount == 5000.0)
+        .order_by(ReadTxProjection.happened_at.desc())
+        .first()
+    )
+    assert row is not None, "找不到那笔拆分交易"
+    return row.sync_id
+
+
+def test_mcp_update_transaction_can_rewrite_splits(monkeypatch):
+    """MCP update 能改腿:旧的两条被替换,不是追加。"""
+    from src.mcp.tools import write_tools
+
+    client, TS, H, ids = _setup("mcpup1@t.com")
+    monkeypatch.setattr(write_tools, "SessionLocal", TS)
+    try:
+        r = _create_split_tx(client, H, ids, [
+            {"account_id": ids["招行卡"], "amount": 3000.0},
+            {"account_id": ids["现金"], "amount": 2000.0},
+        ])
+        assert r.status_code == 200, r.text
+        _, before = _mcp_leg_shape(client, H)
+        assert before == {ids["招行卡"]: 3000.0, ids["现金"]: 2000.0}
+
+        from src.models import User
+        with TS() as db:
+            user = db.query(User).filter(User.email == "mcpup1@t.com").one()
+            sync_id = _split_tx_sync_id(db, user)
+
+        # ⚠️ **必须同时传 amount**:update 路径用 `exclude_unset=True`,
+        # 不传 amount 时 mutator 的 `_normalize_splits` 拿不到父总额 ->
+        # 判为不自洽 -> **静默丢弃整份 splits** 并告警
+        # (snapshot_mutator.py:638)。不报错、不返回失败,腿就是没变。
+        asyncio.run(write_tools.update_transaction(
+            user, sync_id=sync_id,
+            amount=5000.0,
+            splits=[{"account_id": ids["现金"], "amount": 4000.0},
+                    {"account_id": ids["招行卡"], "amount": 1000.0}],
+        ))
+
+        _, after = _mcp_leg_shape(client, H)
+        assert after == {ids["现金"]: 4000.0, ids["招行卡"]: 1000.0}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_mcp_update_transaction_omitting_splits_keeps_legs(monkeypatch):
+    """省略 splits = 不动。传 [] 才是清除 —— 键语义不能弄反。"""
+    from src.mcp.tools import write_tools
+
+    client, TS, H, ids = _setup("mcpup2@t.com")
+    monkeypatch.setattr(write_tools, "SessionLocal", TS)
+    try:
+        r = _create_split_tx(client, H, ids, [
+            {"account_id": ids["招行卡"], "amount": 3000.0},
+            {"account_id": ids["现金"], "amount": 2000.0},
+        ])
+        assert r.status_code == 200, r.text
+        _, before = _mcp_leg_shape(client, H)
+        assert before == {ids["招行卡"]: 3000.0, ids["现金"]: 2000.0}
+
+        from src.models import User
+        with TS() as db:
+            user = db.query(User).filter(User.email == "mcpup2@t.com").one()
+            sync_id = _split_tx_sync_id(db, user)
+
+        # 只改备注 —— 完全不碰 splits
+        asyncio.run(write_tools.update_transaction(
+            user, sync_id=sync_id, note="改个备注"))
+
+        _, after = _mcp_leg_shape(client, H)
+        assert after == before, f"只改备注不该动腿:{before} -> {after}"
+    finally:
+        app.dependency_overrides.clear()
