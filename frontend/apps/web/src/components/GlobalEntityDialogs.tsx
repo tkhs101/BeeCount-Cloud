@@ -141,8 +141,14 @@ export function GlobalEntityDialogs() {
         )
         const body = await res.json().catch(() => ({}))
         if (res.ok) {
-          // 200 = 真的走完了判断链。还了多少不由这个响应体表达(它返回
-          // WriteCommitMeta),所以只告诉用户「跑完了」,让他去看交易列表。
+          // 200 = 真的走完了判断链。
+          //
+          // ⚠️ 这段注释以前说「还了多少不由这个响应(WriteCommitMeta)」——
+          // 那是错的。后端已改成返回 AutoRepayRunResult,**带 status**(第 81 轮),
+          // 而这里仍然只显示「跑完了」。
+          // 下一步就是按 body.status 分档提示(done / skipped_no_funds /
+          // skipped_already_repaid ...)。要加 i18n 键,得**三个词典文件一起加**
+          // —— autoRepayParity.test.ts 会校验键在各语言都存在。
           setRunResult(t('detail.autoRepay.runOk'))
           // 重新拉一次账户列表 ——「上次自动还款」可能变了
           const rows = await fetchWorkspaceAccounts(token, {
