@@ -206,18 +206,26 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 📌 **ruff 这条线没有 mypy 那种「混着真 bug」的情况** —— 先按规则分组看构成,
 别被总数吓到。
 
-### 前端产物体积(2026-10-12 实测,别重复排查)
+### 前端产物体积(2026-10-12 重新实测,旧表已作废)
 
-`dist/assets/` 按大小排:
+⚠️ **这张表上一版几乎每一行都是错的** —— 写在 i18n 按需加载之前,
+`index` 那行差 200 kB,而且列的 `recharts-*.js` **已经不存在了**
+(`ls recharts-*.js` -> 0 个,被 i18n 那轮的重构带走了)。
 
-| chunk | raw | gzip | 说明 |
-|---|---|---|---|
-| `index-*.js` | **850 kB** | **243 kB** | 应用壳 + 未被manualChunks 命中的部分 |
-| `recharts-*.js` | 400 kB | 118 kB | 已拆出,**懒加载** |
-| `react-vendor-*.js` | 180 kB | 59 kB | 长期可缓存 |
-| `framer-motion-*.js` | 128 kB | 42 kB | 年度报告/动画 |
-| `poster-*.js` | 60 kB | 20 kB | html-to-image + qrcode |
-| `cmdk-*.js` | 44 kB | 14 kB | 命令面板 |
+`dist/assets/` 按大小排(raw,实测):
+
+| chunk | raw kB | 说明 |
+|---|---|---|
+| `index-*.js` | **1058** | 应用壳 + 未被 manualChunks 命中的部分 |
+| `react-vendor-*.js` | **176** | 长期可缓存 |
+| `framer-motion-*.js` | **125** | 年度报告/动画(**不在首屏**) |
+| `zh-TW-*.js` / `zh-CN-*.js` | **82** 各 | i18n 词典,**按需加载**,不进首屏 |
+| `AnnualReportEntry-*.js` | 56 | 路由级懒加载 |
+| `OverviewPage-*.js` | 54 | 路由级懒加载 |
+| `cmdk-*.js` | 43 | 命令面板(共享动态 chunk) |
+
+📌 **别拿这张表当现状** —— 下次 build 后先 `ls -S dist/assets/*.js`
+重新量一遍。它在这场会话里已经过期过一次。
 
 ### ⚠️ 首屏要看 `index.html` 的 rel,不是看 assets 目录(**已修一处**)
 
