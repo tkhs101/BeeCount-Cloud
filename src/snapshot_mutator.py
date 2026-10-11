@@ -830,6 +830,29 @@ def delete_account(snapshot: dict, account_id: str, payload: dict | None = None)
                 "write validation failed: account has linked transactions; "
                 f"reassign or delete the {linked} transactions first"
             )
+    # 信用卡自动还款(0022):其它卡的扣款账户指向它 → 一并关掉。
+    #
+    # 不清理的话,每天 03:00 会走
+    # `AutoRepayConfigError("source account ... not found")` →
+    # `skipped_invalid_config`,**永不自动还款**。而界面上只有点开那张卡的
+    # 详情弹窗才看得到一条红字 —— 没有推送、没有首页提示。
+    #
+    # 自动关掉(而不是拒删)更符合用户的意图:他都已经不要这个账户了。
+    # `_validate_autorepay_patch` 本来就有「禁用时保留配置」的约定,
+    # 所以关掉之后重新绑一个账户还能接着用,不用全部重填。
+    disabled = 0
+    for other in accounts:
+        if other is account or not isinstance(other, dict):
+            continue
+        if (other.get("autorepayFromAccountSyncId") == account_id
+                and other.get("autorepayEnabled")):
+            other["autorepayEnabled"] = False
+            disabled += 1
+    if disabled:
+        logger.info(
+            "autorepay source account deleted: disabled %d card(s) "
+            "pointing at %s (%s)", disabled, account_id, old_name)
+
     accounts.pop(idx)
     if old_name:
         for tx in _ensure_list(target, "items"):

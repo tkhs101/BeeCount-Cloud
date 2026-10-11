@@ -450,3 +450,43 @@ def test_autorepay_config_survives_a_transaction_write(wired) -> None:
         assert row.autorepay_enabled is True, (
             "记一笔交易就把自动还款配置清掉了")
         assert row.autorepay_from_account_sync_id == ids["招行储蓄卡"]
+
+
+def test_deleting_source_disables_autorepay(wired) -> None:
+    """删掉扣款账户 → 指向它的自动还款必须被自动关掉。
+
+    不清理的话:每天 03:00 走 `AutoRepayConfigError` →
+    `skipped_invalid_config`,**永不自动还款**。而界面上只有点开那张卡的
+    详情弹窗才看得到一条红字,没有推送、没有首页提示。
+    """
+    client, TS, H, ids = wired
+    client.patch(f"/api/v1/write/ledgers/{LEDGER}/accounts/{ids['招行信用卡']}",
+                 headers=H, json={"base_change_id": 0,
+                                  "autorepay_enabled": True,
+                                  "autorepay_from_account_id": ids["招行储蓄卡"]})
+
+    # 先确认绑定生效
+    with TS() as db:
+        row = db.scalar(select(UserAccountProjection).where(
+            UserAccountProjection.sync_id == ids["招行信用卡"]))
+        assert row.autorepay_enabled is True
+
+    # 删掉扣款账户(它没有被任何交易引用,所以能删掉)
+    # DELETE 的 base_change_id 走 **body**(WriteEntityDeleteRequest),
+    # 不是 query —— 第一版写成 params 吃了 422。
+    r = client.request(
+        "DELETE",
+        f"/api/v1/write/ledgers/{LEDGER}/accounts/{ids['招行储蓄卡']}",
+        headers=H, json={"base_change_id": 0})
+    assert r.status_code == 200, r.text
+
+    with TS() as db:
+        row = db.scalar(select(UserAccountProjection).where(
+            UserAccountProjection.sync_id == ids["招行信用卡"]))
+        assert row.autorepay_enabled is False, (
+            "扣款账户被删了,自动还款还开着 —— 之后每期都会 "
+            "skipped_invalid_config,永不还款")
+        # 配置**保留**(不是清掉):重新绑一个账户就能接着用,
+        # 与「暂停」同一套语义。
+        assert row.autorepay_from_account_sync_id == ids["招行储蓄卡"], (
+            "配置被清掉了 —— 用户想改绑一个账户得全部重填")
