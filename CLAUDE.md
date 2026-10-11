@@ -161,7 +161,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | **851 passed** |
+| `pytest -q` | 绿 | **绿** | **854 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **307 passed** |
@@ -504,6 +504,35 @@ if row.tax_amount is not None:      # 列名在这里
 
 它与 `test_credit_autorepay_e2e.py` 分工:后者管自动还款那条链路,
 本条管**装配**能不能起来(alembic、路由注册、依赖注入、鉴权、分类种子)。
+
+### ⚠️ 全仓库只能有**一个** `TestClient(app)`
+
+MCP 的 `StreamableHTTPSessionManager` 是**模块级单例**,`.run()` 只能调一次:
+
+    RuntimeError: StreamableHTTPSessionManager .run() can only be called
+    once per instance.
+
+所以真服务冒烟**必须合并成一个文件**、共用一个 module 级 `client` fixture。
+我第一版写成两个文件,单独跑都绿、全量跑 3 个 ERROR。
+
+另外账户是 **user-global** 的:同一个用户建两个同名账户会被写路径拒
+(`duplicated account name`)。合并后各测试要用**独立账户名**。
+
+这两条加上上面那条「模块顶层改 env」,是同一族问题:
+**「单跑绿、全量红」的三种来源** —— 模块级 env、模块级单例、模块级全局
+DB engine。
+
+### CSV 往返要真跑(静默损坏)
+
+`tests/test_smoke_real_app.py` 里有一条**导出 -> 重新 upload -> preview**
+的真往返:组合支付的腿以 `[账户名, 金额]` 二元组回来、金额 3000/2000 都在,
+税额的 `amount` 仍是含税总额。
+
+`test_tx_split_invariants.py` 直接写 projection 行,证明不了
+「真的导出了这一列」,更证明不了「**本仓自己的导入器解析得回来**」。
+
+变异验证:导出不再写 Splits 列 / 导入不解析 splits,**两个方向都变红** ——
+正是 `CLAUDE.md` 记的那个静默损坏。
 
 ### ⚠️ 测试文件之间也会互相看不见
 
