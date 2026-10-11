@@ -164,7 +164,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 | `pytest -q` | 绿 | **绿** | **885 passed** |
 | `mypy src` | 89 errors | **60 errors** | 比上游还少 29 个;**这条线到此为止**,见下文 |
 | `ruff check src tests alembic` | 1421 | **1253** | **1420 里 1131 条(80%)是同一条 `F405`**(桶导入)—— 系统性问题。已清掉可自动修复的 168 处(`F401` + `I001`) |
-| 前端 `build` + `test` | 绿 | **绿** | **311 passed**(2026-10-12 实跑 build,12s) |
+| 前端 `build` + `test` | 绿 | **绿** | **316 passed**(2026-10-12 实跑 build,12s) |
 
 ### ⚠️ ruff 的 1420 条:先看构成再决定动不动(2026-10-12)
 
@@ -470,6 +470,31 @@ playwright-cli click f1e37            # 用户菜单(那个 "B" 头像按钮)
 ⚠️ 顺便断言了 `Boolean({}) === true` —— 因为这**就是**
 `LocaleProvider` 里必须用 `Object.keys().length` 而不能写
 `if (!dictionaries[locale])` 的原因。空壳「看起来像没值」但**它是真的**。
+
+#### `useReducedMotion` 的**护栏**(突变验证过,2/2 抓到)
+
+护栏:`frontend/apps/web/src/useReducedMotion.behavior.test.ts`。
+这个钩子是为把 126 kB framer-motion 换出首屏才写的,**之前一直没有测试**。
+
+它要 React 渲染环境而仓里**没有 jsdom** —— 按「纯逻辑提到模块级就能真跑」
+那条做法,把两个函数提取成导出(`prefersReducedMotion` /
+`subscribeReducedMotion`),在 `apps/web/src/` **真跑**它们。
+
+⚠️ 顺带发现它**之前没从 `@beecount/web-features` 桶导出**,只能组件内部用。
+
+锁住的是**老 WebKit 的 `addListener` 兜底分支** —— 删掉它,旧 Safari 上
+用户改「减弱动画」会静默失效,**没有任何报错**。
+
+**⚠️ 这条补护栏的过程中我把自己的探针搞坏了两次,两次都是同一类错:**
+
+1. **只 stub `matchMedia` 不够** —— vitest 没开 jsdom,**`window` 本身不存在**,
+   被测代码第一行 `typeof window === 'undefined'` 就早退了。
+   症状是「明明 stub 了却拿到 false」,看着像产品坏了
+2. **同时改源码和测试**做突变验证 —— 测试当然绿。
+   **那不是「护栏没抓到」,是变异根本没生效。** 只改源码重做才正确变红
+
+**这与上面那条「先确认回退真的生效再判护栏」是同一条纪律** ——
+探针的否定结果不能当证据,变异也一样。
 
 #### (存档)已修:`manualChunks` 给 recharts 的规则反而害了它
 

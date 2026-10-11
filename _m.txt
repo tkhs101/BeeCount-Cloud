@@ -1,28 +1,9 @@
-test(web-features): 补 useReducedMotion 的行为护栏 —— 突变验证抓到 2/2
+docs: 记 useReducedMotion 护栏补齐,以及我自己搞坏探针的两次
 
-这个钩子是为把 126 kB framer-motion 换出首屏才写的,**一直没有测试**。
-它要 React 渲染环境,仓里没有 jsdom —— 按「纯逻辑提到模块级就能真跑」
-的做法,把两个关键函数提取成导出,再在 `apps/web/src/` 真跑它们。
+突变验证 2/2 抓到(老 WebKit addListener 兜底 / 媒体查询串写错)。
 
-锁住的是**老 WebKit 的 `addListener` 兜底分支**:删掉它,旧 Safari 上用户
-改「减弱动画」会静默失效,**没有任何报错**。
+重点记下我自己的两次失误:只 stub matchMedia 忘了 window 本身不存在
+(vitest 没 jsdom),以及做突变时同时改了源码和测试 —— 那不是护栏失效,
+是变异根本没生效。与「先确认回退真的生效再判护栏」是同一条纪律。
 
-## 顺带修了两件事
-
-1. `useReducedMotion` 之前**没从 `@beecount/web-features` 桶导出**,
-   所以只能组件内部用、无法被测试 import
-2. 钩子从「一个函数」变成「两个纯函数 + 一层 React 包装」,
-   `useEffect` 的清理逻辑从内联箭头变成 `subscribeReducedMotion` 的返回值
-
-## ⚠️ 我自己把探针搞坏了一次
-
-第一次跑 5 条**全红**,症状是「stub 了 matchMedia 却拿到 false」。
-根因:**vitest 没开 jsdom,`window` 本身不存在**,被测代码第一行
-`typeof window === 'undefined'` 就早退了 —— 只 stub `matchMedia` 不够。
-与「浏览器探针不可靠」是同一族,已写进测试注释。
-
-第二次做突变验证时我又栽了一次:**同时改了源码和测试**的媒体查询串,
-测试当然绿 —— 那不是「护栏没抓到」,是**变异根本没生效**。
-只改源码重做,正确变红。**先确认变异真的生效,再判护栏。**
-
-**307 -> 316 passed**(全部还原后实测)。
+前端测试数同步更新为 316。
