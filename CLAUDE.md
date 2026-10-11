@@ -161,10 +161,10 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | **842 passed** |
+| `pytest -q` | 绿 | **绿** | **845 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
-| 前端 `build` + `test` | 绿 | **绿** | **191 passed** |
+| 前端 `build` + `test` | 绿 | **绿** | **215 passed** |
 
 mypy 那边本 fork 用 `TypedDict` 声明各工具的 kwargs（`kw = dict(...)` 会让
 `**kw` 展开每一行都报 arg-type，上游 `parse_and_create_from_text` 就是这么
@@ -425,6 +425,52 @@ aware `18:00+09:00`(= UTC 09:00)进去,库里落 `18:00` —— **那 9 个小�
 这与上面那条「hook 插进函数体」是**同一类**:语法完全合法、看起来在
 起保护作用、实际永远通过。做源码级断言时,**必须对它自己做一次变异**
 (把违规代码写回去,确认它变红)—— 我在修 bug 的过程中刚又犯了一次。
+
+### 护栏本身也要做变异审计(2026-10-12 实测:前端 45% 是假的)
+
+写完一批护栏后,**对每条做一次定向变异**,看有没有任何测试变红。
+本会话实测:11 个变异里 **5 个没被检出**。
+
+失败模式完全一致 —— 前端护栏几乎全是「字符串存在性」检查:
+
+```ts
+expect(src).toContain('function statementOut(')          // 代码被写下来了
+expect(src).toMatch(/import\.preview\.col\.splits/)    // 字符串在文件里
+```
+
+这证明不了「代码被执行到了」:`hasSplits = false` 让整列永远不出现,
+护栏全绿 —— **比没有护栏更糟**,因为它让人以为这里有保护。
+
+这与「hook 插进函数体,语法合法但永不可达」是**同一类**,
+只是这次发生在**测试断言**里。
+
+### ⚠️「前端只能做源码正则」是假设,不是限制
+
+没有 jsdom / `@testing-library/react` 时很容易退化成读源码文本。
+但 **vitest 能直接 import 模块**(`apps/web/src/lib/aiConfigMerge.test.ts`
+早就在这么做了),而大部分派生逻辑是**纯函数,无 React / 无 DOM**。
+
+把这类逻辑从组件内提到模块级 export,就能**真跑**:
+
+| 抽出 | 测试文件 |
+|---|---|
+| `statementOut` | `statementOut.behavior.test.ts` |
+| `previewColumns` | `previewColumns.behavior.test.ts` |
+| `legOptions` → `features/splitLegOptions.ts` | `splitLegOptions.behavior.test.ts` |
+
+**字符串断言不要全删** —— 它们能抓真跑抓不到的东西:
+渲染出口(`{statement ? (`)、调用点(`legOptions(accounts, leg)`)、
+i18n 键存在性(纯函数测试不渲染组件)。分层:**纯逻辑真跑,接口与出口查源码**。
+
+### 变异审计脚本
+
+`tests/` 之外的一次性脚本即可,要点:
+
+- **绝对路径** + 每步 `finally` 还原(用 `cd ..` 拼路径极易出错,
+  我因此把文件还原失败过)
+- 子进程用 `npx.cmd` 而非 `npx`(Windows 下 `subprocess` 找不到)
+- **先打印「锚点没匹配上」并单列** —— 锚点没匹配 ≠ 护栏有效
+  (CLAUDE.md 下面那条记的就是这个)
 
 ### 验证护栏时先确认回退真的生效
 
