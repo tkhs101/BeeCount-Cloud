@@ -1,0 +1,52 @@
+perf(frontend): 去掉 recharts 的 manualChunks —— 它反而让 409 kB 进了首屏
+
+## 实测数据
+
+| | 首屏预取 | 产物总量 |
+|---|---|---|
+| 改前 | **781 kB** | 2045 kB |
+| 改后 | **382 kB** | 2048 kB |
+
+**首屏少下载 399 kB(-51% 的预取量)**,产物总量几乎不变(+3 kB,
+说明没有把 recharts 重复打进各个路由)。
+
+## 机制:manualChunks 会破坏懒加载
+
+`manualChunks` 把 recharts 提升进**入口的静态 import 图**。而 Vite 只给
+「入口静态依赖」的 chunk 发 `modulepreload` —— 于是
+
+```html
+<link rel="modulepreload" href="/assets/recharts-CEpsFnzg.js">   <!-- 409 kB -->
+```
+
+浏览器**首屏就下载**它,路由是 lazy 的完全没用。
+
+改前入口块里能直接看到:`from"./recharts-CEpsFnzg.js"`。
+
+## 怎么验的(不装任何东西)
+
+看 `dist/index.html` 里的 `rel="modulepreload"`,**不是**看
+`dist/assets/` 的文件列表 —— 文件都在,但哪些是首屏的只有 HTML 说了算。
+
+我把四条 `manualChunks` 规则**逐条**去掉各测一次:
+
+| 去掉 | 首屏预取 |
+|---|---|
+| recharts | 781 -> **382 kB** |
+| 再去 cmdk | 382 kB(无变化) |
+| 再去 poster | 382 kB(无变化) |
+| 再去 framer-motion | 382 kB(无变化) |
+
+只有 recharts 这一条有效,其余三条保留(留着没坏处)。
+
+## 验证
+
+307 前端测试通过 / `tsc` 0 错 / `vite build` 通过。
+
+## 为什么这条值得做
+
+部署形态是**只用 Web/PWA**(`CLAUDE.md` 里的既定决策),首屏下载量直接
+影响移动网络下的可用性。399 kB 是实打实的。
+
+也顺带证明了一件事:**我前三轮盯着的「主块 850 kB」不是真正的大头** ——
+它只占首屏的一半,而真正被白拉进去的是 recharts。

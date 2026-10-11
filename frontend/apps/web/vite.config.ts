@@ -66,8 +66,22 @@ export default defineConfig({
           ) {
             return 'react-vendor'
           }
-          // Recharts(~250KB)+ d3-* 依赖。只 OverviewPage 等少量页用
-          if (/[/\\](recharts|d3-[a-z]+)[/\\]/.test(id)) return 'recharts'
+          // ⚠️ **不要**给 recharts 配 manualChunks(2026-10-12 实测)。
+          //
+          // 加了之后首屏 `dist/index.html` 里会出现
+          //   <link rel="modulepreload" href="/assets/recharts-*.js">
+          // 浏览器**首屏就下载**这 409 kB —— 懒路由完全失效。
+          // 实测:去掉这条规则,首屏预取从 781 kB 降到 382 kB(-51%),
+          // 而产物总量几乎不变(2045 -> 2048 kB,没有重复打包)。
+          //
+          // 机制:`manualChunks` 会把 recharts 提升进**入口的静态 import 图**,
+          // 而 Vite 只给「入口静态依赖」的 chunk 发 modulepreload。
+          // 路由是 lazy 的没用 —— 那个 chunk 在入口图里,就等于首屏资源。
+          //
+          // 同样的实验对 cmdk / framer-motion / poster **无额外收益**
+          // (三条都留着,首屏一样是 382 kB),所以它们保留。
+          // 若将来首屏预取清单变大,照这个方法重测:
+          // 看 `dist/index.html` 里的 rel="modulepreload",不是看 assets 目录。
           // framer-motion(年度报告 + 部分动画)~150KB
           if (/[/\\]framer-motion[/\\]/.test(id)) return 'framer-motion'
           // 海报导出(只年度报告 / 分享场景)
