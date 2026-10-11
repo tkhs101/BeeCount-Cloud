@@ -161,7 +161,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | **845 passed** |
+| `pytest -q` | 绿 | **绿** | **848 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **215 passed** |
@@ -461,6 +461,36 @@ expect(src).toMatch(/import\.preview\.col\.splits/)    // 字符串在文件里
 **字符串断言不要全删** —— 它们能抓真跑抓不到的东西:
 渲染出口(`{statement ? (`)、调用点(`legOptions(accounts, leg)`)、
 i18n 键存在性(纯函数测试不渲染组件)。分层:**纯逻辑真跑,接口与出口查源码**。
+
+### 反向桥的通用护栏必须**运行期**(静态判据有个致命盲区)
+
+两个通用护栏都在跑真数据、不断言输出:
+
+| 侧 | 护栏 | 判据 |
+|---|---|---|
+| 交易 | `tests/test_projection_reverse_bridge_coverage.py` | 真跑 `_projection_row_to_tx_dict`,查输出 dict |
+| 账户 | `tests/test_account_reverse_bridge_coverage.py` | 真跑 `snapshot_builder.build`,查输出 dict |
+
+⚠️ **别退回「列名是否出现在源码里」**。那个判据被
+
+```python
+if row.tax_amount is not None:      # 列名在这里
+    item["taxAmount"] = row.tax_amount   # 删掉这一行,护栏照样绿
+```
+
+骗得死死的 —— 后端 10 个变异里唯一漏掉的就是这条,而它是**核心**那条。
+
+静态判据还**原理上**抓不到两类:key 拼错(`taxamount` vs `taxAmount`)、
+复制了但取错列(`item["note"] = row.category_name`)。只有真跑才知道。
+
+运行期判据还立刻报出了我映射表漏登记的 `tag_sync_ids_json` /
+`attachments_json` —— 它们在 bridge 里是 **JSON 解析后**的产物,解析失败
+会被 `except: pass` 静默跳过,静态判据下「看起来已被引用」。
+
+**教训**:我曾写下「交易侧能用静态判据,因为每个列只有唯一一处 `row.<列>`
+引用」,并拿它解释账户侧为什么不行 —— 结果那句话本身是错的,那个 `if`
+就是第二处。**拿一个没验证过的假设去解释另一个观察**,等于把两个错误
+绑在一起。
 
 ### 变异审计脚本
 
