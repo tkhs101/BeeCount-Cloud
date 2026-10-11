@@ -161,7 +161,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | **854 passed** |
+| `pytest -q` | 绿 | **绿** | **856 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **307 passed** |
@@ -504,6 +504,28 @@ if row.tax_amount is not None:      # 列名在这里
 
 它与 `test_credit_autorepay_e2e.py` 分工:后者管自动还款那条链路,
 本条管**装配**能不能起来(alembic、路由注册、依赖注入、鉴权、分类种子)。
+
+### 新增「由既有调度器驱动的函数」—— 单测几乎必然漏(实测)
+
+`_safe_run(fn, *, catch_up)` 用 `fn(catch_up=catch_up)` 调它驱动的**每个**
+函数。第一版 `_detect_gaps(self)` 没这个参数 —— 缺口检测**一次都跑不起来**:
+
+    TypeError: _detect_gaps() got an unexpected keyword argument 'catch_up'
+
+而当时 **848 条单测全绿**:它们全都直接调 `self._detect_gaps()`。
+**真服务冒烟测试一跑就撞上它** —— 隔一轮就证明了它自己的价值。
+
+更糟的是 `_safe_run` 的 `except Exception: logger.exception(...); return`
+**把 TypeError 吞掉并正常返回** —— 外面只看到「静默什么都没发生」。
+所以断言必须落在**产出物**上,不能是「没抛异常」。
+
+写护栏时我连犯三错,**每一个都让测试在真 bug 下照样全绿**:
+
+1. monkeypatch 掉了被测函数 —— 换掉的是 wrapper,签名根本没被验证
+2. fixture 忘了建 `User` 行 —— 缺口检测遍历 `User` 表,没有行就恒空
+3. 连自己的包装函数都得接受 `catch_up`,否则撞上和被测代码一样的错
+
+**规则:新增函数的调用点也该被测**,不只是它的逻辑。
 
 ### ⚠️ 全仓库只能有**一个** `TestClient(app)`
 
