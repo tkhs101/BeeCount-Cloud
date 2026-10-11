@@ -1,9 +1,0 @@
-docs: 合并 cmdk 与 poster 的成因 —— Vite 会预取动态 import 之间的共享 chunk
-
-CommandPalette 在 AppHeader 里本来就是 React.lazy 的,全仓也没有任何
-静态 import 它(cmdk 只有 CommandPalette.tsx 一处),i18n 改完后入口块
-也不再静态引用 cmdk。所以这两个不是「谁静态引了它」,import 图上没有
-可改的了,唯一的杠杆是关 modulePreload —— 那要拿掉所有预取,不做。
-
-另记两条实操坑:注释里出现的名字会让 grep 误报(必须只认 import 行);
-起真服务器时 alembic 不跑,临时库是空的,第一个请求就 no such table。
