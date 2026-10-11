@@ -212,6 +212,50 @@ chunk 叫什么名字不影响它在不在入口的 import 图里。
 而 `prefers-reduced-motion` 本来就是给 CSS 媒体查询用的。
 为了这一行,一个**全站每个页面都要用的组件**(`Amount`)拖进了 126 kB 动画引擎。
 
+#### 还剩两个 eager 的(已查清原因,未动)
+
+| 库 | 大小 | 为什么在首屏 |
+|---|---|---|
+| `react-vendor` | 176 kB | **合理** —— React 本身,长期可缓存 |
+| `cmdk` | 44 kB | `AppHeader.tsx` **静态** import 了 `CommandPalette.tsx`(命令面板本该按需打开) |
+| `poster` | 36 kB | `html-to-image` + `qrcode`,只被 `PosterDialog` / `TwoFactorAuthSection` 引用,而这两处**都在 lazy 路由下** —— 按理不该 eager ⚠️ 见下 |
+
+⚠️ **待验证假设(我没验完,别当结论)**: `@beecount/web-features` 的根
+`index.ts` 是 `export *` 巨型桶(43 条导出,含 `./features/annual-report`),
+**53 个文件**从 `@beecount/web-features` 整包引用。入口图里
+`AppHeader.tsx` 与 `CommandPalette.tsx` 确实**从桶 import 值**。
+
+桶引用是 `export *` 链 —— 典型的 tree-shaking 杀手。但我这一轮**先栽后立**:
+我一度断言「AppShell 从桶整包引,所以是根因」,而实际它只 import 了一个
+**type**(编译期擦除)。**这条假设还没验完**,验法:
+
+```bash
+# 把 CommandPalette 的桶引用换成具体子路径,build 后看 poster 是否还 preload
+grep 'modulepreload' frontend/apps/web/dist/index.html
+```
+
+#### i18n 231 kB:第二次评估,**仍然暂缓**(理由比上次更具体)
+
+`Amount.tsx` 那种「一个核心组件为一个钩子拖进整库」的问题修完后,
+我重新评估了 i18n。查到的关键事实:
+
+- `t()` 缺 key 时 `active[key] || fallback[key] || key` —— **最后回落 key 本身**
+- 入口是**同步** `createRoot(...).render(...)`,`dictionaries` 在
+  `main.tsx` 顶层静态 import
+
+要做成按需加载,得在 bootstrap 里 `await` 目标语言词典再首渲染。
+**技术上可行**,但我**验不了**其中最要紧的一环:切换语言时新词典到达前
+会不会闪一下原始 key —— 那需要**真的在浏览器里点一次语言切换**。
+
+`CLAUDE.md` 里我自己写过「分层测试全绿 != 拼起来能工作」。
+一个我**只能靠 build + 单测**验证的改动,而风险恰好落在**验不到的那部分**
+上 —— 这条我不做。
+
+要做的先决条件:能跑起浏览器复验(或 Playwright),再按这个顺序动:
+先给 provider 加「词典未加载」的显式状态(别靠 `?? key` 兜底 ——
+那会把加载失败变成满屏原始 key 而没人发现),再按需 `import`,
+最后**实测**首屏 chunk 变小 + 切换语言无闪烁。
+
 #### (存档)已修:`manualChunks` 给 recharts 的规则反而害了它
 
 改前首屏预取 **781 kB**,改后 **382 kB**(这是第一处修复)(产物总量 2045 -> 2048 kB,
