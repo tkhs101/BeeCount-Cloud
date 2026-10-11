@@ -1,41 +1,42 @@
-test: 补备份/还原的**数据**往返 —— 原来只测了状态文件管理
+test: `_truncate_ledger` 覆盖完整性 —— 结构化防住「加表必然再漏一次」
 
-## 发现的缺口
+## 上一条提交补的是症状,这条防的是病根
 
-`tests/test_backup_restore.py` 有 11 条测试,我以为是覆盖还原的。实际看一眼:
+我补了 `test_backup_restore_data.py` 验证还原不丢腿。**但那仍然是
+事后补测试** —— `_truncate_ledger` 里那个模型列表是**手写的**,
+加第 4 张 projection 表时没人会记得回来改它。
 
-- `test_list_restores_sorted_desc`
-- `test_cleanup_restore_removes_dir`
-- `test_read_status_returns_dict`
-- …
+`CLAUDE.md` 自己写着:「此前每一次都是**事后**补一条专用测试 ——
+那是症状处理不是解决方案。第 6 列被加进来时同样的事会再发生一次,
+仍然要等用户发现数据被抹了才有人查。」
 
-**全是状态文件管理**(`status.json` 读法、目录清理、排序)。
-`grep -c "split|autorepay|tax_amount"` = **0**。
+## 白名单式判据(与反向桥护栏同一思路)
 
-也就是说 **`admin restore_backup` 真正走的数据路径没有任何覆盖**。
+新增 `Read*` 表时这条**默认红**,要求显式论证它该不该被清:
 
-## 为什么这条路径最该被测
+- 用「有 `ledger_id` 列」区分 ledger-scoped 与 per-user ——
+  `UserAccountProjection` 是跨账本共享的,按 `ledger_id` 清会**误删别的账本**
+- 反向检查:清单里不能有僵尸条目(改名后忘了同步)
+- **运行期确认**:每张表塞一行,`_truncate_ledger` 后真的没了 ——
+  AST 判据只能证明「模型名在那个元组里」,循环体被改坏(比如加了
+  `if False:`)静态判据看不出来
 
-`CLAUDE.md` 把「`_truncate_ledger` 漏子表 → rebuild / 还原后父交易没腿、
-旧腿还在 → 余额**凭空多出来**」列为组合支付的静默丢失之一。
+变异验证:往 `models.py` 加一张 `ReadRecurringProjection`(有 `ledger_id`)
+但**不登记** —— **变红,并点名是哪张表**。这正是黑名单挡不住、
+白名单能挡的场景。
 
-而还原是**运维真会执行**的操作 —— 出事时数据已经错了,不是界面难看。
+## 写判据时自己踩了一次「恒真」
 
-## 代码目前是对的,但没人拦
+第一版判据写成 `isinstance(sub.target, ast.Tuple)`,而 `for model in (...)`
+的 target 是 **Name**。于是「什么都没找到」= 空集合 = 「没有表被清」=
+**全绿**。
 
-实测 `build -> truncate -> rebuild`:腿恰好 2 条、父 `account_name` 仍为空
-(0021 不变式)。**「当前对」和「改坏了有人拦」是两件事** —— 这正是
-`CLAUDE.md` 反复记的形状:每次都**事后**补测试,而下一列被加进来时
-同样的事会再发生一次。
+和 `CLAUDE.md` 记的 tokenize 那条一模一样:断言看着在跑,其实恒真。
+所以加了 `test_the_ast_extractor_finds_the_loop` —— 判据找不到东西时
+必须自己红。
 
-## 四条
+## 当前状态
 
-- `snapshot_builder.build` 必须把腿**写进** snapshot(否则还原后变「无账户支出」)
-- `_truncate_ledger` 必须清**旧腿**(否则残留腿叠加 = 余额凭空多出来)
-- 重建后腿**恰好** 2 条 —— 断言用精确列表,多一条少一条都能分辨
-- 有腿时父 `account_name` 仍为空(否则余额双倍扣)
+`Read*` 共 3 张,全部已在清理列表里(实测确认)。
 
-变异验证:把 `ReadTxSplitProjection` 从 `_truncate_ledger` 的列表里去掉
-(原样复现 CLAUDE.md 记的那个 bug)—— **变红**。
-
-870 passed(866 + 4)/ mypy 80(零新增,纯测试改动)
+874 passed(870 + 4)/ mypy 80(零新增,纯测试改动)
