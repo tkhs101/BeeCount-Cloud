@@ -112,3 +112,48 @@ def test_same_input_agrees_with_projection_contract() -> None:
         assert _parse_dt(raw) == _parse_happened_at(raw), (
             f"{raw}:MCP 读工具 { _parse_dt(raw).isoformat() } "
             f"vs projection { _parse_happened_at(raw).isoformat() }")
+
+# --------------------------------------------------------------------------- #
+# CSV 导入路径:同一个「两层都得输出 UTC」的契约                              #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("raw,tz_off,expect", [
+    # CSV 自带时区标记 → **以它为准**,不能被 tz_offset_minutes 再挪一次
+    ("2026-05-13T18:00:00+09:00", 540, "2026-05-13T09:00:00+00:00"),
+    ("2026-05-13T09:00:00Z", 540, "2026-05-13T09:00:00+00:00"),
+    ("2026-05-13T00:00:00-05:00", 540, "2026-05-13T05:00:00+00:00"),
+    # 裸墙钟 → 才用 tz_offset_minutes 换算(issue #314 的正解)
+    ("2026-05-13T18:00:00", 540, "2026-05-13T09:00:00+00:00"),
+    # 老客户端没传偏移 → 当作 UTC(兼容旧行为)
+    ("2026-05-13T18:00:00", None, "2026-05-13T18:00:00+00:00"),
+])
+def test_csv_import_always_outputs_utc(raw: str, tz_off, expect: str) -> None:
+    """CSV 导入的输出**必须**是 UTC,否则同一列里会混两种口径。
+
+    原实现对已带偏移的输入「原样保留」→ `18:00+09:00` 一路穿到
+    `projection._parse_happened_at` 才归一,**归一发生得太晚**:
+    SQLite 在 `upsert_tx` 落库时存的是墙钟,于是库里同时存在
+    「UTC 墙钟」和「本地墙钟」两种值,统计/排序/筛选全乱。
+    """
+    from src.services.import_data.transformer import _parse_datetime
+
+    got = _parse_datetime(raw, None, tz_off)
+    assert got.utcoffset() == timedelta(0), (
+        f"{raw}(tz_offset={tz_off}) → {got.isoformat()},带偏移穿过了写入路径")
+    assert got.isoformat() == expect, (
+        f"{raw}(tz_offset={tz_off}):"
+        f"CSV 自带时区标记时 tz_offset_minutes 会被二次应用")
+
+
+def test_csv_output_matches_the_rest_of_the_write_path() -> None:
+    """CSV 的输出必须与 `projection._parse_happened_at` 口径一致。
+
+    两者对同一个 ISO 串给出不同时刻 = 库里两套口径。
+    """
+    from src.projection import _parse_happened_at
+    from src.services.import_data.transformer import _parse_datetime
+
+    for raw in ("2026-05-13T18:00:00+09:00", "2026-05-13T09:00:00Z",
+                "2026-05-13T18:00:00"):
+        assert _parse_datetime(raw, None, None) == _parse_happened_at(raw), raw

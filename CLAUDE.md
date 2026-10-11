@@ -349,6 +349,41 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 
 阈值必须 **2 不是 1**:落后 1 期是正常状态(本月还没到还款日)。
 
+### 时区:每一层都得输出 UTC(已栽五次,改之前先跑一遍排查)
+
+本仓现在有 **5 个**解析 ISO 时间的点,全部必须输出 **UTC**:
+
+| 位置 | 契约 |
+|---|---|
+| `snapshot_mutator._to_iso8601` | 归一 |
+| `projection._parse_happened_at` | 归一 |
+| `read/_shared._to_utc` | naive 当 UTC(读路径兜底) |
+| `mcp/read_tools._parse_dt` | 归一(值**直接进 SQL**) |
+| `import_data/transformer._localize_naive` | 归一(CSV) |
+
+**为什么每一层都要归一(而不是最后一层做一次就够)**:
+SQLite 在 `upsert_tx` 落库时存的是**墙钟字符串**。带 +09:00 的 datetime
+落库 → 库里存 `18:00`,而库里其它交易存的是 UTC 墙钟 → **同一列两套口径**,
+统计/排序/筛选全乱。归一必须发生在**进 ORM 之前**。
+
+**CSV 自带时区标记时以它为准**,不要再用 `tz_offset_minutes` 二次偏移 ——
+`2026-05-13T18:00:00+09:00` 已经锚定了绝对时刻,再减一次会挪 9 小时。
+`tz_offset_minutes` 只适用于**裸墙钟**。这条还有一个暗坑:`"%Y-%m-%dT%H:%M:%SZ"`
+这个 strptime 候选格式会把 `Z` 当**字面量**吃掉(产出 naive),于是
+CSV 写了 `Z` 反而丢掉 UTC 标记 —— 该格式已改用 `%z`。
+
+**改任何一处之前先跑**:
+
+```bash
+grep -rn "fromisoformat\|strptime" src/ --include=*.py
+grep -rn "replace(tzinfo=timezone.utc)" src/ --include=*.py
+```
+
+⚠️ **纯 Python 里两个 aware datetime 比较会自动归一**,所以
+`datetime(...,9,tzinfo=utc) >= datetime(...,18,tzinfo=+9)` 在 REPL 里是
+`True`,**看不出问题**。只有落到 SQL 驱动才炸。护栏必须有**一条穿过真
+SQLite** 的断言,否则这类 bug 能在测试全绿下活下来。
+
 ### 时区:`_parse_happened_at` 必须归一到 UTC(第四次同类)
 
 SQLite 没有原生 datetime 类型,SQLAlchemy 存的是**墙钟字符串**。写一个

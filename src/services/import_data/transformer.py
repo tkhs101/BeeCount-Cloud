@@ -275,11 +275,32 @@ def _localize_naive(dt: datetime, tz_offset_minutes: int | None) -> datetime:
     避免被下游"naive 一律当 UTC"的序列化逻辑整体偏移(issue #314:之前直接
     replace(tzinfo=utc),把 23:16 本地当成 23:16 UTC,客户端 toLocal 后晚 8 小时)。
 
-    - 已带时区(strptime %z / fromisoformat 带偏移)→ 原样保留。
+    - 已带时区(strptime %z / fromisoformat 带偏移)→ **以它为准**,归一到 UTC。
+      **不要**再用 `tz_offset_minutes` 二次偏移 —— CSV 里写了
+      `2026-05-13T18:00:00+09:00` 就说明这一列**已经是 UTC 锚定的绝对时刻**,
+      再按客户端时区减一次会平白挪 9 小时(东向:变早 9 小时,
+      那笔交易直接跑到前一天)。
+      `tz_offset_minutes` 只适用于**没带时区标记**的裸墙钟。
     - tz_offset_minutes 为 None(老客户端未传)→ 退回旧行为:当作 UTC,不破坏兼容。
+
+    ## ⚠️ 「原样保留带偏移的 aware」是错的(2026-10 修)
+
+    原实现对 `dt.tzinfo is not None` 直接 `return dt`。CSV 里若写了
+    `2026-05-13T18:00:00+09:00`,这个值就一路带着 +09:00 走完写入流程,
+    直到 `projection._parse_happened_at` —— 而那个函数的契约是
+    **统一归一到 UTC**,`astimezone(utc)` 会把它变成 09:00Z。
+
+    那看起来"对",但**归一发生得太晚了**:SQLite 在 `upsert_tx` 落库时
+    存的是墙钟。带 +09:00 的 datetime 落库 → 库里存 `18:00`,
+    而库里其余所有交易(由 `_to_iso8601` 归一过的)存的是 UTC 墙钟。
+    **同一列里两种口径**,统计/排序/筛选全乱。
+
+    所以**每一层都必须输出 UTC** —— 宁可多归一一次(恒等),也不能让
+    一个带偏移的值穿过写入路径。这是本仓第五次栽在
+    「同一个转换两份实现,一份对一份错」。
     """
     if dt.tzinfo is not None:
-        return dt
+        return dt.astimezone(timezone.utc)
     if tz_offset_minutes is None:
         return dt.replace(tzinfo=timezone.utc)
     local_tz = timezone(timedelta(minutes=tz_offset_minutes))
@@ -299,6 +320,15 @@ def _parse_datetime(
             return None
     # auto try
     for f in _DATETIME_CANDIDATES:
+        # `"...T%H:%M:%SZ"` 这个候选把 `Z` 当**字面量**吃掉,strptime 出来
+        # 是 naive —— 于是 `_localize_naive` 会把它当客户端本地墙钟,
+        # 再按 `tz_offset_minutes` 减一次。CSV 里明明写了 `Z`(已经是 UTC),
+        # 却平白被挪 9 小时,交易直接跑到前一天。
+        #
+        # `Z` 是 UTC 标记,不是格式噪音。这里补成 **aware UTC**,
+        # 让后面的 `_localize_naive` 看到 `tzinfo is not None` 走正确分支。
+        if f.endswith("SZ"):
+            f = f[:-1] + "%z"
         try:
             return _localize_naive(datetime.strptime(s, f), tz_offset_minutes)
         except ValueError:
