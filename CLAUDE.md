@@ -243,10 +243,27 @@ chunk 叫什么名字不影响它在不在入口的 import 图里。
   `CommandPalette.tsx`,而后者用 cmdk。命令面板本该按需打开,
   这是唯一一条已定位且可改的
 
-`poster`(36 kB)为什么还在首屏,**我没查出来**。已排除:
-它的两个引用方(`PosterDialog` / `TwoFactorAuthSection`)都在
-`React.lazy` 路由下、桶引用也不是原因。下一个人别重复走这两条路,
-要查就从「`dist/index.html` 里 poster 那行是谁发出来的」入手。
+**`poster`(36 kB)为什么还在首屏 —— 范围已收窄**
+
+从 `dist/index.html` 那一行入手,实测到的事实:
+
+```bash
+grep -oE 'from"\./[a-zA-Z-]+\.js"' <入口块>.js | sort -u
+# 只输出:cmdk-BeCp-skv.js
+```
+
+**入口块只静态 import 了 `cmdk`,并没有 import `poster`** ——
+但 `poster` 依然拿到了 `modulepreload`。
+
+所以它不在「入口静态依赖」这一类里。剩下的合理解释:
+**Vite 会给「入口的**动态** import 之间的共享 chunk」发 `modulepreload`**。
+`html-to-image` + `qrcode` 被年度报告页和设置页共用,而那两页都是
+`React.lazy` —— 共享动态 chunk 被 Vite 一并预取了。
+
+⚠️ **别急着关掉 `build.modulePreload`**。那会把预取**全部**去掉,
+对真正首屏需要的 chunk(`cmdk` 之类)也是损失 —— 收益 36 kB,
+代价是所有预取都没了。这属于**用我验不了的性能权衡**去换确定的字节数,
+不做。真要优化得先有 RUM 或浏览器的 network 面板数据。
 
 #### i18n 231 kB:第二次评估,**仍然暂缓**(理由比上次更具体)
 
