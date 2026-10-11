@@ -91,8 +91,9 @@
 Mobile 端(Flutter)和 Web 端(React)各自有仓,各自有 CLAUDE.md:
 
 - Mobile: `../BeeCount/CLAUDE.md`
-- Web: 前端源码在 `frontend/apps/web/`,README 见 `frontend/README.md`
-  (如有)
+- Web: 前端源码在 `frontend/apps/web/`(pnpm workspace:`apps/web` +
+  `packages/{ui,web-features,api-client}`)。**没有 README** —— 命令与
+  约定以本文件为准(尤其「前端是两道独立的门」那一节)
 
 跟服务端同步相关的 mobile 契约(`ChangeTracker.recordUserGlobalChange` /
 `recordLedgerChange`)在 mobile 仓 CLAUDE.md 里。Server 端的契约在上面
@@ -542,6 +543,27 @@ node_modules 路径调用),**不能**写 `expect(src).not.toContain('recharts')`
 
 灌 225 笔 / 193 天后,概览页实测:本月结余 `¥4.66万`、本月收入 `¥38.5万`、
 账本 `日常`、货币 **JPY**(`¥` 是日元符号,不是人民币 —— 别当成币种错)。
+
+#### 审计:CLAUDE.md 里的「护栏」引用有没有指向不存在的文件
+
+第 58 轮发现「failed→502」**声称有保护、实际裸奔**,于是怀疑这是**系统性**的。
+把 CLAUDE.md 里所有 `.py/.ts/.tsx/.md/.sh` 文件引用抽出来逐个核对:
+
+| | |
+|---|---|
+| 引用总数 | **51** |
+| **实际不存在** | **1**(`frontend/README.md`,且原文带了「(如有)」限定词) |
+
+✅ **结论:不是系统性现象,第 58 轮那一条是孤例。** 已把那条悬空引用改掉。
+
+⚠️ **审计本身也有假阳性**(和「探针不可靠」同族):正则
+`(tests|src|frontend|...)[\w/.\-]*\.(py|ts...)` 把 `apps/web/src/i18n/en.ts`
+的**尾部** `src/i18n/en.ts` 当成完整路径 -> 报 7 个缺失,**6 个是假的**。
+**路径类断言要确认命中的是完整路径**,不是子串。
+
+📌 **但这条审计只查「文件存在」,查不出「护栏够不够」** ——
+存在 ≠ 断言了文档声称的东西(第 53 轮「探针覆盖不到 ≠ 护栏不存在」
+是同一族)。**别把「51 个引用都在」当成「51 条保护都有效」。**
 
 #### ✅ 自动还款「失败必须可见」的护栏(第 58 轮,变异验证过)—— **之前裸奔**
 
