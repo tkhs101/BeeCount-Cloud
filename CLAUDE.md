@@ -161,7 +161,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | **884 passed** |
+| `pytest -q` | 绿 | **绿** | **885 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **307 passed**(2026-10-12 实跑 build,12s) |
@@ -374,29 +374,40 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 3. **一致的口径要有唯一来源** —— 时区走 `_resolve_scheduler_tz()`,
    别用 `date.today()`
 
-### 四道幂等防线:防线 4 **顺序测试原理上测不到**
+### 四道幂等防线:防线 4 要**重入**才测得到(顺序法测不到)
 
-`tests/test_credit_autorepay_idempotency.py` 里有一条
-`test_barrier4_is_only_reachable_under_true_concurrency`,专门把这件事钉住。
+防线 4(`rowcount != 1` 才放弃)防的是**多 worker 抢同一期**。
 
-把 `if getattr(claimed, "rowcount", 0) != 1:` 改成 `if False:`,
-测试**全绿**。我调了三次前置条件仍抓不到:
+用「同一期调两次」这种顺序法**永远测不到**:防线 2
+(`last_period == pkey`)排在它**前面**,第二次调用在防线 2 就返回
+`skipped_already_repaid`。实测三次前置条件都抓不到:
 
 | 前置条件 | 谁挡住了 |
 |---|---|
 | 全额还款 | 防线 1(`outstanding == 0`) |
-| 部分还款 | 扣款账户**余额归零**,`payable <= 0` |
-| 部分还款 + 再充钱 | **防线 2**(`last_period == pkey`) |
+| 部分还款 | 扣款账户余额归零,`payable <= 0` |
+| 部分还款 + 再充钱 | **防线 2** |
 
-读源码才看清:`repay.py` 里**防线 2 排在防线 4 之前**。防线 4 防的是
-**真正的并发**(两个进程同时读到旧 `last_period`,都过防线 2,再竞争
-那一条条件 UPDATE)—— 顺序调用产生不了那个状态。
+**但「顺序调用测不到」不等于「测不到」** —— 我第一版把「难做」当成了
+「不可做」,白留一句「得上两个真连接 + 显式交错」就收工。换**重入**即可:
 
-**为什么要专门写这条测试**:否则下一个人会拿顺序测试「验证」防线 4,
-拿到全绿,以为它有效,而它**一次都没被真正执行过**。
-**没测到的防线比坏掉的防线更危险** —— 与「比没有护栏更糟」同源。
+```
+防线 2 -> 防线 1(compute_statement) -> payable -> 防线 4 -> self_call
+```
 
-真要验它得上两个真连接 + 显式交错(SQLite 还要处理锁竞争)。
+把 `compute_statement` 包一层,在**它里面**把另一个 session 的
+`repay_one` 整个跑完。A 过了防线 2 → 调 `compute_statement` 时 B 完整跑完
+(拿锁、提交、写交易)→ A 回到主线,拿**过期的**余额去抢锁 →
+`WHERE last_period IS NOT pkey` 匹配 0 行 → `skipped_locked`。
+
+⚠️ **必须两个独立 session**:文件库 + 两个引擎。`StaticPool` 的内存库
+所有 session 共用一个连接,未提交事务对另一个「看得见」,造不出竞态。
+
+护栏:`tests/test_credit_autorepay_idempotency.py`
+`test_barrier4_blocks_a_real_interleaved_race`(变异验证:去掉 `rowcount`
+检查 → 变红,A 会再扣一次)。
+
+**规则:测试方法受阻时,先分清「这个场景造不出来」和「这个方法造不出来」。**
 
 ### 调 `repay_one` 的两个坑(白折腾两轮才搞清)
 
