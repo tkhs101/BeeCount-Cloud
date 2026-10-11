@@ -543,6 +543,34 @@ node_modules 路径调用),**不能**写 `expect(src).not.toContain('recharts')`
 灌 225 笔 / 193 天后,概览页实测:本月结余 `¥4.66万`、本月收入 `¥38.5万`、
 账本 `日常`、货币 **JPY**(`¥` 是日元符号,不是人民币 —— 别当成币种错)。
 
+#### ✅ 自动还款「失败必须可见」的护栏(第 58 轮,变异验证过)—— **之前裸奔**
+
+CLAUDE.md 一直写着「现在 failed→502 / 配错→400」,**读起来像已受保护**。
+实测:`grep -rln "502" tests/*.py` **零结果** —— 没有任何护栏。
+而这正是文档记的那条**静默失败**(「用户看到的是『点了没反应』」)。
+
+护栏:`tests/test_autorepay_failure_is_visible.py`(3 条)
+变异:把 502 那个 `raise` 换成 `if False: pass` -> 变红,
+报 `expected 502, got 200` —— **正是那个故障本身**。
+
+📌 **第三条是反向护栏**:`skipped_disabled` **必须仍然 200**。
+用户自己关掉的开关,「无事可做」不是错误 —— 没有它,前两条会逼着人
+把正常跳过也改成报错。
+
+⚠️ **探针把我带偏了一次**(值得记):我想「触发一个失败的配置」,
+用一张**没配自动还款的卡**去打,拿到 200,差点判成「修复没生效」。
+**真因是我的前提错了** —— `skipped_disabled` 才是那张卡的状态,
+返回 200 是正确的。`repay_one` 一共有 8 个状态,只有 `failed` 和
+`skipped_invalid_config` 该报错。**先列全状态再设计探针。**
+
+⚠️ `repay_one` 在端点里是**函数内 import** —— 必须 patch
+`src.services.credit_card.repay.repay_one`(定义处),
+patch `src.routers.write.accounts.repay_one` 无效(那个名字不存在)。
+
+⚠️ 这里 mock `repay_one` 是**正当的**:被测对象是「端点拿到 outcome 之后
+翻成什么 HTTP 码」,不是 `repay_one` 的算法(那部分另有 e2e + 分层测试)。
+**用 mock 不等于测了假的** —— 前提是 mock 的东西不是被测对象。
+
 #### ✅ 组合支付:两条余额路径的「互相比对」补上了(第 57 轮,变异验证过)
 
 第 56 轮记的缺口已补:`tests/test_account_balance_paths.py`
