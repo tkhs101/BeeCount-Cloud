@@ -357,3 +357,54 @@ def test_exported_csv_can_be_imported_back_with_splits_and_tax(smoke) -> None:
     # 税额那一笔也要在
     taxed = next((i for i in items if i.get("note") == "含税消费"), None)
     assert taxed is not None, f"含税那笔没进 preview: {items[:3]}"
+
+
+# --------------------------------------------------------------------------- #
+# 前后端字段名契约                                                          #
+# --------------------------------------------------------------------------- #
+
+
+def test_frontend_declares_only_fields_the_api_actually_returns(smoke) -> None:
+    """前端 `ReadAccount` 声明的字段,后端**真的都返回**。
+
+    ## 为什么这条不可省
+
+    前端大量派生函数是「字段缺失就静默返回 null / 不渲染」:
+    `statementOut` 缺 `statement_bill` 就不显示那一格、
+    `previewColumns` 缺 `splits` 就不出现那列。
+
+    所以**后端改名 -> 前端读不到 -> UI 静默少一块**,而 `tsc` 不报错、
+    `vitest` 全绿、用户只看到「这个功能怎么不见了」。
+    TypeScript 类型是**手写的**,它不会验证运行时真的返回了这些字段。
+
+    ## 跨语言的做法
+
+    真跑一次 API 拿响应 key,再用正则从 `types.ts` 里读出声明的字段名,
+    取「前端声明但后端不返回」的差集。这条测试因此同时依赖**真服务**
+    和**前端源码** —— 任何一侧改名都会红。
+
+    只查一个方向:后端多返回的字段不算问题(前端可以先不声明)。
+    """
+    import re
+
+    types_path = (pathlib.Path(__file__).resolve().parents[1] / "frontend"
+                  / "packages" / "api-client" / "src" / "types.ts")
+    src = types_path.read_text(encoding="utf-8")
+    m = re.search(r"export type ReadAccount = \{(.*?)\n\}", src, re.S)
+    assert m, "types.ts 里找不到 ReadAccount 定义 —— 改名了就更新这条"
+    declared = set(re.findall(r"^\s{2}([a-z_][a-zA-Z0-9_]*)\??:",
+                              m.group(1), re.M))
+    # 正则失效的防线:没解析出字段时不能静默通过(见 tokenize 那条)
+    assert len(declared) > 15, f"只解析出 {len(declared)} 个字段,正则可能失效"
+
+    client, H = smoke
+    accs = client.get("/api/v1/read/workspace/accounts", headers=H).json()
+    assert accs, "没有账户可比对"
+    returned = set(accs[0].keys())
+
+    missing = sorted(declared - returned)
+    assert not missing, (
+        f"前端声明但后端**不返回**: {missing}\n\n"
+        f"后端改名(或漏了这个字段)后,前端读不到 -> UI **静默**少一块,"
+        f"tsc 不报错、vitest 全绿,用户只看到「这个功能怎么不见了」。\n"
+        f"后端实际返回的: {sorted(returned)}")
