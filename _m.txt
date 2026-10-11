@@ -1,8 +1,0 @@
-docs: 记「异常处理器自己不许再抛」,并说明 mypy 的 | None 要当真读
-
-backup/runner.py 的 except 块自身无保护:目标行被删 -> None 取属性;
-原始异常来自 DB -> session 坏掉、commit 也失败。任一发生都会顶掉原始
-异常并让整个 backup run 崩掉,失败记录根本没写下来。
-
-这与「失败不许被吞」是同一族的两半:一半讲别把 failed 报成 200,
-这一半讲报 failed 的代码本身不能先崩掉。
