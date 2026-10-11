@@ -1431,3 +1431,43 @@ expense_date = rep.statement_date      # 右闭,一定在里面
 
 📌 **最后一格和第 66 轮开头是同一个错误。** 我确实学到了很多,
 但「推理出的东西也要先量」这条,我这轮又漏了。
+
+## 第 90 轮:**查清了,不是 bug —— 是「日期粒度」与「时间戳粒度」不一致**
+
+第 89 轮的现象:`statement_bill` 读出 60000(两笔都算进本期),
+而我量的 `cur.contains(_REP.statement_date)` 是 **False**。
+量与实测**矛盾** —— 所以真因一定在我没量到的地方。查到了:
+
+```python
+# statement.py:374
+.where(ReadTxProjection.happened_at > datetime.combine(start_date, time.min))
+.where(ReadTxProjection.happened_at <= datetime.combine(end_date, time.max))
+```
+
+**边界在 `midnight`**,而 `BillingPeriod.contains()` 比的是**日期**。
+
+所以支出日期 = `2026-10-10`(窗口左端)、时刻 = `09:00` 时:
+`09:00 > 00:00` **成立** -> **它在窗口内**。`contains()` 说 False 只是因为
+它看不到时刻。
+
+📌 **两处都没错,是判据的粒度不同。** 上一轮我说「又一次按推理改代码没先量」——
+量是对了,量的是 `contains()`,**而代码走的根本不是 `contains()`**。
+**量错了对象,等于没量。**
+
+## 配方因此改成
+
+```python
+_IN_REPAID_PERIOD = _REP.statement_date - timedelta(days=1)
+```
+
+减去一天,才能落在上一期窗口内(当天 00:00 那一笔会被算进本期,
+前一天的则确定在外)。⚠️ 这也意味着**「同一天不同时刻属于不同账期」是真实的** ——
+用户如果对账单期有疑问,这是能复现的口径。
+
+## 这一串(84-90)的最后一块拼图
+
+第 88 轮说「真因 = 账期方向」**不完整** —— 还差这一格:
+**方向(还款日在账单日之后)+ 粒度(边界在 midnight)**。
+两个都到位,现象才能被完整解释。
+
+⚠️ 本轮无代码改动 —— 892 passed / ruff 1254 不变。
