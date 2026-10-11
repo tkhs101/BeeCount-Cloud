@@ -49,6 +49,8 @@ bill  = max(0, -(余额@账单日))           账单 = 账单日那一刻的欠�
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -123,7 +125,7 @@ def compute_statement(
     db: Session,
     *,
     user_id: str,
-    ledger_id: str,
+    ledger_ids: Sequence[str],
     card_account_sync_id: str,
     period: BillingPeriod,
     today: date,
@@ -156,7 +158,7 @@ def compute_statement(
     initial = _initial_balance(db, user_id=user_id,
                                account_sync_id=card_account_sync_id)
     balance_at_statement = _balance_at(
-        db, ledger_id=ledger_id, account_sync_id=card_account_sync_id,
+        db, ledger_ids=ledger_ids, account_sync_id=card_account_sync_id,
         initial=initial, as_of=stmt_dt, as_of_date=period.statement_date,
     )
 
@@ -167,20 +169,20 @@ def compute_statement(
     # 以下两项是**展示用**(UI 上告诉用户「账单是怎么来的」),
     # 不参与账单计算 —— 账单由上面的累计余额唯一决定。
     period_repayment = _transfer_in(
-        db, ledger_id=ledger_id, account_sync_id=card_account_sync_id,
+        db, ledger_ids=ledger_ids, account_sync_id=card_account_sync_id,
         start_dt=win_start_dt, end_dt=stmt_dt)
-    period_spend = _period_spend(db, ledger_id=ledger_id,
+    period_spend = _period_spend(db, ledger_ids=ledger_ids,
                                  account_sync_id=card_account_sync_id,
                                  start_dt=win_start_dt, end_dt=stmt_dt)
     split_spend = _split_spend_in_period(
-        db, ledger_id=ledger_id, account_sync_id=card_account_sync_id,
+        db, ledger_ids=ledger_ids, account_sync_id=card_account_sync_id,
         start_date=period.window_start, end_date=period.statement_date)
 
     # 规则 4:账单日**之后**的还款(手动早还)要扣掉。窗口内的还款已经
     # 反映在累计余额里(它还的是更早的账单),这里**不能**再减一次 ——
     # 那会让上期滚存的欠款被吃掉,欠款逐月变小却不报错。
     repaid_after = _transfer_in(
-        db, ledger_id=ledger_id, account_sync_id=card_account_sync_id,
+        db, ledger_ids=ledger_ids, account_sync_id=card_account_sync_id,
         start_dt=stmt_dt, end_dt=today_dt)
 
     bill = max(Decimal(0), -balance_at_statement)
@@ -193,7 +195,8 @@ def compute_statement(
     )
 
 
-def _balance_at(db: Session, *, ledger_id: str, account_sync_id: str,
+def _balance_at(db: Session, *, ledger_ids: Sequence[str],
+                account_sync_id: str,
                 initial: Decimal, as_of: datetime,
                 as_of_date: date) -> Decimal:
     """**截止 `as_of`** 的账户余额(含期初)。
@@ -218,7 +221,7 @@ def _balance_at(db: Session, *, ledger_id: str, account_sync_id: str,
             ReadTxProjection.account_sync_id,
             ReadTxProjection.from_account_sync_id,
             ReadTxProjection.to_account_sync_id,
-        ).where(ReadTxProjection.ledger_id == ledger_id)
+        ).where(ReadTxProjection.ledger_id.in_(ledger_ids))
         .where(ReadTxProjection.happened_at <= as_of)
     ).all()
 
@@ -236,12 +239,12 @@ def _balance_at(db: Session, *, ledger_id: str, account_sync_id: str,
             balance += amt          # 转入卡 → 还款
 
     balance -= _split_spend_upto(
-        db, ledger_id=ledger_id, account_sync_id=account_sync_id,
+        db, ledger_ids=ledger_ids, account_sync_id=account_sync_id,
         as_of=as_of, as_of_date=as_of_date)
     return balance
 
 
-def _split_spend_upto(db: Session, *, ledger_id: str,
+def _split_spend_upto(db: Session, *, ledger_ids: Sequence[str],
                       account_sync_id: str, as_of: datetime,
                       as_of_date: date) -> Decimal:
     """规则 2:截止 `as_of` 挂在该卡上的组合支付腿合计。
@@ -262,7 +265,7 @@ def _split_spend_upto(db: Session, *, ledger_id: str,
             (ReadTxProjection.ledger_id == ReadTxSplitProjection.ledger_id)
             & (ReadTxProjection.sync_id == ReadTxSplitProjection.tx_sync_id),
         )
-        .where(ReadTxSplitProjection.ledger_id == ledger_id)
+        .where(ReadTxSplitProjection.ledger_id.in_(ledger_ids))
         .where(ReadTxSplitProjection.account_sync_id == account_sync_id)
         .where(ReadTxProjection.happened_at <= as_of)
     ).all()
@@ -286,14 +289,15 @@ def _initial_balance(db: Session, *, user_id: str,
     return _to_decimal(row)
 
 
-def _period_spend(db: Session, *, ledger_id: str, account_sync_id: str,
+def _period_spend(db: Session, *, ledger_ids: Sequence[str],
+                                 account_sync_id: str,
                   start_dt: datetime, end_dt: datetime) -> Decimal:
     """窗口内该卡的支出合计(规则 1 + 规则 3)。"""
     from ...models import ReadTxProjection
 
     rows = db.scalars(
         select(ReadTxProjection.amount)
-        .where(ReadTxProjection.ledger_id == ledger_id)
+        .where(ReadTxProjection.ledger_id.in_(ledger_ids))
         .where(ReadTxProjection.account_sync_id == account_sync_id)
         .where(ReadTxProjection.tx_type == "expense")
         .where(ReadTxProjection.happened_at > start_dt)
@@ -302,13 +306,14 @@ def _period_spend(db: Session, *, ledger_id: str, account_sync_id: str,
     return sum((_to_decimal(r) for r in rows), Decimal(0))
 
 
-def _income_in(db: Session, *, ledger_id: str, account_sync_id: str,
+def _income_in(db: Session, *, ledger_ids: Sequence[str],
+                                 account_sync_id: str,
                start_dt: datetime, end_dt: datetime) -> Decimal:
     from ...models import ReadTxProjection
 
     rows = db.scalars(
         select(ReadTxProjection.amount)
-        .where(ReadTxProjection.ledger_id == ledger_id)
+        .where(ReadTxProjection.ledger_id.in_(ledger_ids))
         .where(ReadTxProjection.account_sync_id == account_sync_id)
         .where(ReadTxProjection.tx_type == "income")
         .where(ReadTxProjection.happened_at > start_dt)
@@ -317,7 +322,8 @@ def _income_in(db: Session, *, ledger_id: str, account_sync_id: str,
     return sum((_to_decimal(r) for r in rows), Decimal(0))
 
 
-def _transfer_in(db: Session, *, ledger_id: str, account_sync_id: str,
+def _transfer_in(db: Session, *, ledger_ids: Sequence[str],
+                                 account_sync_id: str,
                  start_dt: datetime, end_dt: datetime) -> Decimal:
     """区间内**转入**该卡的转账合计。
 
@@ -327,7 +333,7 @@ def _transfer_in(db: Session, *, ledger_id: str, account_sync_id: str,
 
     rows = db.scalars(
         select(ReadTxProjection.amount)
-        .where(ReadTxProjection.ledger_id == ledger_id)
+        .where(ReadTxProjection.ledger_id.in_(ledger_ids))
         .where(ReadTxProjection.to_account_sync_id == account_sync_id)
         .where(ReadTxProjection.tx_type == "transfer")
         .where(ReadTxProjection.happened_at > start_dt)
@@ -336,7 +342,7 @@ def _transfer_in(db: Session, *, ledger_id: str, account_sync_id: str,
     return sum((_to_decimal(r) for r in rows), Decimal(0))
 
 
-def _split_spend_in_period(db: Session, *, ledger_id: str,
+def _split_spend_in_period(db: Session, *, ledger_ids: Sequence[str],
                            account_sync_id: str,
                            start_date: date, end_date: date) -> Decimal:
     """规则 2:窗口内**挂在该卡上的组合支付腿**合计。
@@ -363,7 +369,7 @@ def _split_spend_in_period(db: Session, *, ledger_id: str,
             (ReadTxProjection.ledger_id == ReadTxSplitProjection.ledger_id)
             & (ReadTxProjection.sync_id == ReadTxSplitProjection.tx_sync_id),
         )
-        .where(ReadTxSplitProjection.ledger_id == ledger_id)
+        .where(ReadTxSplitProjection.ledger_id.in_(ledger_ids))
         .where(ReadTxSplitProjection.account_sync_id == account_sync_id)
         .where(ReadTxProjection.happened_at > datetime.combine(
             start_date, datetime.min.time()))

@@ -126,7 +126,7 @@ def _period(today=date(2026, 10, 25), bd=10, dd=25):
 
 def _calc(db, *, today=date(2026, 10, 25), bd=10, dd=25, card=CARD):
     return compute_statement(
-        db, user_id="u1", ledger_id=LEDGER,
+        db, user_id="u1", ledger_ids=[LEDGER],
         card_account_sync_id=card, period=_period(today, bd, dd), today=today,
     )
 

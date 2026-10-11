@@ -608,3 +608,61 @@ def test_idempotency_key_carries_the_amount(db) -> None:
     _run(db, call=call)
     key = call.calls[0]["headers"]["Idempotency-Key"]
     assert key == f"auto-repay:{CARD}:2026-10:5000.00", key
+
+
+# --------------------------------------------------------------------------- #
+# 多账本:算账必须跨全部账本                                                   #
+# --------------------------------------------------------------------------- #
+
+
+def test_repay_amount_spans_every_ledger(db) -> None:
+    """同一张卡在**两个账本**的消费都要还。
+
+    账户是 user-global(`UserAccountProjection` PK = user_id + sync_id),
+    一张卡可以同时用在多个账本。而第一阶段 `compute_statement` 只收一个
+    `ledger_id`,那个 id 由 `_ledger_internal_of` **猜**出来 ——
+    于是第二个账本的消费不进账单,`outstanding` 偏小,**还得不够**。
+    不报错、不告警,只是静静地少还。
+
+    `_ledger_internal_of` 现在只负责「写交易时放进哪个账本」;
+    「有多少欠款」由 `_all_ledger_ids` 给出全部账本。
+    """
+    OTHER = "led-other"
+    _setup(db, src_balance=100000.0)
+    db.add(Ledger(id=OTHER, user_id="u1", external_id="travel", name="旅行",
+                  currency="JPY"))
+    db.commit()
+
+    # ⚠️ 10/25 还的是 **10/10 出的那期**(窗口 9/10~10/10),
+    # 不是「当前进行中的 11/10 那期」—— `period_for_payment_due_date`
+    # 与 `current_billing_period` 是两个语义,别混。第一版按 current 算,
+    # 把消费记在 10/20,于是账单为空、`skipped_zero_outstanding`,
+    # 看着像实现错了,其实是测试的账期算错。
+    _spend(db, "t1", 3000.0, date(2026, 9, 20), account=CARD)
+    # 第二个账本上的同一张卡
+    _spend(db, "t2", 2000.0, date(2026, 9, 22), account=CARD)
+    db.execute(
+        ReadTxProjection.__table__.update()
+        .where(ReadTxProjection.sync_id == "t2")
+        .values(ledger_id=OTHER)
+    )
+    db.commit()
+
+    out, call = _run(db, today=date(2026, 10, 25))
+    assert out.status == "done", out
+    assert out.amount == 5000.0, (
+        f"第二个账本的 2000 没算进来 —— 少还 2000。amount={out.amount}")
+    # 扣款用的是储蓄卡的余额(不在本测试关注点,但金额必须是那个数)
+    assert call.calls, "没有发出 self-call"
+    assert call.calls[0]["body"]["amount"] == 5000.0, call.calls[0]["body"]
+
+
+def test_all_ledger_ids_excludes_other_users(db) -> None:
+    """`_all_ledger_ids` 只给该用户的账本 —— 混进别人的会把别人的账算进来。"""
+    from src.services.credit_card.repay import _all_ledger_ids
+
+    _setup(db)
+    db.add(Ledger(id="led-other-user", user_id="u2", external_id="o",
+                  name="别人的", currency="JPY"))
+    db.commit()
+    assert set(_all_ledger_ids(db, user_id="u1")) == {LEDGER}

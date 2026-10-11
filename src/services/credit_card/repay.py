@@ -202,8 +202,7 @@ def _repay_inner(db: Session, *, user_id: str, card: UserAccountProjection,
     # ---- 防线 1:账期查重(自愈,天然幂等) --------------------------------- #
     stmt = compute_statement(
         db, user_id=user_id,
-        ledger_id=_ledger_internal_of(db, user_id=user_id,
-                                      account_sync_id=card_id),
+        ledger_ids=_all_ledger_ids(db, user_id=user_id),
         card_account_sync_id=card_id, period=period, today=today)
     outstanding = stmt.outstanding
     if outstanding <= 0:
@@ -305,6 +304,31 @@ def _release_period(db: Session, *, user_id: str, card_id: str,
     except Exception:  # noqa: BLE001
         db.rollback()
         logger.exception("autorepay: failed to release last_period card=%s", card_id)
+
+
+def _all_ledger_ids(db: Session, *, user_id: str) -> list[str]:
+    """这个用户的**全部**账本 internal id。
+
+    ## 为什么必须全部
+
+    账户是 **user-global**(`UserAccount_projection` PK = user_id + sync_id),
+    同一张卡可以同时用在多个账本里。所以它的真实欠款是**跨账本之和** ——
+    Web 的 workspace 端点也是这么聚合的。
+
+    而第一版只查「最近一笔交易所在的那个账本」,于是用户在第二个账本刷的
+    钱**完全不算进账单** → `outstanding` 偏小 → **自动还款还得不够**。
+    不报错、不告警,只是静静地少还。
+
+    这条口径必须与读端点一致,否则用户看着界面上的欠款数额、自动还款却按
+    另一个数扣,只会得出「这软件算错了」。
+    """
+    from sqlalchemy import select
+
+    from ...models import Ledger
+
+    return [str(i) for i in db.scalars(
+        select(Ledger.id).where(Ledger.user_id == user_id)
+    ).all()]
 
 
 def _ledger_internal_of(db: Session, *, user_id: str,
