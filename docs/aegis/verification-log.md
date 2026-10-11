@@ -1513,3 +1513,37 @@ _IN_REPAID_PERIOD = _REP.statement_date - timedelta(days=1)
 而是连续三次**把「我以为的」推翻成「实测的」**:
 窗口 -> 两份实现 -> 账期方向 -> 粒度 -> 「也许写端点没落库」。
 **每一次收敛都靠 `status` 字段或直接量源码,没有一次靠猜。**
+
+## 第 92 轮:两个假设都被推翻 —— **写路径确实会落库**
+
+第 91 轮的假设是「写端点没把 `payment_due_day` 落库」。查了两层:
+
+| 层 | 事实 |
+|---|---|
+| `src/schemas.py:936/955` | 创建与更新 schema **都接受** `billing_day` / `payment_due_day`(`ge=1, le=31`) |
+| `src/routers/write/accounts.py` | 全文件只有 **1 处** `payment_due_day`,而且是**注释** —— 写路径不直接处理它 |
+| `src/snapshot_mutator.py:102` | `_ACCOUNT_OPTIONAL_FIELD_MAP` 里**显式**登记 `("payment_due_day", "paymentDueDay", "int")` |
+
+那张表的格式是 `(payload_key_snake_case, snapshot_key_camelCase, kind)` ——
+**REST 传的 snake_case 正是左边的键**,所以转换是完整的。
+
+⚠️ **所以「写端点没落库」这个假设也是错的。** 我连续两个假设
+(第 90 轮的粒度、第 91 轮的落库)都被推翻,而且**都不是靠推理推翻的,
+是靠读源码**。
+
+## 剩下的未知,缩小到一处
+
+`statement_bill == 60000` 意味着**两笔都被算进当前期**。
+`_IN_REPAID_PERIOD = 2026-09-10`,而 `_CUR = (2026-10-10, 2026-11-10]`
+—— 09-10 **不可能**落在里面。
+
+所以要么 `_statement_out` 传的**不是** `current_billing_period`,
+要么它传的 `period` 用的**不是**账本里的 `billing_day`。
+
+📌 **下一步只有一件**:读回那张卡**实际存的** `billing_day` /
+`payment_due_day` 的**值**(第 84 轮探针只看到 `keys` 有 `billing_day`,
+**没看到值** —— 那次探针被我自己截断了,是个半截探针)。
+
+**一个完整的探针比十个半截的管用。**
+
+## 本轮无代码改动 —— 892 passed / ruff 1254 不变。
