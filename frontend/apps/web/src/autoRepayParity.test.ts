@@ -185,11 +185,33 @@ describe('自动还款 —— 接线护栏', () => {
     )
   })
 
-  it('i18n 三语都有 detail.autoRepay.*', () => {
+  it('i18n 三语都有 detail.autoRepay.* —— 且**键集合完全一致**', () => {
+    // 📌 原版只数**条数**(`length >= 9`),所以「en 有 A、zh-CN 有 B」也照样绿 ——
+    //    而这条测试的名字承诺的是「**三语都有**」。数数证明不了集合相等。
+    //
+    // 现状(2026-10-12 实测):三语**各 21 键,差集全空** —— 但那是这次量出来的,
+    // 不是这条测试保证的。改成集合比对,它才真的在做它名字说的那件事。
+    const sets = new Map<string, Set<string>>()
     for (const f of ['en.ts', 'zh-CN.ts', 'zh-TW.ts']) {
       const src = _read(path.join('i18n', f))
-      const keys = src.match(/'detail\.autoRepay\.\w+'/g) || []
-      expect(keys.length, `${f} 缺 detail.autoRepay.*`).toBeGreaterThanOrEqual(9)
+      sets.set(
+        f,
+        new Set([...src.matchAll(/'(detail\.autoRepay\.\w+)'/g)].map((m) => m[1])),
+      )
+    }
+
+    const en = sets.get('en.ts')!
+    // 下限自检:匹配式失效时「集合为空」不能等于「三语一致」
+    expect(en.size, 'en.ts 的 detail.autoRepay.* 太少,判据可能失效').toBeGreaterThanOrEqual(9)
+
+    for (const f of ['zh-CN.ts', 'zh-TW.ts']) {
+      const other = sets.get(f)!
+      const missing = [...en].filter((k) => !other.has(k)).sort()
+      const extra = [...other].filter((k) => !en.has(k)).sort()
+      expect(
+        { missing, extra },
+        `${f} 与 en.ts 的 detail.autoRepay.* 不一致`,
+      ).toEqual({ missing: [], extra: [] })
     }
   })
 })
