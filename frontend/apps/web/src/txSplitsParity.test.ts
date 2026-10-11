@@ -310,15 +310,25 @@ describe('splits —— 腿的账户下拉必须 pin 住当前值', () => {
     //
     // 主账户下拉早用 accountOptionsWithPinned 解决过同一个问题,
     // 拆分腿这里漏了。
+    // 分层:组件只负责「调用它」,纯逻辑(pin 住当前值)由
+    // `splitLegOptions.behavior.test.ts` **真跑**验证。
+    //
+    // 这两条断言原先读的是组件内部实现,而实现已移到纯函数模块 ——
+    // 正则追着实现跑,重构一次就红。改成盯接口调用点,稳定得多。
     const src = _read('../../../packages/web-features/src/features/TransactionsPanel.tsx')
-    expect(src).toMatch(/legOptions\(leg\)\.map\(/)
-    expect(src).toContain('const legOptions = (')
+    expect(src).toMatch(/legOptions\(accounts, leg\)\.map\(/)
+    expect(src).toContain(
+      "import { legOptions } from './splitLegOptions'")
   })
 
   it('pin 进来的项带「不在当前筛选内」标注', () => {
-    // 不加标注的话用户看到一个不在候选里的名字,只会更困惑
+    // 「pin 住当前值」的真逻辑在 splitLegOptions.ts 里真跑测;
+    // 这里只盯**标注的渲染出口 + i18n 键**(变异审计里这两条都是假的:
+    // 去掉标注后所有测试绿)。
     const src = _read('../../../packages/web-features/src/features/TransactionsPanel.tsx')
-    expect(src).toMatch(/pinned: true/)
+    // 换行用 [\r\n]+ —— 这个仓库在 Windows 上文件是 CRLF,
+    // 写死 \n 的正则匹配不上(我在这里错过一次)。
+    expect(src).toMatch(/\{a\.pinned \? \([\r\n]+/)
     expect(src).toMatch(/transactions\.splits\.notInFilter/)
   })
 

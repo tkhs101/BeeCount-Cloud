@@ -17,16 +17,36 @@ interface Props {
  *
  * 不满意 → 点顶部「编辑映射」改 mapping → 重 preview → 这里跟着变。
  */
+/**
+ * 预览表要不要显示「税额」「拆分」两列。
+ *
+ * **按数据有无**而不是常量:预览表已经 8 列,而绝大多数 CSV 既没有税额
+ * 也没有拆分,常量列会把表格撑宽。派生只扫样本(前几十行)—— 全量扫为
+ * 两个布尔值不划算,而样本之后没数据本来也看不到。
+ *
+ * 抽成模块级纯函数是为了能**真跑测试**:它在组件内时只能做源码正则,
+ * 而正则只能证明「代码被写下来了」,证明不了「代码被执行到了」——
+ * 变异审计里  曾让所有测试绿。
+ */
+export function previewColumns(samples: ImportTransactionSample[]): {
+  hasTax: boolean
+  hasSplits: boolean
+} {
+  return {
+    hasTax: samples.some(
+      (tx) => tx.tax_amount != null && tx.tax_amount > 0,
+    ),
+    hasSplits: samples.some((tx) => (tx.splits?.length ?? 0) >= 2),
+  }
+}
+
 export function TransactionsPreviewCard({ samples, totalRows }: Props) {
   const t = useT()
 
   // 两列按数据有无出现 —— 常量列会把预览表撑宽,而绝大多数 CSV 既没有
   // 税额也没有拆分。**只扫前几十行样本**:全量扫一遍为两个布尔值不划算,
   // 而样本之后没有的数据本来也看不到。
-  const hasTax = samples.some((tx) =>
-    tx.tax_amount != null && tx.tax_amount > 0,
-  )
-  const hasSplits = samples.some((tx) => (tx.splits?.length ?? 0) >= 2)
+  const { hasTax, hasSplits } = previewColumns(samples)
   return (
     <Card className="bc-panel">
       <CardHeader className="flex flex-row items-center justify-between space-y-0">

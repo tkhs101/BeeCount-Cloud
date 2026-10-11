@@ -53,7 +53,7 @@ import { DetailScopeToggle } from './DetailScopeToggle'
  * 跨组件传 number 会被 TS 的 optional 链搞成 `number | null | undefined`
  * (在这个文件里试过三次都没收窄对)。字符串没有这个问题。
  */
-function statementOut(account: AccountWithStats): {
+export function statementOut(account: AccountWithStats): {
   outstanding: string
   bill: string
   due: string
@@ -80,7 +80,7 @@ function statementOut(account: AccountWithStats): {
 }
 
 
-type AccountWithStats = ReadAccount & {
+export type AccountWithStats = ReadAccount & {
   tx_count?: number | null
   income_total?: number | null
   expense_total?: number | null

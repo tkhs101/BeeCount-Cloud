@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { legOptions } from './splitLegOptions'
 import { X } from 'lucide-react'
 
 import {
@@ -329,19 +330,6 @@ export function TransactionsPanel({
   //
   // 主账户下拉早用 `accountOptionsWithPinned` 解决过同一个问题,
   // 这里照抄那一半。
-  const legOptions = (
-    leg: { accountId: string; accountName: string },
-  ): Array<{ id: string; name: string; pinned: boolean }> => {
-    const rows = accounts.map((a) => ({ id: a.id, name: a.name, pinned: false }))
-    if (leg.accountId && !rows.some((r) => r.id === leg.accountId)) {
-      rows.unshift({
-        id: leg.accountId,
-        name: leg.accountName || leg.accountId,
-        pinned: true,
-      })
-    }
-    return rows
-  }
 
   const categoryOptions = categories
     .filter((row) => row.kind === form.tx_type)
@@ -638,7 +626,7 @@ export function TransactionsPanel({
                               />
                             </SelectTrigger>
                             <SelectContent>
-                              {legOptions(leg).map((a) => (
+                              {legOptions(accounts, leg).map((a) => (
                                 <SelectItem key={a.id} value={a.id}>
                                   {a.name}
                                   {/* 当前腿的账户不在候选里(币种变了/被隐藏)——
