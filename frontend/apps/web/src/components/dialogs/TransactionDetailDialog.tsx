@@ -13,6 +13,16 @@ import {
 import { buildTagColorMap, TagChip } from '@beecount/web-features'
 import { Calendar, ChevronLeft, ChevronRight, Edit3, Hash, ImageOff, Tag, User, Wallet, X } from 'lucide-react'
 
+/** 腿的金额。**原币**,与父交易 `amount` 同币种 —— 不折算:
+ *  组合支付跨币种被服务端刻意拒绝(转账两端共用一个 amount),
+ *  所以腿和父必然同币种,折算反而会引入汇率时点问题。 */
+function fmtSplitAmount(v: number): string {
+  return v.toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+}
+
 import { useAttachmentCache } from '../../context/AttachmentCacheContext'
 
 interface Props {
@@ -134,6 +144,40 @@ export function TransactionDetailDialog({
                       maximumFractionDigits: 2,
                     })}
                   </span>
+                </div>
+              ) : null}
+              {/* 组合支付(0021):把腿摊开。
+
+                  没有这块,父交易的「账户」行是空的(服务端强制清空,
+                  否则余额双倍扣),用户在账户详情里看到 5000、
+                  余额只动 3000 —— 没有任何地方解释这个差异。
+                  最可能的归因是「余额算错了」,然后手动改初始余额。 */}
+              {(tx.splits?.length ?? 0) >= 2 ? (
+                <div className="mt-2 rounded-md border bg-muted/20 px-3 py-2 text-left">
+                  <div className="text-xs text-muted-foreground">
+                    {t('detail.transaction.splitTitle', {
+                      count: String(tx.splits!.length),
+                    })}
+                  </div>
+                  <ul className="mt-1 space-y-0.5">
+                    {tx.splits!.map((leg, i) => (
+                      <li key={leg.account_id || i}
+                          className="flex items-center justify-between text-sm tabular-nums">
+                        <span className="truncate">
+                          {leg.account_name || leg.account_id}
+                        </span>
+                        <span>{fmtSplitAmount(leg.amount)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {/* 守住「父 amount 仍是实付总额」这个语义 ——
+                      用户看到腿加起来等于上面那个大金额,才不会以为少了一笔。 */}
+                  <div className="mt-1 flex items-center justify-between border-t pt-1 text-xs tabular-nums text-muted-foreground">
+                    <span>{t('detail.transaction.splitTotal')}</span>
+                    <span>{fmtSplitAmount(
+                      tx.splits!.reduce((s, l) => s + l.amount, 0),
+                    )}</span>
+                  </div>
                 </div>
               ) : null}
               <span className="text-xs text-muted-foreground">

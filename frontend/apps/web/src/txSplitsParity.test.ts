@@ -122,3 +122,94 @@ describe('splits 字段对齐护栏', () => {
     expect(types).toMatch(/splits\?:\s*TransactionSplitPayload\[\] \| null/)
   })
 })
+
+
+/**
+ * 找出「以某个表达式作为门条件的 JSX 那一行」,**原样返回整行**。
+ *
+ * 为什么需要:只查 `toMatch(/splits\?\.length \?\? 0/)` 的话,
+ * 把代码改成 `{false && (tx.splits?.length ?? 0) >= 2 ? (...)}` 照样通过 ——
+ * 子串还在,渲染已经死了。本仓没有 jsdom(跑不了真渲染),
+ * 行首锚定是当前能做到的最强判断。
+ */
+function _gatingLine(src: string, needle: string): string {
+  const NEWLINE = String.fromCharCode(10)
+  const line = src.split(NEWLINE).find(
+    (l) => l.includes(needle) && l.includes('? ('),
+  )
+  if (!line) throw new Error(`找不到以 ${needle} 为门条件的那一行`)
+  return line.trim()
+}
+
+describe('splits —— 真的渲染到屏幕上(补 2026-10-11 审计的盲区)', () => {
+  const _read = (rel: string) =>
+    fs.readFileSync(path.resolve(__dirname, rel), 'utf8')
+
+  // 这三个护栏抓的是同一类问题:**类型合法、字段也在 payload 里,
+  // 但没有任何渲染代码**。所以「组合支付在详情弹窗零展示」能一直活着。
+  // 断言一律要求条件分支本身存在,而不是只查字符串出现过。
+
+  it('详情弹窗在腿数 >= 2 时渲染腿列表', () => {
+    const src = _read('components/dialogs/TransactionDetailDialog.tsx')
+    // ⚠️ **只查「模式出现过」是不够的** —— 我第一版就写成
+    //   `expect(src).toMatch(/\(tx\.splits\?\.length \?\? 0\) >= 2/)`,
+    //   然后用 `{false && (...)} 包一层照样通过:子串还在,代码死了。
+    //   这正是本次审计批评的那类护栏(「声明存在性」而非「真的渲染」)。
+    //
+    //   所以改成**行首锚定**:那一行的花括号后必须紧跟条件本身,
+    //   前面不许有 false/0/!true 之类的前缀。
+    expect(_gatingLine(src, 'tx.splits?.length ?? 0')).toBe(
+      '{(tx.splits?.length ?? 0) >= 2 ? (',
+    )
+    // 每行要显示账户名或 id,不能只显示金额
+    expect(src).toMatch(/leg\.account_name \|\| leg\.account_id/)
+  })
+
+  it('详情弹窗显示「合计」以守住「父 amount 仍是总额」', () => {
+    // 用户看到腿加起来 == 上面那个大金额,才不会以为少了一笔
+    const src = _read('components/dialogs/TransactionDetailDialog.tsx')
+    expect(src).toMatch(/splitTotal/)
+    expect(src).toMatch(/reduce\(\(s, l\) => s \+ l\.amount, 0\)/)
+  })
+
+  it('TransactionRow 在有腿时打组合支付徽标', () => {
+    // 没有它,账户详情里 5000 vs 余额只动 3000 无法解释,
+    // 用户最可能的归因是「余额算错了」→ 手动改初始余额。
+    const src = _read('../../../packages/web-features/src/components/TransactionRow.tsx')
+    // 同上:行首锚定,不许被 `false &&` 之类的前缀绕过
+    expect(_gatingLine(src, 'row.splits?.length ?? 0')).toBe(
+      '{(row.splits?.length ?? 0) >= 2 ? (',
+    )
+    expect(src).toMatch(/transactions\.splits\.badge/)
+  })
+
+  it('腿的金额是原币,不折算', () => {
+    // 组合支付跨币种被服务端刻意拒绝(转账两端共用一个 amount),
+    // 所以腿与父必然同币种 —— 折算反而会引入汇率时点问题。
+    //
+    // ⚠️ 只查**腿那块**,不查整个文件:弹窗别处合法地显示 native_amount
+    //   (“≈ 本位币”换算行)。第一版查整份文件,被自己误报成红。
+    const src = _read('components/dialogs/TransactionDetailDialog.tsx')
+    const block = src.slice(src.indexOf('组合支付(0021)'))
+    expect(block).not.toMatch(/native_amount/)
+    expect(block).not.toMatch(/baseAmount|toBaseCurrency|convertToBase/)
+  })
+
+  it('i18n 三语都有 detail.transaction.splitTitle / splitTotal', () => {
+    for (const f of ['en.ts', 'zh-CN.ts', 'zh-TW.ts']) {
+      const src = _read(path.join('i18n', f))
+      for (const k of ['splitTitle', 'splitTotal']) {
+        expect(src, `${f} 缺 detail.transaction.${k}`)
+          .toMatch(new RegExp(`'detail\.transaction\.${k}'`))
+      }
+    }
+  })
+
+  it('i18n 三语都有 transactions.splits.badge', () => {
+    for (const f of ['en.ts', 'zh-CN.ts', 'zh-TW.ts']) {
+      const src = _read(path.join('i18n', f))
+      expect(src, `${f} 缺 transactions.splits.badge`)
+        .toMatch(/'transactions\.splits\.badge'/)
+    }
+  })
+})

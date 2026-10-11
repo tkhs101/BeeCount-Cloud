@@ -274,6 +274,24 @@ export function TransactionRow({
           isCompact ? 'text-[11px]' : 'text-xs'
         } text-muted-foreground`}>
           <span className="font-mono tabular-nums">{formatDateTime(row.happened_at)}</span>
+          {/* 组合支付(0021)徽标。
+
+              没有它,用户在**账户详情**里看到一笔 5000,而那个账户的余额
+              只少了 3000 —— 界面上没有任何东西解释这个差异。
+              最可能的归因是「余额算错了」,然后去手动改初始余额,
+              把本来对的数据改坏。
+
+              徽标说「这笔是拆分的」,点开详情就能看到每条腿各是多少。 */}
+          {(row.splits?.length ?? 0) >= 2 ? (
+            <span
+              className="truncate rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
+              title={t('transactions.splits.title')}
+            >
+              {t('transactions.splits.badge', {
+                count: String(row.splits!.length),
+              })}
+            </span>
+          ) : null}
           {accountText && accountText !== '-' ? (
             <span className="truncate">· {accountText}</span>
           ) : null}
