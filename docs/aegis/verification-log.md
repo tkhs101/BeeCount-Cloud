@@ -857,3 +857,50 @@ release ...")` —— 那是**锁释放**的异常,不是状态机的一部分�
 **已闭环**:服务端日志已能回答「为什么没动」(第 69 轮 + 第 71 轮结构性验证)。
 **未闭环**:响应仍不暴露 status;「手动触发真的会还钱」仍无断言 ——
 但**现在可以写了**,因为 status 一旦暴露,判据就不再需要间接推断。
+
+## 第 74 轮:动手了,**没做成,撤回** —— 但暴露了一个真机制
+
+按第 73 轮的决定给 `run_autorepay_now` 单独的响应类型。四处都改对了
+(schema 加 `AutoRepayRunResult(WriteCommitMeta)`、端点 `response_model`
+与 `status=outcome.status`、`_shared` 的 import),**但跑不起来**。
+
+## 真机制:`_shared.__all__` 是**白名单**,且不止一层
+
+```
+NameError: name 'AutoRepayRunResult' is not defined
+```
+
+查到的链路是三跳:
+
+| 层 | 做了什么 |
+|---|---|
+| `accounts.py` | `from ._shared import *` —— 桶导入 |
+| `_shared.py` | `from ...schemas import (...)` —— **显式列举** |
+| `_shared.py:1325` | `__all__ = [...]` —— **显式白名单** |
+
+所以「在 import 块里加了名字」**不够**,还要进 `__all__`。我补了
+`__all__` 之后**从 57 个 error 变成 60 个** —— 说明还有别的层没对上,
+而我上下文不够继续查。
+
+📌 **这解释了本仓 `F405` 为什么有 1131 条** —— CLAUDE.md 一直说
+「桶导入模式的必然结果」,但没说清它其实是**两层白名单**:
+`_shared` 的 import 列举 + `__all__`。**加一个从 schemas 透出的新名字,
+两处都要动**,漏一处就是 `NameError`,而且报错指向使用者、
+不指向真正漏掉的那一层。
+
+⚠️ 这也说明:`_shared.__all__` 是**第三张手工登记表**(CLAUDE.md 已经记了
+`_projection_row_to_tx_dict` / `_truncate_ledger` / `_LEDGER_MERGE_SPECS`),
+**但它没有默认红的护栏**。加 schema 名字忘了加 `__all__`,要等运行时炸。
+
+## 撤回,不留半成品
+
+`git checkout` 三个文件 -> **889 passed / ruff 1253**,diff 全 0。
+57-60 个 collection error 的状态**绝不能留在仓库里**。
+
+📌 **给下一轮的具体做法**:端点改成 `response_model=AutoRepayRunResult`
+之后,**不要靠桶导入** —— 在 `accounts.py` 里显式
+`from ...schemas import AutoRepayRunResult`,跳过 `_shared` 那一跳。
+或者干脆给 `__all__` 加一条护栏(枚举 schemas 里所有 `*Result`/`*Meta`
+类,要求都在 `__all__` 里),这样这类错误**默认红**。
+
+## 本轮无代码改动(已撤回),状态不变。
