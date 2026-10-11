@@ -164,6 +164,11 @@ def test_batch_payload_builder_copies_every_item_field() -> None:
         "currency_code": "CNY",
         "native_amount": 3280.0,
         "tax_amount": 298.0,
+        # 组合支付(0021):新增这个字段时**必须**同时进 fixture ——
+        # 下面那条自检会点名它。加了模型字段却忘了加 fixture,
+        # 这条护栏会红(而不是绿着放过),这正是它设计的意图。
+        "splits": [{"account_id": "acc-a", "amount": 2000.0},
+                   {"account_id": "acc-b", "amount": 1280.0}],
     }
     item = BatchTransactionItem(**full)
     # schema 里没有的字段不许出现在 fixture 里,否则这条测试会跟着实现漂移

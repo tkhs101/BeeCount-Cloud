@@ -526,3 +526,49 @@ def test_mcp_update_transaction_omitting_splits_keeps_legs(monkeypatch):
         assert after == before, f"只改备注不该动腿:{before} -> {after}"
     finally:
         app.dependency_overrides.clear()
+
+
+# --------------------------------------------------------------------------
+# 24: 批量入口也能建组合支付(此前 `BatchTransactionItem` 独缺 splits)   #
+# --------------------------------------------------------------------------
+#
+# 它声称「跟 WriteTransactionCreateRequest 同 schema」,而那个 schema 有 splits。
+# 缺了之后:MCP 批量导组合支付 → 父交易金额照记、账户照扣,**分摊明细没了** ——
+# 而「无账户的支出」正是它本来的样子,**看不出异常**。
+#
+# ⚠️ 字段对照(`test_tx_field_parity`)能证明「进了 payload」,
+# 这一条证明**真的落库了** —— 前者是结构,后者是行为。
+
+
+def test_batch_create_supports_split_payment():
+    client, TS, H, ids = _setup("batchsplit@t.com")
+    try:
+        r = client.post(
+            "/api/v1/write/ledgers/lg1/transactions/batch",
+            headers=H,
+            json={
+                "base_change_id": 0,
+                "transactions": [{
+                    "tx_type": "expense",
+                    "amount": 5000.0,
+                    "happened_at": "2026-10-03T12:00:00+00:00",
+                    "category_name": "购物",
+                    "category_kind": "expense",
+                    "note": "批量组合支付",
+                    "splits": [
+                        {"account_id": ids["招行卡"], "amount": 3000.0},
+                        {"account_id": ids["现金"], "amount": 2000.0},
+                    ],
+                }],
+            },
+        )
+        assert r.status_code == 200, r.text
+
+        txs = client.get("/api/v1/read/ledgers/lg1/transactions", headers=H).json()
+        tx = next(t for t in txs if t["amount"] == 5000.0)
+        legs = {s["account_id"]: float(s["amount"]) for s in (tx.get("splits") or [])}
+        assert legs == {ids["招行卡"]: 3000.0, ids["现金"]: 2000.0}, (
+            f"批量建的组合支付没落库腿:{legs}"
+        )
+    finally:
+        app.dependency_overrides.clear()

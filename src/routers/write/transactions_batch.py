@@ -39,6 +39,7 @@ from ...models import (
     User,
     UserTagProjection,
 )
+from ...schemas import TxSplit
 from ...services.ai.image_cache import consume_image
 from ...snapshot_mutator import create_tag, create_transaction
 from ._shared import (
@@ -80,6 +81,12 @@ class BatchTransactionItem(BaseModel):
     # `req.model_dump()` 时已经被丢掉,后面所有环节都拿不到,而且不报错。
     # 这正是 issue #513 那类「穿过 pydantic 边界丢字段」的 bug。
     tax_amount: float | None = None
+    # 组合支付(0021)。**同样漏过** —— docstring 说本模型「跟
+    # `WriteTransactionCreateRequest` 同 schema」,而那个 schema 有 `splits`。
+    # 少了它,MCP 批量导组合支付时腿被静默丢弃:父交易金额照记、
+    # 账户照扣,但**分摊明细没了** —— 而「无账户的支出」正是它本来的样子,
+    # 看不出异常。
+    splits: list[TxSplit] | None = None
 
 
 class BatchCreateTxRequest(BaseModel):
@@ -400,6 +407,10 @@ def _build_tx_payload(
     # 而报错为零:单条路径正常,只有批量丢。
     if item.tax_amount is not None:
         payload["tax_amount"] = item.tax_amount
+    # 组合支付(0021):同样**必须显式透传**。注意是 `is not None` 而不是
+    # 真假判断 —— `splits: []` 是**清除信号**,空 list 不能当成「没传」。
+    if item.splits is not None:
+        payload["splits"] = [s.model_dump() for s in item.splits]
     # 合并 auto_tag(LLM 已识别的 tags + 自动加的 AI 记账 / 图片记账)
     user_tags = list(item.tags or [])
     merged_tags = user_tags + [t for t in auto_tag_names if t and t not in user_tags]
