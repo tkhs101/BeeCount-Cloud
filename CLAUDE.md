@@ -161,7 +161,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | **848 passed** |
+| `pytest -q` | 绿 | **绿** | **851 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **307 passed** |
@@ -491,6 +491,42 @@ if row.tax_amount is not None:      # 列名在这里
 引用」,并拿它解释账户侧为什么不行 —— 结果那句话本身是错的,那个 `if`
 就是第二处。**拿一个没验证过的假设去解释另一个观察**,等于把两个错误
 绑在一起。
+
+### 「分层测试全绿 != 拼起来能工作」—— 定期真跑一遍
+
+`tests/test_smoke_real_app.py` 起真 app(跑 alembic + 真路由 + 真鉴权 +
+真 self-call 回环),走完:注册 -> 建账本 -> 建卡 -> 记账 -> 读应还 ->
+绑自动还款 -> 手动触发。
+
+**不可替代**:新增字段「加进 schema 了但没接到读端点」这类失败,分层测试
+**结构上就查不到**。变异验证确认它能抓到(字段全不返回 / 字段在但值错,
+两条都红)。
+
+它与 `test_credit_autorepay_e2e.py` 分工:后者管自动还款那条链路,
+本条管**装配**能不能起来(alembic、路由注册、依赖注入、鉴权、分类种子)。
+
+### ⚠️ 测试文件之间也会互相看不见
+
+第一版在模块顶层设 `AUTOREPAY_SCHEDULER=off`(想让后台任务别干扰断言),
+**污染了整个 pytest 会话**:`test_credit_autorepay_scheduler.py` 6 条全红 ——
+它正是按这个开关决定是否注册调度器。
+
+表现是**单跑绿、全量红**,而且很难联想到是自己干的(`src.main` 是
+import 即产生副作用的模块)。
+
+```python
+_PRE = {k: os.environ.get(k) for k in (...)}   # 改之前先存
+# ... 设环境变量、import src ...
+for k, v in _PRE.items():                       # import 后立刻还原
+    os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+```
+
+凡是**模块顶层改全局状态**(env、cwd、sys.path、event loop、模块单例)的
+测试文件,都必须做这个还原。
+
+还有一条:`src.database` 的 engine 是**模块级全局**,连接一直持有,
+pytest 结束时删临时库会 `PermissionError (WinError 32)`。DB 文件名带 pid,
+残留交给系统清理 Temp。
 
 ### 变异审计脚本
 
