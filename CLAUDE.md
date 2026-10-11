@@ -161,7 +161,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | **857 passed** |
+| `pytest -q` | 绿 | **绿** | **859 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **307 passed** |
@@ -527,6 +527,25 @@ if row.tax_amount is not None:      # 列名在这里
 
 **规则:新增函数的调用点也该被测**,不只是它的逻辑。
 
+### 改了 `projection.py` 就要想一遍 sync
+
+`sync/push` 的写入路径是 `sync_applier` -> `upsert_tx` -> **`_parse_happened_at`**。
+所以**任何对 `projection.py` 的改动都直接改变同步语义**,而同步是
+`CLAUDE.md` 里 bug 密度最高的模块。
+
+本会话第 7 轮修 UTC 归一时没意识到这一点,隔了 11 轮才补上同步侧的
+真跑验证(`test_smoke_real_app.py` 里的
+`test_sync_push_preserves_the_instant_of_offset_timestamps`)。结论是对的,
+但**确认它需要单独一条测试** —— 单元测试测函数,测不到「经过 push 之后」。
+
+### 两个 scope 事实(踩过才知道)
+
+- `/sync/push` 要 **app scope** —— `client_type="web"` 注册的 token 直接 403
+- app token 在 **pytest 里不能走 REST 写路径**:`tests/conftest.py` 有
+  `ALLOW_APP_RW_SCOPES=false`,把 app scope 的写关掉了(生产加固同理)。
+  判断的是 **scope 不是 client_type** —— 所以「注册成 app 就什么都能写」
+  是错的
+
 ### 前后端字段名契约(跨语言护栏)
 
 前端大量派生函数是「字段缺失就**静默**返回 null / 不渲染」:
@@ -560,8 +579,20 @@ MCP 的 `StreamableHTTPSessionManager` 是**模块级单例**,`.run()` 只能调
 (`duplicated account name`)。合并后各测试要用**独立账户名**。
 
 这两条加上上面那条「模块顶层改 env」,是同一族问题:
-**「单跑绿、全量红」的三种来源** —— 模块级 env、模块级单例、模块级全局
-DB engine。
+**「单跑绿、全量红」的四种来源**:
+
+| # | 来源 | 症状 |
+|---|---|---|
+| 1 | 模块级改 `os.environ` | 污染同会话其他测试的判断 |
+| 2 | 模块级单例(MCP session manager) | 第二个 `TestClient(app)` 直接 RuntimeError |
+| 3 | 模块级全局 DB engine | 第二个测试文件设的 `DATABASE_URL` **根本没生效** |
+| 4 | 全局 engine 还持有连接 | 删临时库 `PermissionError (WinError 32)` |
+
+第 3 条最隐蔽:pytest **按文件名顺序收集**,字母序靠后的文件设
+`DATABASE_URL` 时 `src.main` 早被别的测试 import 过了,engine 早已建好。
+
+根治(第 3 条):**别依赖全局状态** —— 自建 engine,用
+`app.dependency_overrides[get_db]` 注回去,import 顺序就无关了。
 
 ### CSV 往返要真跑(静默损坏)
 
