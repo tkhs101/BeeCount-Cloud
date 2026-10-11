@@ -220,19 +220,33 @@ chunk 叫什么名字不影响它在不在入口的 import 图里。
 | `cmdk` | 44 kB | `AppHeader.tsx` **静态** import 了 `CommandPalette.tsx`(命令面板本该按需打开) |
 | `poster` | 36 kB | `html-to-image` + `qrcode`,只被 `PosterDialog` / `TwoFactorAuthSection` 引用,而这两处**都在 lazy 路由下** —— 按理不该 eager ⚠️ 见下 |
 
-⚠️ **待验证假设(我没验完,别当结论)**: `@beecount/web-features` 的根
-`index.ts` 是 `export *` 巨型桶(43 条导出,含 `./features/annual-report`),
-**53 个文件**从 `@beecount/web-features` 整包引用。入口图里
-`AppHeader.tsx` 与 `CommandPalette.tsx` 确实**从桶 import 值**。
+#### ⚠️「桶引用导致 eager」这条假设 —— **已实验推翻,别再试**
 
-桶引用是 `export *` 链 —— 典型的 tree-shaking 杀手。但我这一轮**先栽后立**:
-我一度断言「AppShell 从桶整包引,所以是根因」,而实际它只 import 了一个
-**type**(编译期擦除)。**这条假设还没验完**,验法:
+上一轮我怀疑 `@beecount/web-features` 的 `export *` 巨型桶(43 条导出、
+53 个文件整包引用)是 `poster` 进首屏的原因。**这一轮验了,不成立**:
 
-```bash
-# 把 CommandPalette 的桶引用换成具体子路径,build 后看 poster 是否还 preload
-grep 'modulepreload' frontend/apps/web/dist/index.html
-```
+| | preload | 首屏 |
+|---|---|---|
+| 基线(桶引用) | 3 条 | 1479 kB |
+| 把 `CommandPalette` 换成**子路径**引用 | 3 条 | **1479 kB** |
+
+**完全没变。** 也就是说 rollup 对 `export *` 链的 tree-shaking 是有效的 ——
+桶不是原因。
+
+顺带查清的两件事:
+
+- `packages/web-features/package.json` **没有 `exports` 字段**,只有
+  `main`/`types` 指向 `src/index.ts` —— 所以**所有消费者只能用根桶**。
+  想用子路径还得先给 `tsconfig.json` 加 `"@beecount/web-features/*"`
+  通配(实测能过 `tsc` + `vite build`,但**对首屏毫无影响**)
+- `cmdk` 的原因**是验过的**:`AppHeader.tsx` 静态 import 了
+  `CommandPalette.tsx`,而后者用 cmdk。命令面板本该按需打开,
+  这是唯一一条已定位且可改的
+
+`poster`(36 kB)为什么还在首屏,**我没查出来**。已排除:
+它的两个引用方(`PosterDialog` / `TwoFactorAuthSection`)都在
+`React.lazy` 路由下、桶引用也不是原因。下一个人别重复走这两条路,
+要查就从「`dist/index.html` 里 poster 那行是谁发出来的」入手。
 
 #### i18n 231 kB:第二次评估,**仍然暂缓**(理由比上次更具体)
 

@@ -1,0 +1,8 @@
+docs: 「桶引用导致 eager」的假设已实验推翻,并记下已排除的路
+
+CommandPalette 换成子路径引用后首屏完全没变(3 条 / 1479 kB),
+说明 rollup 对 export * 链的 tree-shaking 有效,桶不是原因。
+
+顺带查清:web-features 没有 exports 字段(只能用根桶);cmdk 的原因已验
+(AppHeader 静态引 CommandPalette),是唯一一条可改的。
+poster 为什么还在首屏我没查出来,并写下已排除的两条路,免得重复走。
