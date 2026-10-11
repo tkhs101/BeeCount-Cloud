@@ -158,6 +158,35 @@ def _upsert(db: Session, model, pk_fields: tuple[str, ...], values: dict) -> Non
 # 单实体:upsert / delete                                                       #
 # --------------------------------------------------------------------------- #
 
+def _resolve_account_name_by_sync_id(
+    db: Session, *, user_id: str, sync_id: str | None
+) -> str | None:
+    """按 (user_id, sync_id) 反查账户名 —— **id → name** 的方向。
+
+    ## 为什么需要
+
+    写路径原来只做 name → id(见上面的 `_resolve_account_sync_id_by_name`,
+    为 #41 的「只带账户名」老数据准备的)。**反方向没有** —— 于是只带
+    sync_id 不带名字的写入,投影里的 `*_account_name` 恒为 NULL。
+
+    实际撞上的是**信用卡自动还款**:它的 self-call 刻意只发
+    `from_account_id` / `to_account_id`(存 sync_id 不存名字,免得账户改名
+    后配置失效),于是那笔自动还款的交易在列表里**两个账户名都是空的** ——
+    而它正是用户第一时间要去找来确认「还了没」的那一笔。
+
+    前端 web 转账走的是按名定位(`TransactionsPage` 传 account_name),
+    所以线上老数据不受影响;补上这一条只是让「只带 id」的写入也有名字。
+    """
+    if not sync_id:
+        return None
+    return db.scalar(
+        select(UserAccountProjection.name).where(
+            UserAccountProjection.user_id == user_id,
+            UserAccountProjection.sync_id == sync_id,
+        )
+    )
+
+
 def _resolve_account_sync_id_by_name(
     db: Session, *, user_id: str, name: str | None
 ) -> str | None:
@@ -290,6 +319,18 @@ def upsert_tx(
     #
     # 所以:先各自解析,transfer 若恰有一端解析失败,**把另一端也一并撤回**。
     # 宁可整笔漏算(data_cleanup 的孤儿扫描 / 对账能兜住),不可单边扣钱。
+    # id → name 的反向补齐:只带了 sync_id 的写入(自动还款的 self-call
+    # 就是)原本会让 `*_account_name` 恒为 NULL,交易列表里那一行
+    # 两个账户都是空的。
+    for id_key, name_key in (
+        ("account_sync_id", "account_name"),
+        ("from_account_sync_id", "from_account_name"),
+        ("to_account_sync_id", "to_account_name"),
+    ):
+        if values[id_key] and not values[name_key]:
+            values[name_key] = _resolve_account_name_by_sync_id(
+                db, user_id=user_id, sync_id=values[id_key])
+
     resolved: dict[str, str | None] = {}
     for id_key, name_key in (
         ("account_sync_id", "account_name"),

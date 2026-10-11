@@ -323,3 +323,42 @@ def test_real_path_via_async_context(money_env) -> None:
     after = _balances(client, H)
     assert after["Card"] == pytest.approx(0.0), after
     assert after["Savings"] == pytest.approx(97000.0), after
+
+
+def test_real_path_fills_both_account_names(money_env) -> None:
+    """自动还款那笔 transfer 必须带**两端账户名**。
+
+    写路径原来只做 name → id(为 #41 的「只带账户名」老数据准备),
+    **没有反方向**。而自动还款的 self-call 刻意只发 sync_id
+    (存 id 不存名字,免得账户改名后配置失效),于是那笔交易的
+    `from_account_name` / `to_account_name` 恒为 None。
+
+    后果:交易列表里那一行**两个账户都是空的** —— 而它正是用户第一时间
+    要去找来确认「还了没」的那一笔。前端按名定位的老路径不受影响,
+    所以这个洞只在自动还款这一条路上露出来。
+    """
+    client, TS, H, ids = money_env
+    client.post(f"/api/v1/write/ledgers/{LEDGER}/transactions", headers=H, json={
+        "base_change_id": 0, "tx_type": "expense", "amount": 5000.0,
+        "happened_at": "2026-10-04T09:00:00+00:00",
+        "account_id": ids["Card"], "category_name": "Shop",
+        "category_kind": "expense"})
+
+    with TS() as db:
+        card = db.scalar(select(UserAccountProjection).where(
+            UserAccountProjection.sync_id == ids["Card"]))
+        repay_one(db, user_id=card.user_id, card=card,
+                  today=datetime(2026, 10, 4).date(),
+                  self_call=make_self_call())
+
+    with TS() as db:
+        rows = db.scalars(select(ReadTxProjection).where(
+            ReadTxProjection.tx_type == "transfer")).all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.from_account_name, "转出账户名是空的 —— 用户认不出这笔从哪扣的"
+    assert row.to_account_name, "转入账户名是空的 —— 用户认不出这笔还给谁"
+    assert row.from_account_name == "Savings"
+    assert row.to_account_name == "Card"
+    # 备注也是用户在列表里认出这笔的唯一线索
+    assert (row.note or "").startswith("自动还款"), row.note
