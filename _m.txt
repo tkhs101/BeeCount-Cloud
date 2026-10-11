@@ -1,7 +1,0 @@
-docs: 记「给 _MergeSpec.model 换精确类型」这条路走不通
-
-试了三版,mypy 63 -> 65 -> 81,全部回退。原因:单个 Protocol 把四张
-user-global 表判成不兼容(它们没有 ledger_id,走 _merge_user_scoped);
-加 union 后整张 _LEDGER_MERGE_SPECS 登记表和全部下游被拖进来,7 条变 25 条。
-
-教训:改类型标注前先量会波及多少下游 —— 收紧一个标注不等于只少那几条。
