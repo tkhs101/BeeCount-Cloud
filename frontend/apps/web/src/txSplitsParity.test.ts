@@ -330,3 +330,50 @@ describe('splits —— 腿的账户下拉必须 pin 住当前值', () => {
     }
   })
 })
+
+
+describe('「本期应还」必须真的显示出来', () => {
+  const _read = (rel: string) =>
+    fs.readFileSync(path.resolve(__dirname, rel), 'utf8')
+  const DIALOG = 'components/dialogs/AccountDetailDialog.tsx'
+
+  it('详情弹窗渲染了本期应还', () => {
+    // `compute_statement` 此前只被执行器调用一次(决定扣多少),
+    // **没有任何出口给用户**。用户在还款日之前无法确认自己还得起还不起,
+    // 绑了自动还款也不知道会自动扣多少。
+    const src = _read(DIALOG)
+    // 派生函数在模块级(避开组件内局部 fmt 的作用域问题)
+    expect(src).toContain('function statementOut(')
+    // 渲染出口 + 标签
+    expect(src).toContain('detail.account.statementOutstanding')
+    // 换行用 [\r\n]+ —— 这个仓库在 Windows 上文件是 CRLF,
+    // 写死 \n 的正则匹配不上(我在这里错过一次)。
+    expect(src).toMatch(/\{statement \? \([\r\n]+/)
+  })
+
+  it('三缺一就不显示', () => {
+    // 后端在「不是信用卡 / 没填还款日 / 算失败」三种情况下返回 None。
+    // 部分缺失说明数据不完整,显示一半比不显示更让人困惑。
+    const src = _read(DIALOG)
+    expect(src).toMatch(/typeof bill !== 'number' \|\| typeof outstanding !== 'number'/)
+    expect(src).toMatch(/if \(!due\) return null/)
+  })
+
+  it('0 也显示,不是空白', () => {
+    // 已还清是**有效状态**。空白会被理解成「没数据」,
+    // 而用户需要知道「这期不用管」。
+    const src = _read(DIALOG)
+    expect(src).toMatch(/outstanding: fmt\(outstanding\)/)
+  })
+
+  it('i18n 三语都有 detail.account.statement*', () => {
+    for (const f of ['en.ts', 'zh-CN.ts', 'zh-TW.ts']) {
+      const src = _read(path.join('i18n', f))
+      for (const k of ['statementOutstanding', 'statementOfBill',
+                       'statementDueOn']) {
+        expect(src, `${f} 缺 detail.account.${k}`)
+          .toMatch(new RegExp(`'detail\.account\.${k}'`))
+      }
+    }
+  })
+})

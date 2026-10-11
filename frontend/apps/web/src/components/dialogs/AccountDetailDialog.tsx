@@ -40,6 +40,46 @@ import { useAuth } from '../../context/AuthContext'
 import type { DetailScope } from '../../lib/txDialogEvents'
 import { DetailScopeToggle } from './DetailScopeToggle'
 
+/**
+ * 「本期应还」三个字段的展示形态(0022 展示出口)。
+ *
+ * 三缺一就返回 null —— 后端在「不是信用卡 / 没填还款日 / 算失败」三种情况下
+ * 都会返回 None,而**部分缺失**说明数据不完整,显示一半比不显示更让人困惑。
+ *
+ * 后端已做跨账本聚合,所以这个数就是用户在界面上看到的欠款,
+ * 与自动还款实际扣的是同一个。
+ *
+ * **在模块级就把数字格式化成字符串**:`fmt` 是每个组件自己的局部 const,
+ * 跨组件传 number 会被 TS 的 optional 链搞成 `number | null | undefined`
+ * (在这个文件里试过三次都没收窄对)。字符串没有这个问题。
+ */
+function statementOut(account: AccountWithStats): {
+  outstanding: string
+  bill: string
+  due: string
+  /** 已手动还过一部分(本期还欠的 < 账单额) */
+  partial: boolean
+} | null {
+  const bill = account.statement_bill
+  const outstanding = account.statement_outstanding
+  const due = account.next_due_date
+  if ((account.account_type || '') !== 'credit_card') return null
+  if (typeof bill !== 'number' || typeof outstanding !== 'number') return null
+  if (!due) return null
+  const fmt = (v: number) =>
+    v.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+  return {
+    outstanding: fmt(outstanding),
+    bill: fmt(bill),
+    due,
+    partial: outstanding !== bill,
+  }
+}
+
+
 type AccountWithStats = ReadAccount & {
   tx_count?: number | null
   income_total?: number | null
@@ -248,6 +288,7 @@ function AccountCardInfo({
   const creditLimit = isCreditCard ? account.credit_limit : null
   const billingDay = isCreditCard ? account.billing_day : null
   const paymentDueDay = isCreditCard ? account.payment_due_day : null
+  const statement = statementOut(account)
 
   // 信用卡已用额度 = -balance(余额为负表示欠款),剩余额度 = limit - used。
   // 这是粗略估算 — 没考虑账单周期,只看终身累计。但作为"大致还能刷多少"
@@ -328,6 +369,28 @@ function AccountCardInfo({
               value={t('detail.account.dayOfMonth', { day: paymentDueDay })}
               hint={t('detail.account.daysUntil', { days: daysUntilDay(paymentDueDay) })}
               urgent={daysUntilDay(paymentDueDay) <= 3}
+            />
+          ) : null}
+          {/* 本期应还(0022 的展示出口)。
+
+              此前 `compute_statement` 只在执行器里跑过,用来决定扣多少,
+              **没有任何出口给用户** —— 详情弹窗只有「账单日 X / 还款日 Y /
+              还有 N 天」这类静态日号。用户在还款日之前无法确认自己还得起
+              还不起,绑了自动还款也不知道会自动扣多少。
+
+              0 也显示(「¥0」而不是空白)—— 已还清是个**有效状态**。 */}
+          {statement ? (
+            <CardInfoItem
+              label={t('detail.account.statementOutstanding')}
+              value={statement.outstanding}
+              hint={statement.partial
+                ? t('detail.account.statementOfBill', {
+                    bill: statement.bill,
+                  })
+                : t('detail.account.statementDueOn', { due: statement.due })}
+              urgent={statement.outstanding !== '0.00'
+                && typeof paymentDueDay === 'number'
+                && daysUntilDay(paymentDueDay) <= 3}
             />
           ) : null}
         </div>

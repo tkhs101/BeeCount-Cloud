@@ -247,6 +247,11 @@ export type ReadAccount = {
   billing_day?: number | null
   /** 还款日(1-31),仅 credit_card。 */
   payment_due_day?: number | null
+  // ---- 本期应还(0022 的展示出口)---------------------------------------- #
+  // 只对设了还款日的信用卡算;None = 没算/不是信用卡。
+  statement_bill?: number | null
+  statement_outstanding?: number | null
+  next_due_date?: string | null
   /** 开户行,bank_card / credit_card 元信息。 */
   bank_name?: string | null
   /** 卡号后四位,bank_card / credit_card。 */
