@@ -229,6 +229,12 @@ export type ReadAccount = {
   currency: string | null
   initial_balance: number | null
   last_change_id: number
+  // ---- 信用卡自动还款(0022)------------------------------------------- #
+  // 服务端 ReadAccountOut 返回这三项。没有它们,详情弹窗读不到绑定状态,
+  // 「配置失效」也无从判断。
+  autorepay_enabled?: boolean | null
+  autorepay_from_account_sync_id?: string | null
+  autorepay_last_period?: string | null
   ledger_id?: string | null
   ledger_name?: string | null
   created_by_user_id?: string | null

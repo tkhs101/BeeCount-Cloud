@@ -271,3 +271,27 @@ describe('自动还款 —— 手动触发必须有前端入口', () => {
     }
   })
 })
+
+
+describe('自动还款 —— 配置失效必须可见', () => {
+  const _read = (rel: string) =>
+    fs.readFileSync(path.resolve(__dirname, rel), 'utf8')
+
+  it('非信用卡但留着 enabled 时,仍渲染一条告警', () => {
+    // 用户在账户页把卡改成 bank_card 或清掉还款日 → 服务端 merge
+    // **保留** autorepay_enabled=true(缺键保留),但调度永不触发。
+    // 而 AutoRepaySection 的 gate 要 isCreditCard && paymentDueDay,
+    // 整块不渲染 —— 用户找不到任何地方看到「我配过」。
+    const src = _read('components/dialogs/AccountDetailDialog.tsx')
+    expect(src).toMatch(/\{!isCreditCard && account\.autorepay_enabled \? \(/)
+    expect(src).toMatch(/detail\.autoRepay\.staleConfig/)
+  })
+
+  it('i18n 三语都有 detail.autoRepay.staleConfig', () => {
+    for (const f of ['en.ts', 'zh-CN.ts', 'zh-TW.ts']) {
+      const src = _read(path.join('i18n', f))
+      expect(src, `${f} 缺 detail.autoRepay.staleConfig`)
+        .toMatch(/'detail\.autoRepay\.staleConfig'/)
+    }
+  })
+})

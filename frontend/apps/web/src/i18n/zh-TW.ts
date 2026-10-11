@@ -1188,6 +1188,7 @@ const zhTW = {
   'detail.autoRepay.source': '扣款帳戶',
   'detail.autoRepay.sourceMissing': '扣款帳戶已不存在或幣種變了,自動還款會被跳過',
   'detail.autoRepay.sourcePlaceholder': '選擇帳戶',
+  'detail.autoRepay.staleConfig': '這張卡留著自動還款配置,但已不符合條件(帳戶類型或還款日變了)—— 不會自動還款。',
   'txList.noMore': '— 沒有更多了 —',
   'txList.loading': '載入中…',
   'logs.title': '伺服器日誌',

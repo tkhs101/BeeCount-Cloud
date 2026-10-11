@@ -1190,6 +1190,7 @@ const en = {
   'detail.autoRepay.source': 'Pay from',
   'detail.autoRepay.sourceMissing': 'The paying account is gone or in a different currency — repayment will be skipped',
   'detail.autoRepay.sourcePlaceholder': 'Choose an account',
+  'detail.autoRepay.staleConfig': 'This account has an auto-repayment saved but is no longer eligible (account type or due day changed) — repayment will not run.',
   'txList.noMore': '— No more —',
   'txList.loading': 'Loading…',
   'logs.title': 'Server logs',

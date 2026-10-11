@@ -332,6 +332,23 @@ function AccountCardInfo({
           ) : null}
         </div>
       ) : null}
+      {/* 配置失效的告警(0022)。
+
+          用户在账户页把这张卡从 credit_card 改成 bank_card、或把还款日
+          清空 → 服务端 merge **保留** autorepay_enabled=true
+          (缺键保留语义),但 payment_due_day 变 null → 调度永不触发。
+
+          而下方的 AutoRepaySection **整块不渲染**(gate 要
+          isCreditCard && paymentDueDay)—— 用户在界面上**找不到任何地方**
+          能看到「你有个自动还款配置」。只有 6 个月后对账才发现。
+
+          这是 CLAUDE.md 里 payment_due_day=0 → 调度永远不触发 那个
+          「烧钱陷阱」的前置版本,恰好绕开了唯一的告警点。 */}
+      {!isCreditCard && account.autorepay_enabled ? (
+        <p className="mt-3 rounded-md border border-expense/40 bg-expense/5 px-3 py-2 text-xs text-expense">
+          {t('detail.autoRepay.staleConfig')}
+        </p>
+      ) : null}
       {/* 自动还款(0022)—— 挂在还款日那一格下方:那里已经有「每月 N 号 /
         还有 N 天」,自动还款是这条信息的自然延伸,不新增一级导航。 */}
       {isCreditCard && paymentDueDay && onSaveAutoRepay && allAccounts ? (

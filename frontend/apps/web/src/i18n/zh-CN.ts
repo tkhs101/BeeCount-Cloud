@@ -1229,6 +1229,7 @@ const zhCN = {
   'detail.autoRepay.source': '扣款账户',
   'detail.autoRepay.sourceMissing': '扣款账户已不存在或币种变了,自动还款会被跳过',
   'detail.autoRepay.sourcePlaceholder': '选择账户',
+  'detail.autoRepay.staleConfig': '这张卡留着自动还款配置,但已不符合条件(账户类型或还款日变了)—— 不会自动还款。',
   'txList.noMore': '— 没有更多了 —',
   'txList.loading': '加载中…',
   'logs.title': '服务端日志',
