@@ -775,3 +775,45 @@ INFO beecount.credit_autorepay:repay.py:162 autorepay.done
 
 日志改动**确实生效**(status=`done` 已实测)。本轮无代码改动,
 889 passed / ruff 1253 状态不变。
+
+## 第 71 轮:换一种**更强**的判据 —— 结构性覆盖,不是「跑一次看到了」
+
+第 70 轮我用「跑测试看到日志」确认了改动生效。但那只是**一次观测**。
+
+这轮问了个更根本的问题:**`repay_one` 里有没有哪条返回路径绕过了那条日志?**
+
+```
+awk '/^def repay_one/,/^def _repay_inner/' | grep -E "return |_done\("
+```
+
+结果:**三个 `return` 全部包在 `_done(...)` 里,一条都没漏** ——
+
+| 返回路径 | 状态 | 过日志 |
+|---|---|---|
+| `_repay_inner` 正常返回 | `done` 等 | ✅ |
+| `except AutoRepayConfigError` | `skipped_invalid_config` | ✅ |
+| `except Exception` | `failed` | ✅ |
+
+📌 **这比「跑一次看到了」强**:一次观测只证明「这条路上有日志」,
+**结构检查证明「所有路上都有日志」** —— 后者才是要的那个性质。
+
+## 从源码穷举出来的准确清单(不是推测)
+
+```
+grep -ohE 'RepayOutcome\([^,]+, *"[^"]+"' src/services/credit_card/*.py
+```
+
+得到 **9 个**:`failed` / `skipped_already_repaid` / `skipped_disabled` /
+`skipped_invalid_config` / `skipped_locked` / `skipped_no_funds` /
+`skipped_no_schedule` / `skipped_not_due` / `skipped_zero_outstanding`,
+**加上运行期观测到的 `done`,共 10 个**。
+
+⚠️ 注意 `partial`(部分还款)**不在这份清单里** —— CLAUDE.md 文档里提到它,
+但源码里没有这个字面量。**很可能它由 `done` + detail 表达**,而不是
+单独一个 status。⚠️ **没查之前不要写进清单**(这正是第 68 轮那个毛病)。
+
+📌 顺带:`repay.py:321` 还有一处 `logger.exception("autorepay: failed to
+release ...")` —— 那是**锁释放**的异常,不是状态机的一部分。
+**grep 状态时会带上它,别混进清单。**
+
+## 本轮无代码改动,889 passed / ruff 1253 不变。
