@@ -1686,3 +1686,46 @@ print("PROBE statement_bill =", card["statement_bill"])
 不用再猜。
 
 ⚠️ 本轮无代码改动 —— 892 passed / ruff 1254 不变。
+
+## 第 97 轮:**定论** —— `compute_statement` 的窗口比 `current_billing_period` 的宽
+
+第 96 轮定的那个「同一次运行里对照两侧」的探针,这轮跑出来了:
+
+```
+_TODAY  = 2026-10-12
+_CUR    = (2026-10-10, 2026-11-10]      <- 我算的
+两笔日期 = 2026-10-12  2026-10-09
+bill    = 60000.0   outstanding = 60000.0
+```
+
+⚠️ 注意 **`_IN_REPAID_PERIOD` 是 `2026-10-09`,不是我以为的 `2026-09-10`**
+(`_REP.statement_date = 2026-10-10`,减一天 = 10-09)。**我连这个都算错过。**
+
+**推理**:第二笔 `2026-10-09T09:00:00Z` 与窗口左端 `2026-10-10T00:00` 比 ——
+`10-09 09:00 < 10-10 00:00`,**严格早于**。而 `statement.py:374` 的过滤是
+
+```python
+.where(ReadTxProjection.happened_at > datetime.combine(start_date, time.min))
+```
+
+**它应该被排除**,但 `bill = 60000` 说明**它被算进去了**。
+
+📌 **所以:`compute_statement` 实际使用的 `period.window_start`,
+与 `current_billing_period(...)` 返回的 `window_start` 不是同一个值。**
+
+三次假设(粒度 / 落库 / 入参)之所以全错,是因为它们**都假设了
+「读端点算出来的窗口 = 我用 `current_billing_period` 算的窗口」**。
+这个共同前提才是错的。
+
+⚠️ **具体的错在哪还没定位**(是 `_statement_out` 传了别的 period,
+还是 `compute_statement` 内部又调了一次 `current_billing_period`)——
+**没读到就不下结论**。但「同一笔交易,系统说它在窗口内而按文档算它在窗口外」
+这个**矛盾本身已经确定**,它是一个**可测的断言**:
+
+> 在 `statement.py` 的过滤条件处放一条断言:一笔落在 `_CUR.window_start`
+> **当天 09:00** 的交易,必须**不在** `compute_statement` 的结果里。
+
+这条断言现在会**红** —— 而它的红,就是一个真实缺陷的证据,
+不再是「我的探针坏了」。
+
+## 本轮无代码改动 —— 892 passed / ruff 1254 不变。
