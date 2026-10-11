@@ -179,6 +179,11 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 
 - **源码安装不用 Docker**:`WEB_STATIC_DIR` 默认是 `/app/static`(Docker 路径),
   源码装必须改指向 `frontend/apps/web/dist`,否则 Web 面板 404
+  —— ⚠️ **`grep -rn "WEB_STATIC_DIR" src/` 什么都搜不到,这是正常的。**
+  `src/config.py:19` 定义的字段叫 `web_static_dir`,环境变量名是 Pydantic
+  Settings 按约定大写出来的(没设 `env_prefix`)。我查静态文件服务时因为
+  「搜不到」就断定文档过时,差点把这条**正确**的部署指引删掉。
+  护栏:`tests/test_config_env_mapping.py`
 - `TAX_CATEGORY_NAME` env 决定税额归到哪个分类名(默认「税与保险」);
   **前端拿不到这个 env**,改它会让税额扇区不再被钉住显示
 
@@ -503,6 +508,23 @@ if row.tax_amount is not None:      # 列名在这里
 
 那条守卫保护的是**不走 merge 的调用方**（REST 写路径）。变异审计要么换个
 调用面,要么在注释里写明它防的是谁 —— 否则下一个人会以为它没作用而删掉。
+
+### ⚠️ 「grep 搜不到」不等于「不存在」
+
+`WEB_STATIC_DIR` 在 `src/` 里搜不到 —— 但它**确实生效**。字段名是
+`web_static_dir`,环境变量名由 Pydantic Settings 按约定大写出来。
+
+框架约定夹在中间时,grep 的否定结果**不能当证据**。下结论前先问:
+「中间有没有一层会做名字映射的东西?」
+
+### ⚠️ 断言越靠近进程全局状态,越容易被别人的测试影响
+
+断言默认值时直接 `Settings()` —— 单跑绿、**全量 4 条红**。根因不在那
+条测试:别的测试文件设过 `os.environ[...]`,进程环境已经不干净了。
+
+改读 `Settings.model_fields["web_static_dir"].default` ——
+**声明本身**与环境状态无关。这是本会话「单跑绿、全量红」的第四种形态,
+规律一致。
 
 ### ⚠️ 连错三轮的根因:同一个 fixture 定义了两次
 
