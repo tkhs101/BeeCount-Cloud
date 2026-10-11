@@ -16,6 +16,7 @@ import {
 import { useAttachmentCache } from '../context/AttachmentCacheContext'
 import { useAuth } from '../context/AuthContext'
 import { useLedgers } from '../context/LedgersContext'
+import { autorepayRunMessage } from '../lib/autorepayRunMessage'
 import {
   dispatchOpenEditCategory,
   dispatchOpenEditTx,
@@ -143,13 +144,17 @@ export function GlobalEntityDialogs() {
         if (res.ok) {
           // 200 = 真的走完了判断链。
           //
-          // ⚠️ 这段注释以前说「还了多少不由这个响应(WriteCommitMeta)」——
-          // 那是错的。后端已改成返回 AutoRepayRunResult,**带 status**(第 81 轮),
-          // 而这里仍然只显示「跑完了」。
-          // 下一步就是按 body.status 分档提示(done / skipped_no_funds /
-          // skipped_already_repaid ...)。要加 i18n 键,得**三个词典文件一起加**
-          // —— autoRepayParity.test.ts 会校验键在各语言都存在。
-          setRunResult(t('detail.autoRepay.runOk'))
+          // `status` 能回答用户真正关心的问题:**到底还了没有、还是被跳过了**。
+          // 映射逻辑在 `lib/autorepayRunMessage`(纯函数,有自己的行为测试)——
+          // 这里只负责 `t()`,别把分档逻辑写回组件里。
+          //
+          // ⚠️ 不认识的 status 由那个函数回落到 `runOk`,**不是** `runFailed`:
+          // 「我不认识这个值」不等于「它是坏值」(老后端压根没这个字段)。
+          const bodyStatus =
+            typeof (body as { status?: unknown }).status === 'string'
+              ? (body as { status: string }).status
+              : null
+          setRunResult(t(autorepayRunMessage(bodyStatus)))
           // 重新拉一次账户列表 ——「上次自动还款」可能变了
           const rows = await fetchWorkspaceAccounts(token, {
             ledgerId: activeLedgerId,
