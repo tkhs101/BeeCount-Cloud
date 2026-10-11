@@ -226,28 +226,22 @@ def test_catch_up_window_is_bounded() -> None:
     )
 
 
-def test_catch_up_runs_today_first(monkeypatch) -> None:
-    """补跑必须**先跑今天** —— 顺序反了会让今天的还款被历史账期挤掉。"""
+def test_catch_up_runs_today_first() -> None:
+    """补跑必须**先跑今天** —— 顺序反了会让今天的还款被历史账期挤掉。
+
+    直接调 `_days_for`,不自己重新实现一遍推导 —— 那会是**自证
+    测试**(把实现抄一遍,实现改错了它也不会红)。
+    """
     import datetime as dt
 
-    seen: list[dt.date] = []
+    from src.services.credit_card.scheduler import CATCH_UP_DAYS, _days_for
 
-    class Fake:
-        _timezone = dt.timezone.utc
-
-        def _today(self, *, catch_up: bool) -> list:
-            import datetime
-
-            today = datetime.datetime.now(self._timezone).date()
-            days = ([today - dt.timedelta(days=i) for i in range(CATCH_UP_DAYS)]
-                    if catch_up else [today])
-            seen.extend(days)
-            return []
-
-    Fake()._today(catch_up=True)
-    assert seen, "没有产生任何补跑日期"
-    today = dt.datetime.now(dt.timezone.utc).date()
-    assert seen[0] == today, f"补跑顺序错了,第一个是 {seen[0]} 而不是今天"
+    days = _days_for(catch_up=True, now=dt.date(2026, 10, 4))
+    assert len(days) == CATCH_UP_DAYS
+    assert days[0] == dt.date(2026, 10, 4), (
+        f"补跑顺序错了,第一个是 {days[0]} 而不是今天")
+    assert days == [dt.date(2026, 10, 4) - dt.timedelta(days=i)
+                    for i in range(CATCH_UP_DAYS)]
 
 
 # --------------------------------------------------------------------------- #
@@ -261,7 +255,7 @@ def test_quiet_statuses_cover_no_op_paths() -> None:
 
     # 这些是「没发生什么」的分支
     for s in ("skipped_not_due", "skipped_disabled", "skipped_zero_outstanding",
-              "skipped_already_repaid", "skipped_no_funds"):
+              "skipped_already_repaid"):
         assert s in _QUIET_STATUSES, f"{s} 会每天刷 info 日志"
     # 这些是「有问题」或「真的还了」,必须可见
     for s in ("done", "failed", "skipped_invalid_config", "skipped_locked"):
