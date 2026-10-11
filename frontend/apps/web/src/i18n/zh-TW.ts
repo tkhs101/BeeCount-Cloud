@@ -1037,6 +1037,8 @@ const zhTW = {
   'notice.accountCreated': '帳戶已建立',
   'notice.accountUpdated': '帳戶已更新',
   'notice.accountDeleted': '帳戶已刪除',
+  'notice.transactionCreated': '交易已建立',
+  'notice.transactionUpdated': '交易已更新',
   'notice.accountRestored': '已恢復',
   'notice.categoryCreated': '分類已建立',
   'notice.categoryUpdated': '分類已更新',

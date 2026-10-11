@@ -1078,6 +1078,8 @@ const zhCN = {
   'notice.accountCreated': '账户已创建',
   'notice.accountUpdated': '账户已更新',
   'notice.accountDeleted': '账户已删除',
+  'notice.transactionCreated': '交易已创建',
+  'notice.transactionUpdated': '交易已更新',
   'notice.accountRestored': '已恢复',
   'notice.categoryCreated': '分类已创建',
   'notice.categoryUpdated': '分类已更新',

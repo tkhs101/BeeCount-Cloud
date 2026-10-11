@@ -1037,6 +1037,11 @@ const en = {
   'notice.accountCreated': 'Account created',
   'notice.accountUpdated': 'Account updated',
   'notice.accountDeleted': 'Account deleted',
+  // ⚠️ 这两个键**曾经缺失** —— `t()` 是 `active[key] || fallback[key] || key`,
+  // 词典里没有就会**把原始 key 名直接显示给用户**。
+  // 护栏:i18nKeyCoverage.test.ts(枚举代码里所有 `t('...')` 与 en.ts 求差集)
+  'notice.transactionCreated': 'Transaction created',
+  'notice.transactionUpdated': 'Transaction updated',
   'notice.accountRestored': 'Restored',
   'notice.categoryCreated': 'Category created',
   'notice.categoryUpdated': 'Category updated',
