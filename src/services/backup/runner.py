@@ -339,6 +339,13 @@ def _run_with_remotes(
             zip_path: Path | None = None
             try:
                 target_db = sub.get(BackupRunTarget, target.id)
+                if target_db is None:
+                    # 列举之后、推送之前这一行被删了。不是异常,是竞态 ——
+                    # 明确跳过,不要拿 None 去取属性。
+                    logger.warning(
+                        "backup target %s vanished before push; skipping", target.id
+                    )
+                    return
                 target_db.status = "running"
                 target_db.started_at = _now()
                 sub.commit()
@@ -386,21 +393,34 @@ def _run_with_remotes(
                     on_progress=_on_p,
                 )
                 target_db = sub.get(BackupRunTarget, target.id)
-                target_db.finished_at = _now()
-                target_db.bytes_transferred = last_progress["bytes"] or upload_size
-                if rc == 0:
-                    target_db.status = "succeeded"
-                else:
-                    target_db.status = "failed"
-                    target_db.error_message = (log_text or "")[-500:]
-                sub.commit()
+                if target_db is not None:
+                    target_db.finished_at = _now()
+                    target_db.bytes_transferred = last_progress["bytes"] or upload_size
+                    if rc == 0:
+                        target_db.status = "succeeded"
+                    else:
+                        target_db.status = "failed"
+                        target_db.error_message = (log_text or "")[-500:]
+                    sub.commit()
             except Exception as exc:
                 logger.exception("push to %s failed", remote.name)
-                target_db = sub.get(BackupRunTarget, target.id)
-                target_db.status = "failed"
-                target_db.finished_at = _now()
-                target_db.error_message = str(exc)[:500]
-                sub.commit()
+                # ⚠️ **异常处理器自己不许再抛**。
+                # 这里的 `sub.get` 在目标行已被删时返回 None,而如果原始异常
+                # 来自数据库,session 已经处于坏状态、`commit()` 也会失败 ——
+                # 任何一处再抛,都会**顶掉原始异常并让整个 backup run 崩掉**,
+                # 结果是「这次备份失败了」这件事根本没被记下来。
+                # 记不上就至少别把 run 带崩:异常已经 logger.exception 过了。
+                try:
+                    failed_db = sub.get(BackupRunTarget, target.id)
+                    if failed_db is not None:
+                        failed_db.status = "failed"
+                        failed_db.finished_at = _now()
+                        failed_db.error_message = str(exc)[:500]
+                        sub.commit()
+                except Exception:
+                    logger.exception(
+                        "could not mark backup target %s as failed", target.id
+                    )
             finally:
                 sub.close()
 
