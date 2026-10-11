@@ -164,7 +164,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 | `pytest -q` | 绿 | **绿** | **885 passed** |
 | `mypy src` | 89 errors | **60 errors** | 比上游还少 29 个;**这条线到此为止**,见下文 |
 | `ruff check src tests alembic` | 1421 | **1253** | **1420 里 1131 条(80%)是同一条 `F405`**(桶导入)—— 系统性问题。已清掉可自动修复的 168 处(`F401` + `I001`) |
-| 前端 `build` + `test` | 绿 | **绿** | **316 passed**(2026-10-12 实跑 build,12s) |
+| 前端 `build` + `test` | 绿 | **绿** | **319 passed** + `tsc -b` 两道门都过(见下)|
 
 ### ⚠️ ruff 的 1420 条:先看构成再决定动不动(2026-10-12)
 
@@ -470,6 +470,47 @@ playwright-cli click f1e37            # 用户菜单(那个 "B" 头像按钮)
 ⚠️ 顺便断言了 `Boolean({}) === true` —— 因为这**就是**
 `LocaleProvider` 里必须用 `Object.keys().length` 而不能写
 `if (!dictionaries[locale])` 的原因。空壳「看起来像没值」但**它是真的**。
+
+#### ⚠️ 前端是**两道独立的门**,`vitest` 绿 **不等于** `tsc` 绿
+
+`manualChunks` 那条护栏第一版写的是:
+
+```ts
+viteConfig.build?.rollupOptions?.output?.manualChunks
+```
+
+`vitest` **完全绿**(319 全过)。但 rollup 的类型里 `output` 是**联合类型**
+`OutputOptions | OutputOptions[]` —— `pnpm build` 里的 `tsc -b` 立刻报
+**TS2339**。
+
+根因:**vitest 走 esbuild,只转译不做类型检查**。所以:
+
+| 门 | 跑什么 | 抓什么 |
+|---|---|---|
+| `pnpm -C apps/web test` | vitest | 运行时行为 |
+| `pnpm -C apps/web build` | **`tsc -b`** + vite build | **类型** + 产物 |
+
+⚠️ 只跑 vitest 就提交,会把**类型不过的代码**推上远端。**两道都要跑。**
+
+（这两道门在 CI 里是同一个 `build` + `test` 步骤,但本地别只跑一个。）
+
+#### `manualChunks` 的**行为护栏**(突变验证过,1/1 抓到)
+
+护栏:`frontend/apps/web/src/viteManualChunks.behavior.test.ts`。
+
+`vite.config.ts` 里那段「⚠️ **不要**给 recharts 配 manualChunks」的注释
+记着一次**实测省下 399 kB** 的改动,但**注释不强制任何东西** ——
+加回去首屏就涨回 409 kB,而 `build` 成功、`tsc` 0 错、**测试全绿**。
+这正是 bundle 那几轮反复出现的失败模式:**产物变了,但没有任何一道门会红。**
+
+⚠️ 判据必须是**真调那个函数**(import 真实 config + 用真实 pnpm
+node_modules 路径调用),**不能**写 `expect(src).not.toContain('recharts')`
+—— 注释里就写着 recharts,那是**假护栏**(CLAUDE.md 记的「前端 45% 的护栏
+是假的」那一族)。
+
+三条断言:recharts 与 `d3-*` 必须返回 `undefined`;**react 核心仍然进
+`react-vendor`**(防「为了躲第一条把整个 manualChunks 删了」的过度修正);
+应用源码永远 `undefined`。
 
 #### `useReducedMotion` 的**护栏**(突变验证过,2/2 抓到)
 

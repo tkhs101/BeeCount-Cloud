@@ -1,11 +1,10 @@
-fix(vite-guard): 让 manualChunks 护栏通过 tsc —— vitest 绿不等于 build 绿
+docs: 记「前端是两道独立的门,vitest 绿不等于 tsc 绿」
 
-上一提交里护栏直接 `.output?.manualChunks`,但 rollup 的类型里 `output` 是
-**联合类型** `OutputOptions | OutputOptions[]`,`tsc -b` 立刻报 TS2339。
+manualChunks 护栏第一版 .output?.manualChunks —— vitest 319 全过,
+但 tsc -b 报 TS2339(output 是联合类型 OutputOptions | OutputOptions[])。
+根因:vitest 走 esbuild,只转译不做类型检查。
 
-⚠️ **vitest 完全绿** —— 因为 vitest 不做类型检查(它走 esbuild,直接转译)。
-这是我第一次在本仓撞到「单测过了但类型没过」,所以记一笔:
-**前端有两道独立的门,`vitest` 和 `build`(含 `tsc -b`),都要跑。**
+同时记 manualChunks 的行为护栏(突变验证抓到):真调函数而不是 grep 配置
+文本 —— 注释里就写着 recharts,写成 not.toContain 是假护栏。
 
-顺带实测确认:这几轮改动后首屏仍是 4 个文件 / 1324 kB,
-与记录的 1315 kB 一致 —— 没有回归。
+前端测试数更新为 319。
