@@ -981,3 +981,41 @@ CLAUDE.md 早就记了:「先确认回退真的生效,再判护栏」。
 
 ⚠️ 也别忘了:第 75 轮那条 `_shared.__all__` 护栏**留在仓库里且是有效的**
 ——它防的就是第 74 轮那个失误。这部分没有白做。
+
+## 第 77 轮:先列清单,再动手(按上一轮自己写的教训)
+
+第 76 轮我写下一条方法论:**「同一件事第二次没做成,说明需要的不是一轮上下文,
+而是先列清连带面,而不是改一处跑一次」**。这轮就照做 —— **只列,不改**。
+
+## 「响应暴露 status」的完整连带面(动手前先看这份)
+
+| # | 位置 | 要改什么 | 漏了会怎样 |
+|---|---|---|---|
+| 1 | `src/schemas.py` | 加 `AutoRepayRunResult(WriteCommitMeta)` | — |
+| 2 | `_shared.py` `from ...schemas import (...)` | 加名字 | **`NameError`**(第 74 轮踩过) |
+| 3 | `_shared.py:1325` `__all__` | 加名字 | **`NameError`,报错指向使用者**(同上) |
+| 4 | 端点 `response_model=` | 改成新类 | FastAPI 用旧模型序列化 |
+| 5 | **端点 `-> WriteCommitMeta:` 返回标注** | 改成新类 | `ResponseValidationError: status Field required` —— **单测抓不到,靠 smoke** |
+| 6 | 端点 `return WriteCommitMeta(...)` 构造 | 加 `status=outcome.status` | 同上 |
+| 7 | `tests/test_autorepay_failure_is_visible.py` | 3 条可能受影响 | 未知 |
+| 8 | 前端 `types.ts:117` `WriteCommitMeta` | **不用改** | — (TS 手写类型,多字段会被忽略) |
+
+⚠️ **`grep` 显示 `response_model=WriteCommitMeta` / `-> WriteCommitMeta:`
+在 `src/routers/write/*.py` 里有 41 处。** 第 76 轮那个
+`assert count == 1` 不是小题大做 —— **按第一个 `replace` 硬改会改坏 41 处**。
+
+## ⚠️ 那个「原因不明」其实不是谜 —— 是我没隔离
+
+第 76 轮 `test_skipped_disabled_stays_200` 红了,我记成「原因不明,
+上下文不够查」。**不对 —— 真相更难看:那一轮我同时改了两处**(响应模型
++ 自检测试),**从没单独跑过那条测试**。
+
+所以它可能是自检那处引起的连锁,也可能自己就有问题 —— **而我不知道,
+因为我根本没做隔离**。
+
+📌 **这是本会话最基础的一条,又犯了**:一次改多处 -> 一起红 -> 归因不清 ->
+写成「原因不明」。**「原因不明」很多时候只是「我没做单变量实验」。**
+
+⚠️ 附带:`_shared.py` 的 import 块 + `__all__` **两个位置必须同时改**,
+这是本仓桶导入的固有形状。**这条现在有护栏兜底**(第 75 轮),
+第 2、3 项不再是风险。
