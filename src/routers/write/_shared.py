@@ -66,6 +66,7 @@ from ...schemas import (
     WriteTagUpdateRequest,
     WriteTransactionCreateRequest,
     WriteTransactionUpdateRequest,
+    AutoRepayRunResult,
 )
 from ...security import SCOPE_APP_WRITE, SCOPE_WEB_WRITE
 from ...snapshot_mutator import (
@@ -1322,6 +1323,7 @@ def _assert_can_modify_entity(
 
 
 __all__ = [
+    "AutoRepayRunResult",
     'hashlib',
     'json',
     'logging',

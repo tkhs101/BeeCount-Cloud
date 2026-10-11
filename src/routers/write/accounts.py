@@ -209,7 +209,7 @@ async def delete_acc(
 
 @router.post(
     "/ledgers/{ledger_id}/accounts/{account_id}/autorepay/run",
-    response_model=WriteCommitMeta,
+    response_model=AutoRepayRunResult,
     responses=_WRITE_RESPONSES,
 )
 async def run_autorepay_now(
@@ -220,7 +220,7 @@ async def run_autorepay_now(
     _scopes: set[str] = Depends(_WRITE_SCOPE_DEP),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> WriteCommitMeta:
+) -> AutoRepayRunResult:
     """**手动**触发一次这张卡的自动还款。
 
     不是「强制还款」—— 仍然走完整的判断链(今天是不是还款日、本期是否
@@ -272,7 +272,7 @@ async def run_autorepay_now(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"auto-repayment misconfigured: {outcome.detail}",
         )
-    return WriteCommitMeta(
+    return AutoRepayRunResult(
         ledger_id=ledger_id,
         base_change_id=0,
         new_change_id=db.execute(
@@ -282,6 +282,7 @@ async def run_autorepay_now(
         server_timestamp=datetime.now(timezone.utc),
         idempotency_replayed=False,
         entity_id=outcome.tx_sync_id or account_id,
+        status=outcome.status,
     )
 
 

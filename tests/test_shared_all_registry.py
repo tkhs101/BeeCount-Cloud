@@ -97,7 +97,7 @@ def test_schemas_names_are_exported_via_all() -> None:
         f"加进 __all__,或者不要导入。")
 
 
-@pytest.mark.parametrize("simulated", ["AutoRepayRunResult"])
+@pytest.mark.parametrize("simulated", ["SomeFutureType", "AnotherFutureType"])
 def test_criterion_detects_a_missing_name(simulated: str) -> None:
     """**自检**:判据必须真的会红,否则上面那条可能恒绿。
 

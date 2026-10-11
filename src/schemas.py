@@ -828,6 +828,16 @@ class WriteCommitMeta(BaseModel):
     entity_id: str | None = None
 
 
+class AutoRepayRunResult(WriteCommitMeta):
+    """手动触发自动还款的结果 —— **带 `repay_one` 的状态**。
+
+    不用 `WriteRepayCommitMeta` 之外的扩法:那个公共 schema 被 17 个文件共用,
+    每个端点想带自己的信息都往里加,是坏味道。这里用继承,公共壳保持干净。
+    """
+
+    status: str
+
+
 class WriteBaseRequest(BaseModel):
     base_change_id: int = Field(ge=0)
     request_id: str | None = Field(default=None, max_length=128)
