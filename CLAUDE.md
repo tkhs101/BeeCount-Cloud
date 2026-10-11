@@ -161,7 +161,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | **859 passed** |
+| `pytest -q` | 绿 | **绿** | **860 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **307 passed** |
@@ -491,6 +491,41 @@ if row.tax_amount is not None:      # 列名在这里
 引用」,并拿它解释账户侧为什么不行 —— 结果那句话本身是错的,那个 `if`
 就是第二处。**拿一个没验证过的假设去解释另一个观察**,等于把两个错误
 绑在一起。
+
+### ⚠️ 「变异没被检出」先别判护栏失效 —— 先问是不是被另一道挡住了
+
+把 `upsert_tx` 里的 `if "splits" in payload:` 改成 `if True:`
+（复现 `CLAUDE.md` 记的那个坑),**没有任何测试变红**。
+
+不是护栏失效,是**上层还有一道**:`_merge_tx_splits_after_merge` 总会把
+`splits` 补进 merged（要么来自 payload,要么来自现有腿）,所以同步路径
+走到 `upsert_tx` 时那个条件**恒真**。
+
+那条守卫保护的是**不走 merge 的调用方**（REST 写路径）。变异审计要么换个
+调用面,要么在注释里写明它防的是谁 —— 否则下一个人会以为它没作用而删掉。
+
+### ⚠️ 连错三轮的根因:同一个 fixture 定义了两次
+
+`tests/test_smoke_real_app.py` 里 `client` fixture 出现了**两次** ——
+重构 engine 时插入了新的,旧的留在下面。Python 取**后定义者**,所以前面
+三轮改的都是**从未生效的那份**,报错还指向别处。
+
+症状依次是 `AUTH_EMAIL_EXISTS`、`no such table: users`、
+`can only be called once` —— **全都不是这些错误看起来的样子**。
+
+**规则:改动之前先确认「我改的代码是不是真的在跑」。** 连续三次修复失败时,
+该停下质疑的往往不是环境,是自己的假设。
+
+另两处真坑:
+
+- **建表别走 alembic**:`env.py` 用
+  `engine_from_config(config.get_section(...))`,configparser 把 `%` 当插值,
+  Windows 临时路径经 SQLAlchemy 编码成 `C%3A/...` 直接 ValueError;
+  绕开编码后迁移又落在**另一个库**上(查库确认 0 张表)。
+  冒烟测试改用 `Base.metadata.create_all(_ENGINE)` —— 迁移链本身的正确性
+  有专门的迁移测试,不靠这个 fixture
+- **`Ledger` 按 `external_id` 查**:push 物化时主键是自生成 uuid,
+  `ledger_id` 只是 external_id
 
 ### 「分层测试全绿 != 拼起来能工作」—— 定期真跑一遍
 
