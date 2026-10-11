@@ -1,0 +1,44 @@
+test: 禁止测试文件里出现同名顶层定义 —— 静默覆盖且没有任何工具会报
+
+## 来源:上一轮连错三轮的根因
+
+`test_smoke_real_app.py` 里 `client` fixture 定义了**两次** —— 我重构
+engine 时在文件上方插入了新的,**旧的还留在下面**。
+
+Python 取**后定义者**,于是:
+
+- pytest 正常收集、测试正常跑、计数正常
+- 我前面三轮改的都是**从未生效的那份**
+- 报错指向三个完全无关的方向:`AUTH_EMAIL_EXISTS` /
+  `no such table: users` / `can only be called once`
+
+**没有任何工具会报这个**。`pytest --collect-only` 也只看到一份 ——
+因为它看到的也是后定义的那份。
+
+`systematic-debugging` 的「三次失败就停下来质疑架构」是最后把我拽出来的;
+在那之前我一直在猜环境变量、猜 DB 残留、猜 TestClient 数量,
+**从来没想过「我改的东西是不是根本没跑」**。
+
+## 判据:AST 真扫 + 两条自检
+
+- 只看**模块顶层**的 `FunctionDef`/`AsyncFunctionDef`(含带
+  `@pytest.fixture` 的)。嵌套的同名 `def` 不算 —— 只有顶层的会互相覆盖
+- `test_the_scanner_actually_detects_duplicates`:造一个真有重复的源码,
+  确认扫得出来。**没有这条,scanner 逻辑写错了也会全绿** ——
+  「扫不出东西」和「没有东西」在断言上长得一模一样
+- `test_the_scanner_ignores_non_top_level`:确认不误报嵌套定义
+
+用 `ast.parse` 而不是字符串包含 —— 后者会被注释、docstring、
+字符串字面量里的同名骗到。
+
+## 全仓现状
+
+扫了一遍:**0 处残留**(我上轮删掉的那处是唯一一处)。
+
+## 变异验证
+
+往 `test_credit_autorepay_scheduler.py` 植入一个与既有测试同名的函数 ->
+**变红,并精确点名** `test_credit_autorepay_scheduler.py:
+test_detect_gaps_accepts_the_catch_up_kwarg x2`。
+
+863 passed(860 + 3)/ mypy 80(零新增,纯测试改动)
