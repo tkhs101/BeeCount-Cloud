@@ -412,6 +412,27 @@ class AdminOverviewOut(BaseModel):
     tags_total: int
 
 
+class AdminMeOut(BaseModel):
+    """当前用户是不是管理员 —— 专用端点,不要拿别的端点探测。
+
+    ## 为什么需要它
+
+    前端要显示「后台管理」入口,只能**探测**:调一个只有管理员能过的端点,
+    200 = 管理员,403 = 不是。
+
+    新 UI 团队原本探测 `/admin/health` —— 而它**只要 `ops:write` scope**,
+    普通用户也返回 200。等于「任何有写权限的人都是管理员」,错。
+    后来换成 `/admin/overview`(真带 `require_admin_user`),能用,
+    但那是**借来的**判据:哪天 overview 的鉴权改了(比如给 viewer 开放
+    只读 overview),探测就悄悄失效,而且不报错。
+
+    这个端点把判据变成**显式的契约**。
+    """
+    is_admin: bool
+    #: 用户 id。前端拿它做 key / 展示,省得再调一次 /auth/me。
+    user_id: str
+
+
 class AdminLogEntryOut(BaseModel):
     """Ring buffer 一条日志;字段对应 RingBufferLogHandler.emit 的 dict。"""
 

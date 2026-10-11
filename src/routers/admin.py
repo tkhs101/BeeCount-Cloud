@@ -47,6 +47,7 @@ from ..schemas import (
     AdminDeviceOut,
     AdminLogEntryOut,
     AdminLogListOut,
+    AdminMeOut,
     AdminOverviewOut,
     BackupArtifactKind,
     DataCleanupRecord,
@@ -572,6 +573,23 @@ def data_cleanup_clean(
             for f in result.failures
         ],  # type: ignore[arg-type]
     )
+
+
+@router.get("/me", response_model=AdminMeOut)
+def admin_me(
+    _admin_user: User = Depends(require_admin_user),
+) -> AdminMeOut:
+    """当前用户是不是管理员。
+
+    **不需要 scope** —— 用 `require_admin_user` 就够(它自己会 403)。
+    加 scope 反而会让「有 scope 但不是管理员」的人拿到 200,那正是
+    这个端点要消灭的歧义。
+
+    对非管理员返回 **403**(不是 200 + `is_admin: false`):
+    「你是不是管理员」这个问题的答案,对非管理员来说不该由服务端
+    定义 一次再传回来 —— 直接不给过,和后台其它端点一个语义。
+    """
+    return AdminMeOut(is_admin=True, user_id=str(_admin_user.id))
 
 
 @router.get("/health")
