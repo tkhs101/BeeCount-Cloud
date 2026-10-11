@@ -528,7 +528,26 @@ def search(user: User, *, q: str, limit: int = 20) -> list[dict[str, Any]]:
 
 
 def _parse_dt(value: str, *, end_of_day: bool = False) -> datetime:
-    """ISO date / datetime → datetime(UTC)。LLM 经常给 '2026-05-13'。"""
+    """ISO date / datetime → **datetime(UTC)**。LLM 经常给 '2026-05-13'。
+
+    ## 必须归一到 UTC
+
+    这个值会直接进 SQL:`ReadTxProjection.happened_at >= _parse_dt(date_from)`。
+    而**库里的 `happened_at` 是 UTC**(见 `projection._parse_happened_at` 的
+    契约:`_to_iso8601` 与它都必须把 aware 输入归一,否则 SQLite 会存成
+    本地墙钟、丢掉那段偏移)。
+
+    原实现 `fromisoformat(...)` **原样返回带偏移的 datetime**。于是用户传
+    `2026-05-13T18:00:00+09:00`(= UTC 09:00)时,拿去和库里的 UTC 比就
+    差 9 小时 —— 当天早上 9 点的那笔交易**查不到**,且不报错。
+
+    ⚠️ 注意:纯 Python 里两个 aware datetime 比较会**自动归一**,所以
+    `datetime(2026,5,13,9,tzinfo=utc) >= _parse_dt('...T18:00+09:00')`
+    在 REPL 里是 `True`,**看不出问题**。只有落到 SQL 驱动才炸 ——
+    这正是这类 bug 能在测试全绿下活下来的原因。
+
+    naive 输入仍按 UTC 解释,与 `projection._to_utc` 同一约定。
+    """
     value = value.strip()
     if len(value) == 10:
         # YYYY-MM-DD
@@ -537,4 +556,7 @@ def _parse_dt(value: str, *, end_of_day: bool = False) -> datetime:
             dt = dt.replace(hour=23, minute=59, second=59)
         return dt.replace(tzinfo=timezone.utc)
     # 尝试完整 ISO
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
