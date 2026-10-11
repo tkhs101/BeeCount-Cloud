@@ -298,27 +298,48 @@ playwright-cli --raw eval "JSON.stringify(performance.getEntriesByType('resource
 所以那套「看 `index.html` 的 rel,不看 assets 目录」的度量方法是**对的**,
 可以放心用。反过来,**光看 HTTP 200 证明不了 bundle 能跑**,别再拿它当验收。
 
-#### i18n 231 kB:第二次评估,**仍然暂缓**(理由比上次更具体)
+#### ✅ i18n 按需加载 —— **已做**(首屏再省 164 kB,浏览器实测)
 
-`Amount.tsx` 那种「一个核心组件为一个钩子拖进整库」的问题修完后,
-我重新评估了 i18n。查到的关键事实:
+| | 首屏 JS |
+|---|---|
+| 本会话开始 | 1672 kB |
+| 去掉 recharts 的 chunk 规则 | 1479 kB |
+| 去掉 `Amount.tsx` 的 framer-motion | 1479 kB |
+| **i18n 按需加载** | **1315 kB** |
 
-- `t()` 缺 key 时 `active[key] || fallback[key] || key` —— **最后回落 key 本身**
-- 入口是**同步** `createRoot(...).render(...)`,`dictionaries` 在
-  `main.tsx` 顶层静态 import
+**累计省了 357 kB(21%)。**
 
-要做成按需加载,得在 bootstrap 里 `await` 目标语言词典再首渲染。
-**技术上可行**,但我**验不了**其中最要紧的一环:切换语言时新词典到达前
-会不会闪一下原始 key —— 那需要**真的在浏览器里点一次语言切换**。
+三处改动:`i18n/index.ts`(en 静态 + 其余动态 import + `prepareInitialDictionary`)、
+`LocaleProvider.tsx`(可选 `loadDictionary` + 内部可增长缓存)、
+`main.tsx`(首屏渲染**前** await 目标语言)。
 
-`CLAUDE.md` 里我自己写过「分层测试全绿 != 拼起来能工作」。
-一个我**只能靠 build + 单测**验证的改动,而风险恰好落在**验不到的那部分**
-上 —— 这条我不做。
+### 两条别踩的
 
-**先决条件已满足**(见上节 `playwright-cli`)。再按这个顺序动:
-先给 provider 加「词典未加载」的显式状态(别靠 `?? key` 兜底 ——
-那会把加载失败变成满屏原始 key 而没人发现),再按需 `import`,
-最后**实测**首屏 chunk 变小 + 切换语言无闪烁。
+**① `en` 必须静态打包。** `t()` 是
+`active[key] || fallback[key] || key`,fallback 就是 `dictionaries.en`。
+少了它,任何词典没覆盖到的 key 会**直接显示原始 key 名**。
+
+**② 「词典是否已加载」不能写 `if (!dictionaries[locale])`。**
+未加载的语言在 `dictionaries` 里是 `{}`,而 **`{}` 是真值** ——
+于是 `setLocale` 跳过加载,用户永远停在一屏英文上,
+而且**没有任何报错、没有任何信号**。判据要用 `Object.keys().length > 0`。
+
+⚠️ `setLocale` 必须是**先拿到词典再切语言**。反过来会闪一屏英文 ——
+这正是我推迟三轮时担心的那个失败模式。
+
+### 实测(`playwright-cli`)
+
+- zh-CN 用户首屏直接中文(无英文闪烁、无原始 key)
+- 切换 zh-CN -> zh-TW -> en -> zh-CN 全通
+- **`zh-CN-*.js` / `zh-TW-*.js` 只在切到该语言时才下载**
+- 控制台 0 错误 / 307 测试通过 / `tsc` 0 错
+- 页面上「形如 `shell.xxx` 的原始 key」实测为 `[]`
+
+⚠️ **验证时我两次误判「切换坏了」**,其实是我自己的探针坏了:
+`playwright-cli` 用逗号分隔的 CSS 选择器会**静默失败**,
+以及没等 React 重渲染就取 `innerText`。**先分清是产品坏了还是探针坏了。**
+
+⚠️ 卸载 `html-to-image`/qrcode 那类共享 chunk 的取舍**仍然不要做**(见上节)。
 
 #### (存档)已修:`manualChunks` 给 recharts 的规则反而害了它
 
