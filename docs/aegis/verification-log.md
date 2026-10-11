@@ -939,3 +939,45 @@ CLAUDE.md 早就记了:「先确认回退真的生效,再判护栏」。
 **这次多花了一轮,值得。**
 
 ## 891 passed / ruff 1253。
+
+## 第 76 轮:第二次做同一件事,**仍未闭环**,撤回
+
+第 75 轮铺好护栏后重做「响应暴露 status」。这次走得更远
+(smoke 测试都过了),但**最后一步卡住**,仍然撤回。
+
+## 走通的部分(有价值的中间结论)
+
+1. **返回值标注也必须改**。只改 `response_model=` 不够 ——
+   `async def run_autorepay_now(...) -> WriteCommitMeta` 这个**标注**
+   决定 FastAPI 按哪个模型序列化,构造出来的是 `WriteCommitMeta`(不是
+   子类),于是 `status` 缺失 -> `ResponseValidationError` ->
+   **`test_smoke_full_chain` 红了**。
+   📌 **这是真服务冒烟的价值**:它抓到了单测没抓到的接线遗漏。
+2. **锚点纪律又一次生效**:`) -> WriteCommitMeta:` 在文件里出现 **4 次**,
+   我 `assert count == 1` 直接拦下,改成只在 `run_autorepay_now` 函数范围内
+   定位。**如果按第一个 `replace` 硬改,会改坏另外三个端点。**
+
+## 卡住的地方(诚实记录)
+
+改完之后仍红两条:
+
+- `test_shared_all_registry.py::test_criterion_detects_a_missing_name`
+  —— **这个是我自己制造的**:自检拿 `AutoRepayRunResult` 当样本,
+  而那个类型现在真的进了 `__all__`,于是「它不该存在」的断言先炸了。
+  📌 **自检的前提不能依赖真实代码的当前状态**,该用合成名字。
+  (第 75 轮就已经犯过一次,改了却只加不减,没改干净。)
+- `test_autorepay_failure_is_visible.py::test_skipped_disabled_stays_200`
+  —— ⚠️ **原因不明**。上下文不够查。
+
+## 撤回
+
+`git checkout` 四个文件 -> **891 passed / ruff 1253**,diff 全 0。
+
+📌 **不给未知的红**。第 66 轮我写过一条规矩:「撤回而不是留半成品」。
+这轮是**同一件事第二次没做成** —— 说明它需要的**不是一轮的上下文,
+而是先想清楚「响应模型改动会连带影响哪几处」**。下一次动手前应该先把
+连带面列出来(标注 / response_model / 白名单 / 前端类型 / 既有测试),
+而不是改一处跑一次。
+
+⚠️ 也别忘了:第 75 轮那条 `_shared.__all__` 护栏**留在仓库里且是有效的**
+——它防的就是第 74 轮那个失误。这部分没有白做。
