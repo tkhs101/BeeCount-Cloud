@@ -18,24 +18,43 @@ import { useEffect, useState } from 'react'
  * 差别只在**少了服务端渲染的默认值处理** —— 本项目是纯客户端 SPA,
  * 没有 SSR。
  */
-export function useReducedMotion(): boolean {
-  const [reduced, setReduced] = useState<boolean>(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return false
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  })
+export const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
 
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
-    const onChange = (e: MediaQueryListEvent) => setReduced(e.matches)
-    // 老 WebKit 只有 addListener;两边都挂上,重复挂载时 addEventListener 优先
-    if (mq.addEventListener) {
-      mq.addEventListener('change', onChange)
-      return () => mq.removeEventListener('change', onChange)
-    }
-    mq.addListener(onChange)
-    return () => mq.removeListener(onChange)
-  }, [])
+/** 首次读取。SSR / 老浏览器一律当「不减弱」。 */
+export function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false
+  return window.matchMedia(REDUCED_MOTION_QUERY).matches
+}
+
+/**
+ * 订阅变化,返回取消订阅函数。
+ *
+ * ⚠️ **老 WebKit 的 `addListener` 兜底不是历史包袱,是必需的分支** ——
+ * 删掉它,旧 Safari 上「用户在系统里改了减弱动画」就静默不再生效,
+ * 而且**没有任何报错**。
+ * 提出来单独导出就是为了让这条分支能被 `useReducedMotion.behavior.test.ts`
+ * 真跑(钩子本身要 React 渲染环境,仓里没有 jsdom)。
+ */
+export function subscribeReducedMotion(
+  onChange: (reduced: boolean) => void
+): () => void {
+  const noop = () => {}
+  if (typeof window === 'undefined' || !window.matchMedia) return noop
+  const mq = window.matchMedia(REDUCED_MOTION_QUERY)
+  const handler = (e: MediaQueryListEvent) => onChange(e.matches)
+  // 老 WebKit 只有 addListener;两边都挂上,重复挂载时 addEventListener 优先
+  if (mq.addEventListener) {
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }
+  mq.addListener(handler)
+  return () => mq.removeListener(handler)
+}
+
+export function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState<boolean>(prefersReducedMotion)
+
+  useEffect(() => subscribeReducedMotion(setReduced), [])
 
   return reduced
 }
