@@ -44,6 +44,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src"
+TESTS = Path(__file__).resolve().parent
 
 #: U+FFFD —— 解码失败 / 字节被截断时留下的痕迹。
 REPLACEMENT_CHAR = "�"
@@ -51,13 +52,29 @@ REPLACEMENT_CHAR = "�"
 #: 允许出现的控制字符(换行/制表/回车);其余一律可疑。
 _ALLOWED_CTRL = {"\n", "\t", "\r"}
 
+#: **故意的**例外:本文件自己定义的那个常量就是 U+FFFD。
+#: 白名单**要带上限** —— 防止有人往里塞真损坏来「让测试绿」。
+#: (CLAUDE.md 记的那条:白名单默认该拒绝,而且必须有上限。)
+_ALLOWED_FFFD_FILES = {"test_source_encoding.py"}
+_MAX_ALLOWED_FFFD = 2
+
 #: ⚠️ **数量下限**:glob 写错 / 目录搬走时,「一个文件都没匹配到」
 #: 绝不能等于「检查通过」。这是 CLAUDE.md 反复记的那类恒真。
 _MIN_FILES = 20
 
 
 def _python_sources() -> list[Path]:
-    return sorted(p for p in SRC.rglob("*.py") if "__pycache__" not in p.parts)
+    """`src/` 与 `tests/` **都要扫**。
+
+    ⚠️ 第一版只扫 `src/`,于是 `tests/` 里已有的 5 处损坏完全没被发现
+    —— 而那里的损坏同样在**注释和 docstring** 里解释着护栏的契约。
+    **范围画窄的护栏,保护不到自己脚下。**
+    """
+    return sorted(
+        p
+        for p in list(SRC.rglob("*.py")) + list(TESTS.glob("*.py"))
+        if "__pycache__" not in p.parts
+    )
 
 
 def _control_chars(text: str) -> set[str]:
@@ -81,6 +98,16 @@ def test_found_enough_source_files() -> None:
 def test_source_has_no_replacement_char(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     bad = _bad_lines(text, REPLACEMENT_CHAR)
+
+    if path.name in _ALLOWED_FFFD_FILES:
+        # 白名单**带上限**:「本文件就该有 1 个」不等于「有 5 个也行」。
+        # 否则有人往这个文件里塞真损坏,测试照样绿。
+        assert len(bad) <= _MAX_ALLOWED_FFFD, (
+            f"{path.name} 是白名单文件,只允许 {len(bad)} 处故意的 U+FFFD,"
+            f"实际 {len(bad)} 行命中 —— 多出来的是真损坏"
+        )
+        return
+
     assert not bad, f"{path.name} 第 {bad} 行含 U+FFFD —— 写入时字节被截断/编码错了"
 
 

@@ -190,7 +190,7 @@ def test_balance_delta_complete_transfer_touches_both() -> None:
 
 
 def test_name_fallback_never_yields_one_sided_transfer() -> None:
-    """只带名不��� id 的 transfer,两端要么都解析、要么都不解析。
+    """只带名不带 id 的 transfer,两端要么都解析、要么都不解析。
 
     `projection.py:280-290` 三组字段各自独立反查 —— 这是「只扣不加」的根源。
     修复后:若 transfer 的一端解析不出,另一端也必须一并放弃(宁可漏算,

@@ -40,7 +40,7 @@ from src.models import Ledger, UserAccountProjection
 
 #: 账户列(排除身份/簿记)→ `build` 产出的 item dict 里的 key。
 #:
-#: 加新列时**必须**在这里加一行;不���,`test_every_account_column_survives_the_bridge`
+#: 加新列时**必须**在这里加一行;不登记,`test_every_account_column_survives_the_bridge`
 #: 会红并指出缺哪个 key。映射写错(比如 camelCase 拼错)同样会红。
 COLUMN_TO_ITEM_KEY = {
     "name": "name",

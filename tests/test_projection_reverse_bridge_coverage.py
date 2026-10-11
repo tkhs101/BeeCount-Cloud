@@ -48,7 +48,7 @@ import pytest
 from src.models import ReadTxProjection
 from src.routers.write._shared import _projection_row_to_tx_dict
 
-#: 列(排除身份/簿记/派生)-> 返回 dict 里应���的 key。
+#: 列(排除身份/簿记/派生)-> 返回 dict 里应该出现的 key。
 #:
 #: 加新列时**必须**在这里加一行,否则下面那条会红并指出缺哪个 key。
 #: 映射写错(camelCase 拼错)同样会红。
@@ -104,7 +104,7 @@ def _full_row(**over):
     """造一个「每个列都有值」的 projection 行 —— 键存在时才有判别力。
 
     每列都给非空值:函数里有大量 `if row.X is not None:` 分支,
-    值全空时输出 dict 里一�� key 都没有,测试会误判成「全部漏了」。
+    值全空时输出 dict 里一个 key 都没有,测试会误判成「全部漏了」。
     """
     from datetime import datetime, timezone
 
