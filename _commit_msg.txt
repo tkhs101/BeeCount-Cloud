@@ -1,0 +1,41 @@
+test: 补备份/还原的**数据**往返 —— 原来只测了状态文件管理
+
+## 发现的缺口
+
+`tests/test_backup_restore.py` 有 11 条测试,我以为是覆盖还原的。实际看一眼:
+
+- `test_list_restores_sorted_desc`
+- `test_cleanup_restore_removes_dir`
+- `test_read_status_returns_dict`
+- …
+
+**全是状态文件管理**(`status.json` 读法、目录清理、排序)。
+`grep -c "split|autorepay|tax_amount"` = **0**。
+
+也就是说 **`admin restore_backup` 真正走的数据路径没有任何覆盖**。
+
+## 为什么这条路径最该被测
+
+`CLAUDE.md` 把「`_truncate_ledger` 漏子表 → rebuild / 还原后父交易没腿、
+旧腿还在 → 余额**凭空多出来**」列为组合支付的静默丢失之一。
+
+而还原是**运维真会执行**的操作 —— 出事时数据已经错了,不是界面难看。
+
+## 代码目前是对的,但没人拦
+
+实测 `build -> truncate -> rebuild`:腿恰好 2 条、父 `account_name` 仍为空
+(0021 不变式)。**「当前对」和「改坏了有人拦」是两件事** —— 这正是
+`CLAUDE.md` 反复记的形状:每次都**事后**补测试,而下一列被加进来时
+同样的事会再发生一次。
+
+## 四条
+
+- `snapshot_builder.build` 必须把腿**写进** snapshot(否则还原后变「无账户支出」)
+- `_truncate_ledger` 必须清**旧腿**(否则残留腿叠加 = 余额凭空多出来)
+- 重建后腿**恰好** 2 条 —— 断言用精确列表,多一条少一条都能分辨
+- 有腿时父 `account_name` 仍为空(否则余额双倍扣)
+
+变异验证:把 `ReadTxSplitProjection` 从 `_truncate_ledger` 的列表里去掉
+(原样复现 CLAUDE.md 记的那个 bug)—— **变红**。
+
+870 passed(866 + 4)/ mypy 80(零新增,纯测试改动)
