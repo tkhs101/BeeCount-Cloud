@@ -48,44 +48,61 @@ import pytest
 _TMP_DB = (pathlib.Path(tempfile.gettempdir())
            / f"beecount_smoke_{os.getpid()}.db")
 
-#: 改过的环境变量 —— import 之后**立刻还原**(见下方)。
-_PRE_ENV = {
-    "REGISTRATION_ENABLED": os.environ.get("REGISTRATION_ENABLED"),
-    "DATABASE_URL": os.environ.get("DATABASE_URL"),
-    "AUTOREPAY_SCHEDULER": os.environ.get("AUTOREPAY_SCHEDULER"),
-    "SCHEDULER_TIMEZONE": os.environ.get("SCHEDULER_TIMEZONE"),
-}
-
-os.environ["REGISTRATION_ENABLED"] = "true"
-os.environ["DATABASE_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-os.environ["AUTOREPAY_SCHEDULER"] = "off"       # 别让后台任务干扰断言
-os.environ["SCHEDULER_TIMEZONE"] = "Asia/Tokyo"
-
 import sys                                                    # noqa: E402
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+_ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_ROOT))
 
 from alembic import command                                   # noqa: E402
 from alembic.config import Config                             # noqa: E402
 from fastapi.testclient import TestClient                     # noqa: E402
+from sqlalchemy import create_engine                           # noqa: E402
+from sqlalchemy.orm import sessionmaker                       # noqa: E402
+from sqlalchemy.pool import StaticPool                        # noqa: E402
 
+from src.database import get_db                               # noqa: E402
 from src.main import app                                      # noqa: E402
 
-# ⚠️ **必须立刻还原**。这几项在 import `src.main` 时已被读取(engine 建好、
-# 调度器按开关决定注册与否),之后不再需要 —— 留着会**污染同一次 pytest
-# 会话里的其他测试**。
-#
-# 我第一版没还原,结果 `AUTOREPAY_SCHEDULER=off` 让
-# `test_credit_autorepay_scheduler.py` 的 6 条全红(它按这个开关决定是否
-# 注册调度器)。这类「import 即产生副作用」的模块必须做还原 ——
-# 不然单跑绿、全量红,而且很难联想到是自己干的。
-for _k, _v in _PRE_ENV.items():
-    if _v is None:
-        os.environ.pop(_k, None)
-    else:
-        os.environ[_k] = _v
+#: 这条测试**自建 engine**,不靠 `DATABASE_URL` 环境变量。
+#:
+#: `src.database` 的 engine 是**模块级全局**,在 `src.main` 第一次被 import
+#: 时就建好了。而 pytest 按文件名顺序收集 —— `test_smoke_real_app.py` 在
+#: 字母序里靠后,那时 `src.main` 早被别的测试 import 过了,我模块顶层设的
+#: `DATABASE_URL` **根本没生效**。
+#:
+#: 症状就是「单跑绿、全量红」—— 本会话第三种形态(前两种:模块级 env 污染、
+#: 模块级单例)。根治办法是**别依赖全局状态**:自己建 engine、用
+#: `dependency_overrides[get_db]` 注回去,顺序就无关了。
+_ENGINE = create_engine(f"sqlite:///{_TMP_DB.as_posix()}",
+                        connect_args={"check_same_thread": False},
+                        poolclass=StaticPool)
+SessionLocal = sessionmaker(bind=_ENGINE, autocommit=False, autoflush=False)
+
+
+@pytest.fixture(scope="module")
+def client():
+    """真 app + 真路由 + 真鉴权 + 真 self-call,跑在自己的库上。"""
+    cfg = Config(str(_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(_ROOT / "alembic"))
+    command.upgrade(cfg, "head")
+
+    def _override():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = _override
+    try:
+        with TestClient(app) as c:
+            yield c
+    finally:
+        app.dependency_overrides.clear()
+    # 不删 DB:engine 还持有连接,删会 PermissionError(WinError 32)
 
 LEDGER = "smoke-ledger"
+SYNC_LEDGER = "sync-ledger"
 
 
 @pytest.fixture(scope="module")
@@ -408,3 +425,168 @@ def test_frontend_declares_only_fields_the_api_actually_returns(smoke) -> None:
         f"后端改名(或漏了这个字段)后,前端读不到 -> UI **静默**少一块,"
         f"tsc 不报错、vitest 全绿,用户只看到「这个功能怎么不见了」。\n"
         f"后端实际返回的: {sorted(returned)}")
+
+
+
+
+# --------------------------------------------------------------------------- #
+# mobile 同步的时区(同一 app fixture,见下面「只能有一个 TestClient」)        #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(scope="module")
+def app_client(smoke):
+    """一个 **app 类型**的用户 + 他的 token。
+
+    `/sync/push` 需要 app scope,而 `client_type="web"` 注册出来的 token 只有
+    web scope —— 推上去直接 403。
+
+    ⚠️ **不能用 REST 建账本**:app token 的写路径要 `SCOPE_APP_WRITE`,
+    而 `tests/conftest.py` 里有
+    `os.environ.setdefault("ALLOW_APP_RW_SCOPES", "false")` —— 也就是
+    说 pytest 环境里 app scope 的 REST 写**默认关闭**(CLAUDE.md 那条)。
+    账本改由 push 自己物化,那本来就是 mobile 首次同步的流程。
+
+    ⚠️ 也**不要**往库里预插 Ledger:push 首次推某个账本时会自己插,
+    预建会 `UNIQUE constraint failed: ledgers.user_id, ledgers.external_id`。
+    """
+    client, _ = smoke
+    r = client.post("/api/v1/auth/register", json={
+        "email": "sync@e2e.com", "password": "SmokeTest123!x",
+        "device_id": "sync-dev", "client_type": "app",
+        "device_name": "sync-dev", "platform": "t"})
+    assert r.status_code == 200, r.text
+    return client, {"Authorization": f"Bearer {r.json()['access_token']}",
+                    "X-Device-ID": "sync-dev",
+                    "Content-Type": "application/json"}
+
+
+def _push(c, H, changes):
+    """推一批 change,并断言全部被接受。"""
+    r = c.post("/api/v1/sync/push", headers=H,
+               json={"device_id": "sync-dev", "changes": changes})
+    assert r.status_code == 200, f"{r.status_code}: {r.text[:300]}"
+    body = r.json()
+    assert body["accepted"] == len(changes), (
+        f"只接受了 {body['accepted']}/{len(changes)}:{body}")
+    return body
+
+
+def _ensure_ledger(c, H):
+    """把账本本身作为一条 change 推上去(手机首次同步就是这么做的)。"""
+    _push(c, H, [{
+        "ledger_id": SYNC_LEDGER,
+        "entity_type": "ledger",
+        "entity_sync_id": SYNC_LEDGER,
+        "action": "upsert",
+        "payload": {"id": SYNC_LEDGER, "name": "同步冒烟",
+                    "currency": "JPY"},
+        "updated_at": "2026-10-01T00:00:00Z",
+    }])
+
+
+def _sync_txs(c, H):
+    """读同步进来的交易。必须显式指定 ledger_id —— workspace 层没有
+    current 账本概念,不指定时按调用方可见范围,这里直接给死。
+
+    响应形状随参数变:带分页参数是 `{items,total}`,不带是裸数组
+    (我第一版只按 `{items}` 取,直接 KeyError)。
+    """
+    page = c.get("/api/v1/read/workspace/transactions", headers=H,
+                 params={"ledger_id": SYNC_LEDGER}).json()
+    if isinstance(page, dict):
+        return page.get("items") or page.get("transactions") or []
+    return page
+
+
+def _stored_happened_at(sync_id: str):
+    """直接读 projection —— 见下面「为什么不在读端断言」。"""
+    from src.database import SessionLocal
+    from src.models import ReadTxProjection
+    from sqlalchemy import select
+
+    with SessionLocal() as db:
+        return db.scalar(
+            select(ReadTxProjection.happened_at).where(
+                ReadTxProjection.sync_id == sync_id))
+
+
+def test_sync_push_preserves_the_instant_of_offset_timestamps(app_client) -> None:
+    """mobile 在东京(UTC+9)推一笔带 `+09:00` 的交易,落库必须是那个**瞬间**。
+
+    东京 2026-10-20 18:00 = UTC 09:00。若落库成 `18:00`,读端会把它当 UTC
+    序列化成 `18:00Z`,前端按本地渲染成**次日 03:00** —— 整体 +9h,
+    而且不报错。
+
+    这正是 `projection._parse_happened_at` 那轮修复的内容;这条是它的
+    **同步侧**验证。单元测试只测函数,这条测「经过 push 链路之后」还
+    对不对 —— CLAUDE.md 说同步这块历史上出过几次难复现的 bug,
+    根因都是「有隐式契约但没在契约点强制」。
+
+    ## 为什么断言在数据库层而不是读端
+
+    pytest 的 `conftest.py` 有
+    `ALLOW_APP_RW_SCOPES=false` —— app scope 的 REST 写**默认关闭**,
+    所以这条测试里**没法用 REST 建账本**(403),而账本又只能由
+    push 物化,读端按账本筛选时对不上。
+
+    而这条测试要验的东西是「**经过 push 之后落库的时间戳对不对**」,
+    数据库才是权威处。读端那一环探针已单独验过(带参数/不带参数各读到
+    1 条)。为了验一个时间戳把 setup 搞成这样不值得。
+    """
+    c, H = app_client
+    _ensure_ledger(c, H)
+    _push(c, H, [{
+        "ledger_id": SYNC_LEDGER,
+        "entity_type": "transaction",
+        "entity_sync_id": "mobile-tx-tz-1",
+        "action": "upsert",
+        "payload": {
+            "id": "mobile-tx-tz-1",
+            "type": "expense",
+            "amount": 1200.0,
+            # 东京 2026-10-20 18:00 == UTC 09:00
+            "happenedAt": "2026-10-20T18:00:00+09:00",
+            "note": "mobile 东京时间",
+        },
+        "updated_at": "2026-10-20T09:00:00Z",
+    }])
+
+    got = _stored_happened_at("mobile-tx-tz-1")
+    assert got is not None, "同步的交易没落库"
+    iso = got.isoformat() if hasattr(got, "isoformat") else str(got)
+    assert iso.startswith("2026-10-20T09:00"), (
+        f"落库的不是那个瞬间:{iso}\n"
+        f"东京 18:00 == UTC 09:00;落成 18:00 会让前端渲染成次日 03:00"
+        f"(整体 +9h),且不报错。")
+
+
+def test_sync_push_naive_timestamp_is_treated_as_utc(app_client) -> None:
+    """**裸墙钟**(无偏移)按 UTC 解释 —— 与库里其它记录的同一约定。
+
+    库里存的是 UTC 墙钟,naive → UTC 才不会引入第二次偏移。
+    与 `test_happened_at_timezone.py`(测函数)形成对照:那条测函数,
+    这条测**经过同步链路之后**。
+    """
+    c, H = app_client
+    _ensure_ledger(c, H)
+    _push(c, H, [{
+        "ledger_id": SYNC_LEDGER,
+        "entity_type": "transaction",
+        "entity_sync_id": "mobile-tx-naive-1",
+        "action": "upsert",
+        "payload": {
+            "id": "mobile-tx-naive-1",
+            "type": "expense",
+            "amount": 300.0,
+            "happenedAt": "2026-10-21T07:00:00",      # naive
+            "note": "mobile 裸墙钟",
+        },
+        "updated_at": "2026-10-21T07:00:00Z",
+    }])
+
+    got = _stored_happened_at("mobile-tx-naive-1")
+    assert got is not None, "同步的交易没落库"
+    iso = got.isoformat() if hasattr(got, "isoformat") else str(got)
+    assert iso.startswith("2026-10-21T07:00"), (
+        f"naive 没按 UTC 解释:{iso}")
