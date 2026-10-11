@@ -39,6 +39,13 @@ import tempfile
 import uuid
 
 import pytest
+from datetime import datetime, timedelta
+
+from src.services.backup.scheduler import _resolve_scheduler_tz
+from src.services.credit_card.billing import (
+    current_billing_period,
+    period_for_payment_due_date,
+)
 
 # 必须在 import src 之前设好。
 #
@@ -114,6 +121,20 @@ LEDGER = "smoke-ledger"
 
 # `repay_one` 的状态全集。⚠️ **成功那个叫 `done`,不是 `paid`** —— 我曾照着
 # 字面写成 `paid` 并写进文档,查源码才发现。改动前请重新 grep 源码确认。
+# ⚠️ 「今天」必须与服务端**同一个时区口径**:`repay_one` 按调度器时区算今天
+# (Asia/Tokyo),而服务器 OS 多数是 UTC。差 9 小时时按 UTC 设的还款日会对不上
+# -> `skipped_not_due`。这与 CLAUDE.md「一致的口径要有唯一来源」同源。
+_TODAY = datetime.now(_resolve_scheduler_tz()).date()
+_CUR = current_billing_period(_TODAY, billing_day=10, due_day=_TODAY.day)
+_REP = period_for_payment_due_date(_TODAY, billing_day=10, due_day=_TODAY.day)
+# 展示用:窗口右端在未来时用今天(今天必在窗口内)
+_IN_CURRENT_PERIOD = _CUR.statement_date if _CUR.statement_date <= _TODAY else _TODAY
+# 还款用:反查期是「还款日 == 今天」的那一期,落在它里面才能被 repay_one 看到。
+# ⚠️ 必须比 statement_date **早一天** —— 窗口边界在 midnight,而
+# `BillingPeriod.contains()` 比的是**日期**:窗口左端那天的 09:00 其实算在内,
+# 只看 `contains()` 会判断错(第 90 轮)。
+_IN_REPAID_PERIOD = _REP.statement_date - timedelta(days=1)
+
 _REPAY_STATUSES = frozenset({
     "done", "failed",
     "skipped_already_repaid", "skipped_disabled", "skipped_invalid_config",
@@ -152,7 +173,10 @@ def test_smoke_full_chain(smoke) -> None:
     assert r.status_code == 200, r.text
 
     for name, atype, extra in (
-        ("招行信用卡", "credit_card", {"billing_day": 10, "payment_due_day": 25}),
+        # 还款日 = **服务端那个「今天」**:服务器比 UTC 快 9 小时,按 UTC 设
+        # 会得到 skipped_not_due(第 85 轮实测)。
+        ("招行信用卡", "credit_card",
+         {"billing_day": 10, "payment_due_day": _TODAY.day}),
         ("招行储蓄卡", "bank_card", {"initial_balance": 100000.0}),
     ):
         r = client.post(f"/api/v1/write/ledgers/{LEDGER}/accounts", headers=H,
@@ -165,19 +189,29 @@ def test_smoke_full_chain(smoke) -> None:
     ids = {a["name"]: a["id"] for a in accs}
     assert set(ids) == {"招行信用卡", "招行储蓄卡"}, ids
 
-    r = client.post(f"/api/v1/write/ledgers/{LEDGER}/transactions", headers=H,
-                    json={"tx_type": "expense", "amount": 30000.0,
-                          "account_id": ids["招行信用卡"], "note": "午饭",
-                          "happened_at": "2026-10-20T09:00:00Z",
-                          "base_change_id": 0})
-    assert r.status_code in (200, 201), r.text
+    # ⚠️ **两笔,分属两个用途** —— 账期有两道方向性,少一道就会算错(实测踩了五轮):
+    # 1. **方向**:还款日在账单日**之后**。`repay_one` 反查的是「还款日 == 今天」
+    #    那一期,而今天是**刚开始**的那一期 -> 今天的支出它看不到。
+    # 2. **累计口径**:`statement_bill` / `statement_outstanding` 是
+    #    **截止某个日期的累计变动**,不是「窗口内的和」
+    #    (CLAUDE.md 不变式 #1)。所以窗口**之前**、账单日**之前**的支出也算进去。
+    # 这两笔都在账单日之前,所以累计口径下**两笔都计入**(见下面的 60000)。
+    for _n, _w in (("本期", _IN_CURRENT_PERIOD), ("上期", _IN_REPAID_PERIOD)):
+        rr = client.post(f"/api/v1/write/ledgers/{LEDGER}/transactions", headers=H,
+                         json={"tx_type": "expense", "amount": 30000.0,
+                               "account_id": ids["招行信用卡"], "note": _n,
+                               "happened_at": f"{_w.isoformat()}T09:00:00Z",
+                               "base_change_id": 0})
+        assert rr.status_code in (200, 201), rr.text
 
     # ---- 「本期应还」三个字段真的出现在响应里(分层测试查不到这一层)----
     accs = client.get("/api/v1/read/workspace/accounts", headers=H).json()
     card = next(a for a in accs if a["name"] == "招行信用卡")
     for key in ("statement_bill", "statement_outstanding", "next_due_date"):
         assert key in card, f"响应里没有 {key}: {sorted(card)}"
-    assert card["statement_bill"] == 30000.0, card["statement_bill"]
+    # ⚠️ **60000 不是 bug**:`bill` 是**截止账单日的累计变动**,
+    # 不是窗口内的和 —— 两笔都在账单日之前,所以都计入(第 98 轮查清)。
+    assert card["statement_bill"] == 60000.0, card["statement_bill"]
     assert card["next_due_date"], card["next_due_date"]
 
     # 储蓄卡不是信用卡 -> 不显示应还
@@ -206,6 +240,12 @@ def test_smoke_full_chain(smoke) -> None:
     # 钉死某一个值只会让这条测试在别的日期/配置下假红。
     body = r.json()
     assert "status" in body, f"响应里没有 status: {sorted(body)}"
+    # 今天是还款日、`_IN_REPAID_PERIOD` 里有 30000、储蓄卡有 100000
+    # -> **必须真的还了**。钉死具体值而非全集成员:「什么都没还」也是合法
+    # 状态,而那正是本测试要排除的。
+    assert body["status"] == "done", (
+        f"今天是还款日、上期账单 30000、储蓄卡 100000,却拿到 "
+        f"{body['status']!r} —— 自动还款没有真的执行。响应: {body}")
     assert body["status"] in _REPAY_STATUSES, (
         f"status={body['status']!r} 不在 repay_one 的状态全集里: "
         f"{sorted(_REPAY_STATUSES)}")
