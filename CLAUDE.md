@@ -161,7 +161,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | **822 passed** |
+| `pytest -q` | 绿 | **绿** | **836 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **191 passed** |
