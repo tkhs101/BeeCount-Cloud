@@ -718,6 +718,39 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 所以:凡是**替换掉真实 IO 的测试夹具**(FakeCall / mock / 内存 DB),
 它证明的只是「算法对」,不是「接线对」。接线只能靠真跑一遍。
 
+### ⚠️ 异常处理器自己不许再抛(备份服务实测踩到)
+
+`services/backup/runner.py` 的 `_push_one` 里,`except` 块**自身没有任何保护**:
+
+```python
+except Exception as exc:
+    logger.exception("push to %s failed", remote.name)
+    target_db = sub.get(BackupRunTarget, target.id)   # 可能是 None
+    target_db.status = "failed"                       # AttributeError
+    sub.commit()                                      # session 坏掉时也会失败
+```
+
+两处会抛:
+
+1. 目标行在「列举之后、推送之前」被删 -> `get()` 返回 `None`
+2. **原始异常来自数据库** -> session 已处于坏状态,`commit()` 也失败
+
+任何一处再抛,都会**顶掉原始异常并让整个 backup run 崩掉** ——
+结果「这次备份失败了」这件事**根本没被记下来**。
+运维看到的是 run 中断,而不是一条 failed 记录。
+
+**通用规则:`except` 块里的每一行都可能抛**。写失败记录的时候,
+那一段要么自己再包一层 try,要么先判空。不要假设「我已经在 except 里了,
+这里不会再出错」—— 错上加错的路径上,**没有任何东西是安全的**。
+
+⚠️ 这与「失败不许被吞」是同一族的**另一半**:那一半讲的是
+「别把 `failed` 报成 200」,这一半讲的是「**报 failed 的代码本身
+不能先崩掉**」。两条都做到了,失败才是真的被记录了。
+
+这 14 条 mypy 错误(全在 `union-attr`)不是噪音,是同一处未判空的 14 个实例。
+修完 mypy **80 -> 70**。⚠️ **mypy 报 `| None` 要当真读** ——
+它指出的每一次都可能是真能走到的那次。
+
 ### 写这种「会花钱」的代码,三条自检
 
 1. **别重造已存在的模式** —— 先搜。MCP 的 `_self_call` 早就做完了自造那套

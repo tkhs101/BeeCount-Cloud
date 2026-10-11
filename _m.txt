@@ -1,36 +1,8 @@
-fix(backup): 异常处理器自己不许再抛 —— 否则失败的备份根本记不下来
+docs: 记「异常处理器自己不许再抛」,并说明 mypy 的 | None 要当真读
 
-## 真实失败路径
+backup/runner.py 的 except 块自身无保护:目标行被删 -> None 取属性;
+原始异常来自 DB -> session 坏掉、commit 也失败。任一发生都会顶掉原始
+异常并让整个 backup run 崩掉,失败记录根本没写下来。
 
-`services/backup/runner.py` 里 `_push_one` 的 `except` 块自身没有任何保护:
-
-```python
-except Exception as exc:
-    logger.exception("push to %s failed", remote.name)
-    target_db = sub.get(BackupRunTarget, target.id)   # 可能是 None
-    target_db.status = "failed"                       # AttributeError
-    sub.commit()                                      # session 坏掉时也会失败
-```
-
-两处会抛:
-
-1. 目标行在「列举之后、推送之前」被删 -> `get()` 返回 `None`
-2. **原始异常来自数据库** -> session 已处于坏状态,`commit()` 也会失败
-
-任何一处再抛,都会**顶掉原始异常并让整个 backup run 崩掉**。
-结果是「这次备份失败了」这件事**根本没被记下来** ——
-运维看到的是 run 中断,而不是一条 failed 记录。
-
-备份是自托管的最后一道保险,这个路径不能静默失效。
-
-## 改法
-
-- 正常路径两处 `sub.get` 结果判空(空则跳过/跳过写回)
-- `except` 块整体再包一层 try:记不上就至少别把 run 带崩
-  (异常已经 `logger.exception` 过了,信息不会丢)
-
-## 顺带
-
-mypy **80 -> 70**。这 14 条不是噪音,是同一处未判空的 14 个实例。
-
-885 条测试全过 / 备份相关 32 条全过。
+这与「失败不许被吞」是同一族的两半:一半讲别把 failed 报成 200,
+这一半讲报 failed 的代码本身不能先崩掉。
