@@ -585,6 +585,7 @@ async def create_transaction_with_receipt(
     ledger_id: str | None = None,
     currency: str | None = None,
     tax_amount: float | None = None,
+    splits: list[dict[str, Any]] | None = None,
     file_name: str | None = None,
     mime_type: str | None = None,
 ) -> dict[str, Any]:
@@ -593,7 +594,8 @@ async def create_transaction_with_receipt(
     等价于 create_transaction 再 attach_receipt,但少了中间的「已建未附」
     状态,也少一次 LLM 往返。
 
-    参数与 create_transaction 完全一致,另加 image_base64(裸 base64 或
+    参数与 create_transaction 一致(含 splits —— 此前这里独缺,agent 想
+    「带小票地建一笔组合支付」做不到),另加 image_base64(裸 base64 或
     `data:image/jpeg;base64,` 前缀)。tax_amount 语义相同:消费税绝对值,
     照抄小票不要按税率倒算。
 
@@ -615,6 +617,7 @@ async def create_transaction_with_receipt(
         ledger_id=ledger_id,
         currency=currency,
         tax_amount=tax_amount,
+        splits=splits,
     )
     sync_id = created.get("sync_id")
     if not sync_id:

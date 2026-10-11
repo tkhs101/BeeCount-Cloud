@@ -425,3 +425,33 @@ def _deny(msg: str):
     async def _inner(*a, **k):
         raise PermissionError(msg)
     return _inner
+
+
+# --------------------------------------------------------------------------- #
+# 「带小票建一笔组合支付」—— 此前 create_transaction_with_receipt 独缺 splits  #
+# --------------------------------------------------------------------------- #
+#
+# 它内部复用 `create_transaction`,所以补 splits 只是一次透传。
+#
+# ⚠️ **为什么这条护栏是「签名对齐」而不是「真跑」**:真跑要同时构造 base64
+# 图片 + 拆分腿 + 两条 DB 写入路径,成本高;而这次的失效形状恰恰是
+# **「少一个参数」** —— 签名比对恰好**直接**测那个形状,且**不会假绿**。
+# 底层「传了 splits 会不会生效」由 test_tx_split_invariants 里那两条覆盖。
+
+
+def test_receipt_variant_exposes_same_tx_fields_as_create():
+    """两个建交易的 MCP 工具,交易字段必须**完全一致**。"""
+    create = {t.name: t for t in asyncio.run(mcp.list_tools())}
+    a = set(create["create_transaction"].inputSchema["properties"])
+    b = set(create["create_transaction_with_receipt"].inputSchema["properties"])
+
+    only_in_receipt = b - a - {"image_base64", "file_name", "mime_type"}
+    assert not only_in_receipt, f"带小票版多了 create 没有的字段:{only_in_receipt}"
+
+    # ⚠️ **只查这一个方向** —— create 有而带小票版没有的,就是这次的缺口
+    # (splits)。反方向(create 少了)不在本次范围里。
+    missing = a - b
+    assert not missing, (
+        f"create_transaction 有、create_transaction_with_receipt 没有:{sorted(missing)}"
+        "  —— agent 想「带小票地建一笔组合支付」做不到"
+    )

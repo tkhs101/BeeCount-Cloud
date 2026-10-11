@@ -288,6 +288,7 @@ class _CreateTxReceiptKw(TypedDict):
     ledger_id: str | None
     currency: str | None
     tax_amount: float | None
+    splits: list[dict[str, Any]] | None
     file_name: str | None
     mime_type: str | None
 
@@ -643,6 +644,7 @@ async def create_transaction_with_receipt(
     tax_amount: float | None = None,
     file_name: str | None = None,
     mime_type: str | None = None,
+    splits: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Create a transaction AND attach its receipt photo in one step.
 
@@ -678,6 +680,10 @@ async def create_transaction_with_receipt(
         "note": note, "tags": tags, "ledger_id": ledger_id,
         "currency": currency, "tax_amount": tax_amount,
         "file_name": file_name, "mime_type": mime_type,
+        # ⚠️ 此前独缺 —— 它内部复用 create_transaction,少这一项就等于
+        # 「带小票地建一笔组合支付」做不到。护栏: test_mcp_attachments.py
+        # 里那条签名对齐。
+        "splits": splits,
     }
     return await _logged_call(
         ctx, name="create_transaction_with_receipt", scope=SCOPE_MCP_WRITE,
