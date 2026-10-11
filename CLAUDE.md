@@ -179,6 +179,40 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 | `poster-*.js` | 60 kB | 20 kB | html-to-image + qrcode |
 | `cmdk-*.js` | 44 kB | 14 kB | 命令面板 |
 
+### ⚠️⚠️ 首屏真实下载是 **~1.6 MB**,不是主块的 850 kB
+
+这一条纠正了**整整三轮**我一直在优化的错误目标。
+
+`dist/index.html` 里除了入口脚本,还有 **5 个 `rel="modulepreload"`**:
+
+| 首屏预取 | 大小 | 本该懒加载吗 |
+|---|---|---|
+| `index-*.js` | 891 kB | 入口 |
+| `react-vendor-*.js` | 181 kB | 是(长期可缓存) |
+| **`recharts-*.js`** | **409 kB** | **是** —— 只有 OverviewPage 等少量页用 |
+| **`cmdk-*.js`** | **45 kB** | **是** —— 命令面板 |
+| **`framer-motion-*.js`** | **129 kB** | **是** —— 年度报告 / 动画 |
+| **`poster-*.js`** | **37 kB** | **是** —— html-to-image + qrcode |
+| CSS | 87 kB | |
+
+**首屏 JS 合计 ~1615 kB 未 gzip(约 468 kB gzip)+ CSS。**
+
+`manualChunks` 把它们拆成独立 chunk 了,路由也是 lazy 的 —— 但只要 chunk
+还在**入口的静态 import 图**里,Vite 就给它发 `modulepreload`,
+浏览器**首屏就下载**,懒加载完全失效。
+
+**所以「优化主块」这个目标本身选错了** —— 主块只占首屏的 55%。
+真正的大头是 `recharts` 那 409 kB,以及三个本该按需的库。
+
+**怎么验证的**(不用装任何东西):
+
+1. 起真服务器(`uvicorn`,`WEB_STATIC_DIR` 指向 `dist`)
+2. `curl` 首页,把 `<link>`/`<script>` 引用的 `/assets/*` 逐个取回来
+3. **看 `rel` 属性** —— `modulepreload` = 首屏下载,`prefetch` = 空闲时下载
+
+⚠️ 只看 `dist/assets/` 的文件列表**看不出这件事**:文件都在,
+但哪些是首屏的只有 HTML 说了算。
+
 ### ⚠️ 这里有一条**我写错过、后来更正**的结论(别再踩)
 
 我第一轮量 i18n 时跑的是:
