@@ -188,9 +188,33 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 验证方法(不装任何东西):build 完 `grep 'modulepreload' dist/index.html`,
 或起真服务器把引用的 `/assets/*` 逐个取回来。
 
-#### 已修:`manualChunks` 给 recharts 的规则反而害了它
+#### 已修(2 处):先改 import 图,不是改 chunk 名字
 
-改前首屏预取 **781 kB**,改后 **382 kB**(产物总量 2045 -> 2048 kB,
+首屏从 **1672 kB 降到 1479 kB**(预取 5 条 -> 3 条)。两处的教训一样:
+
+| 库 | 大小 | 为什么进首屏 | 怎么修 |
+|---|---|---|---|
+| recharts | 409 kB | `manualChunks` 把它提升进入口静态图 | **去掉那条 chunk 规则** |
+| framer-motion | 126 kB | `Amount.tsx` 只为 `useReducedMotion` 一个钩子静态 import 了它 | **换原生 `matchMedia`**(见 `lib/useReducedMotion.ts`) |
+
+⚠️ **改 `manualChunks` 只对第一处有效。** 第二处我先试了去掉
+framer-motion 的 chunk 规则 —— 首屏**一点没变**。
+
+因为问题不在 chunk 划分,而在**谁静态 import 了它**:
+chunk 叫什么名字不影响它在不在入口的 import 图里。
+
+**流程**:发现某个库在首屏 -> 先查**谁静态 import 了它**
+(`grep -rln "from '<lib>" src/` 再往上追到 shell) -> 改那处 import ->
+重新 build,看 `modulepreload` 条数与字节数是否真的降了。
+
+第二处尤其典型:`useReducedMotion` 的实现**本身就是一行
+`matchMedia('(prefers-reduced-motion: reduce)')`** ——
+而 `prefers-reduced-motion` 本来就是给 CSS 媒体查询用的。
+为了这一行,一个**全站每个页面都要用的组件**(`Amount`)拖进了 126 kB 动画引擎。
+
+#### (存档)已修:`manualChunks` 给 recharts 的规则反而害了它
+
+改前首屏预取 **781 kB**,改后 **382 kB**(这是第一处修复)(产物总量 2045 -> 2048 kB,
 没有重复打包)。**少下载 399 kB**。
 
 机制:`manualChunks` 把 recharts 提升进**入口的静态 import 图**,而 Vite
