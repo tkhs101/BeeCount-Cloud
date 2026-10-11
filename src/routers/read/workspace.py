@@ -1569,7 +1569,7 @@ def _statement_out(db: Session, *, user_id: User,
     挂掉 —— 那个接口还喂着账户页、转账表单、预算页。展示字段失败就
     当没有,静默返回 None,由详情弹窗不显示那一行。
     """
-    from datetime import date
+    from datetime import datetime
 
     out = _StatementOut()
     if (acct.account_type or "") != "credit_card":
@@ -1583,7 +1583,19 @@ def _statement_out(db: Session, *, user_id: User,
         from ...services.credit_card.billing import current_billing_period
         from ...services.credit_card.statement import compute_statement
 
-        today = date.today()
+        # ⚠️ **不能**用 `date.today()` —— 那是**服务器 OS 时区**。
+        #
+        # 调度器(`credit_card/scheduler.py`)和执行器用
+        # `_resolve_scheduler_tz()`(SCHEDULER_TIMEZONE / TZ env)。VPS 默认
+        # UTC,用户设 `SCHEDULER_TIMEZONE=Asia/Tokyo` 时两者**每天差 9 小时**
+        # —— 在账单日 / 还款日边界上,这里显示的「本期应还」和自动还款实际
+        # 扣的那一笔**不是同一期**。
+        #
+        # CLAUDE.md 第三条自检写的就是这个:「一致的口径要有唯一来源」。
+        # 第一版就是 `date.today()`,自己写的自己违反了。
+        from ...services.backup.scheduler import _resolve_scheduler_tz
+
+        today = datetime.now(_resolve_scheduler_tz()).date()
         period = current_billing_period(today, billing_day=bill, due_day=due)
         out.next_due = period.payment_due_date.isoformat()
         ledger_ids = [str(l) for l in db.scalars(

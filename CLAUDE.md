@@ -161,7 +161,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | **836 passed** |
+| `pytest -q` | 绿 | **绿** | **838 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **191 passed** |
@@ -397,6 +397,23 @@ aware `18:00+09:00`(= UTC 09:00)进去,库里落 `18:00` —— **那 9 个小�
 
 护栏:`tests/test_happened_at_timezone.py`,含一条**真 DB round-trip**
 (单元测试只能证明函数返回值对,丢掉时区那一步发生在 SQLite 驱动里)。
+
+### 源码级断言自己也会恒真(tokenize 的坑)
+
+剥注释比 `src` 里 `date.today()` 时,**别**这么写:
+
+```python
+" ".join(t.string for t in tokens if t.type not in (COMMENT, STRING))
+```
+
+`tokenize` 把 `date.today()` 拆成 `date . today ( )` —— join 之后
+**永远匹配不上**原样的 `date.today()`。断言看着在跑,其实恒真。
+
+正确写法是 `tokenize.untokenize(kept)`(保留原有空白与括号间距)。
+
+这与上面那条「hook 插进函数体」是**同一类**:语法完全合法、看起来在
+起保护作用、实际永远通过。做源码级断言时,**必须对它自己做一次变异**
+(把违规代码写回去,确认它变红)—— 我在修 bug 的过程中刚又犯了一次。
 
 ### 验证护栏时先确认回退真的生效
 
