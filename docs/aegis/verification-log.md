@@ -1951,3 +1951,40 @@ C:\...\BeeCount-Cloud\.venv\Scripts\python.exe -m uvicorn src.main:app --port 89
 
 这与本会话反复记的那条是同一条:**探针的否定结果不能当证据**
  —— 「我看不到归属」也是否定结果,同样不能当「它不是我的」。
+
+## 第 112 轮:查「前端会不会被我加的 `status` 破坏」—— 不会,但发现注释已过时
+
+第 81 轮给响应加了 `status`,`tsc`/vitest/smoke 都过了,但**没有一条验证覆盖
+「前端消费这个响应的代码路径」**。这轮补上。
+
+`AccountDetailDialog` 的按钮 -> `onRunNow` -> `GlobalEntityDialogs.tsx:123`
+的 `runAutoRepayNow`:
+
+```js
+const res = await fetch(.../autorepay/run, {...})
+const body = await res.json().catch(() => ({}))
+if (res.ok) {
+  // 200 = 真的走完了判断链。还了多少不由这个响应
+  // WriteCommitMeta),所以只告诉用户「跑完了」,让他去…
+  setRunResult(t('detail.autoRepay.runOk'))
+```
+
+✅ **只判 `res.ok`,不检查 body 的键** -> 多一个 `status` 字段**不会破坏它**。
+（这正是 CLAUDE.md 说的「TS 类型是手写的,多返回的字段会被忽略」。）
+
+## 但发现两件值得做的事
+
+1. **那条注释现在过时了** —— 它说「还了多少不由这个响应(`WriteCommitMeta`)」,
+   而第 81 轮之后**它就在响应里了**。注释会腐烂,和文档数字一样。
+2. **界面因此可以做得更好** —— `runOk` 只说「跑完了」,用户**不知道到底
+   还了没有、还是被跳过了**。而 `status` 现在能回答:
+   `done` = 真还了、`skipped_no_funds` = 钱不够、`skipped_already_repaid`
+   = 已还过…… 这正是我第 67 轮查「用户点手动触发,接口什么都不说」时
+   想解决的问题的**最后一环**。
+
+⚠️ **没动前端代码** —— 这轮上下文已尽,而且改 UI 要同时过 vitest + tsc 两道门。
+**记下准确的改动位置与判据,比塞一个没验完的改动强。**
+
+📌 顺带说明:**后端加字段是低风险的**(前端只判 HTTP 码),
+但**「加完之后没人用」是另一种浪费** —— 我补的那个可观测性,
+在界面上还没兑现。
