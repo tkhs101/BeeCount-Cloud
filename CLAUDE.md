@@ -180,8 +180,8 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 | 规则 | 条数 | 性质 |
 |---|---|---|
 | `F405` undefined-local-with-import-star-usage | **1131** | **80% 都是这一条** —— CLAUDE.md 定的 `_shared.py` + `__init__.py` 桶导入模式的必然结果。**要动就得改路由组织约定,不是清理能解决的** |
-| `I001` unsorted-imports | 86 | 纯排序 |
-| `F401` unused-import | 75 | 未用 import |
+| ~~`I001` unsorted-imports~~ | **0** | 已清 —— 见下面「已做」 |
+| ~~`F401` unused-import~~ | **0** | 已清 —— 见下面「已做」 |
 | `E741` ambiguous-variable-name | 35 | `l` / `O` / `I` 这类 |
 | `E402` module-import-not-at-top | 26 | 多是**函数内延迟 import**(故意的) |
 | `B904` raise-without-from-inside-except | 20 | 见下 |
