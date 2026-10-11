@@ -1139,6 +1139,7 @@ const zhCN = {
   'transactions.splits.remainder': '还差 {amount} 未分配',
   'transactions.splits.remove': '删除这个支付方式',
   'transactions.splits.title': '组合支付',
+  'transactions.splits.accountCleared': '已按上面的行分摊,父交易不再单独计一个账户',
   'transactions.tax.label': '消费税',
   'transactions.tax.netHint': '税前 {net}',
   'transactions.tax.placeholder': '如 298',

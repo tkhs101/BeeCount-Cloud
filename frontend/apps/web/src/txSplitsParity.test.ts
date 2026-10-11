@@ -112,7 +112,12 @@ describe('splits 字段对齐护栏', () => {
     expect(src).toMatch(/transactions\.splits\.title/)
     expect(src).toMatch(/transactions\.splits\.add/)
     // 少于 2 条腿在 server 端会拒绝 → UI 不该在非 expense 时出现
-    expect(src).toMatch(/!isTransfer \?/)
+    // 条件是 **tx_type === expense**,不是 `!isTransfer`。
+    // 服务端只允许 expense 有腿(`snapshot_mutator`: "splits is only
+    // allowed on expense transactions")。原来这里写 `!isTransfer` ——
+    // 于是 income 也会渲染编辑器,用户先选 income 再加腿,提交必得 400。
+    // 这条护栏把那个宽松条件当正确行为锁了很久,现在改的是条件本身。
+    expect(src).toMatch(/form\.tx_type === 'expense' \? \(/)
   })
 
   it('读类型的 api-client 声明了 splits(否则前端读不到腿)', () => {
@@ -210,6 +215,50 @@ describe('splits —— 真的渲染到屏幕上(补 2026-10-11 审计的盲区)
       const src = _read(path.join('i18n', f))
       expect(src, `${f} 缺 transactions.splits.badge`)
         .toMatch(/'transactions\.splits\.badge'/)
+    }
+  })
+})
+
+
+describe('splits —— 两个「控件打架」的组合', () => {
+  const _read = (rel: string) =>
+    fs.readFileSync(path.resolve(__dirname, rel), 'utf8')
+  const PANEL = '../../../packages/web-features/src/features/TransactionsPanel.tsx'
+
+  it('拆分编辑器只对 expense 显示', () => {
+    // 服务端:`splits is only allowed on expense transactions`
+    // 原先是 `!isTransfer` —— income 也渲染,用户先选 income 再加腿,
+    // 带着 2 条腿提交 → 400 + 一句英文技术串。
+    const src = _read(PANEL)
+    expect(_gatingLine(src, "form.tx_type")).toContain(
+      "form.tx_type === 'expense'",
+    )
+    // 不许再退回 `!isTransfer`
+    expect(src).not.toMatch(/\{!isTransfer \? \(/)
+  })
+
+  it('有腿时隐藏账户下拉,而不是让用户白填', () => {
+    // 服务端在有腿时 `pop('accountName')` —— 静默丢弃。
+    // 用户回列表看到这笔「无账户」,而他明明选过,没有任何提示。
+    // 隐藏比提示彻底:看不到就不会去填。
+    const src = _read(PANEL)
+    expect(src).toMatch(/\) : hasSplits \? \(/)
+    expect(src).toMatch(/transactions\.splits\.accountCleared/)
+  })
+
+  it('hasSplits 用的是 SplitForm 的驼峰字段名', () => {
+    // 写成下划线(account_name)编译能过、恒为 false —— 于是分支永远不进,
+    // 用户照旧看到那个会吞掉他输入的账户下拉。
+    const src = _read(PANEL)
+    expect(src).toMatch(/l\.accountName/)
+    expect(src).not.toMatch(/l\.account_name/)
+  })
+
+  it('i18n 三语都有 transactions.splits.accountCleared', () => {
+    for (const f of ['en.ts', 'zh-CN.ts', 'zh-TW.ts']) {
+      const src = _read(path.join('i18n', f))
+      expect(src, `${f} 缺 transactions.splits.accountCleared`)
+        .toMatch(/'transactions\.splits\.accountCleared'/)
     }
   })
 })

@@ -1100,6 +1100,7 @@ const en = {
   'transactions.splits.remainder': 'Still needs to allocate: {amount}',
   'transactions.splits.remove': 'Remove this way',
   'transactions.splits.title': 'Split payment',
+  'transactions.splits.accountCleared': 'Amounts are split by row above — the account field is intentionally left blank',
   'transactions.tax.label': 'Tax (incl.)',
   'transactions.tax.netHint': 'Excl. tax: {net}',
   'transactions.tax.placeholder': 'e.g. 298',

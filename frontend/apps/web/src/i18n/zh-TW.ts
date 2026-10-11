@@ -1098,6 +1098,7 @@ const zhTW = {
   'transactions.splits.remainder': '還差 {amount} 未分配',
   'transactions.splits.remove': '刪除這個付款方式',
   'transactions.splits.title': '組合支付',
+  'transactions.splits.accountCleared': '已按上面的行分攤,父交易不再單獨計一個帳戶',
   'transactions.tax.label': '消費稅',
   'transactions.tax.netHint': '稅前 {net}',
   'transactions.tax.placeholder': '如 298',

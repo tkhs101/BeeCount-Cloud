@@ -349,6 +349,13 @@ export function TransactionsPanel({
   }, [categories, form.category_name, form.tx_type])
 
   const isTransfer = form.tx_type === 'transfer'
+  // 当前**已填的有效腿数**(带账户名且金额 > 0)。用来在用户还没提交时
+  // 就隐藏账户下拉 —— 若等提交时才算,那时用户已经填完、也已经被丢了。
+  // 字段名是 SplitForm 的驼峰形态(accountName/amount),不是 payload 的
+  // 下划线形态 —— 前面几次在这里混过,编译能过但恒为 false。
+  const hasSplits = (form.splits ?? []).filter(
+    (l) => (l.accountName || '').trim() && Number(l.amount) > 0,
+  ).length > 0
   // 非转账允许不选账户（与 mobile 保持一致，tx.accountId 本来就是 nullable）；
   // 转账必须两端都选（否则无法表达方向）。
   const canSubmit = Boolean(writeLedgerId.trim()) && (isTransfer
@@ -553,7 +560,16 @@ export function TransactionsPanel({
                 }
               />
             </div>
-            {!isTransfer ? (
+            {/* 组合支付的编辑器只对 **expense** 显示。
+
+                原来是 `!isTransfer` —— 但服务端明确只允许 expense
+                (`snapshot_mutator`: "splits is only allowed on expense
+                transactions")。用户先选 income 再加腿,就会带着 2 条腿
+                提交,拿到一个 400 和一句英文技术串。
+
+                `applyTxType` 在切类型时会清 splits,所以「先 expense 加腿
+                再切 income」是安全的;不安全的是**反过来**那个顺序。 */}
+            {form.tx_type === 'expense' ? (
               <div className="space-y-1 md:col-span-2">
                 <div className="flex items-center justify-between">
                   <Label>{t('transactions.splits.title')}</Label>
@@ -741,6 +757,23 @@ export function TransactionsPanel({
                   </Select>
                 </div>
               </>
+            ) : hasSplits ? (
+              /* 有腿时**不显示账户下拉**,改一行说明。
+
+                 原来两个控件同时渲染、互不影响,而服务端在有腿时
+                 `pop('accountName')` —— **静默丢弃**用户填的账户。
+                 用户回列表看到这笔「无账户」,而他明明选过,
+                 没有任何提示告诉他被丢了。
+
+                 隐藏比提示更彻底:看不到就不会去填。 */
+              <div className="space-y-1 md:col-span-2">
+                <Label className="text-muted-foreground">
+                  {t('transactions.table.account')}
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  {t('transactions.splits.accountCleared')}
+                </p>
+              </div>
             ) : (
               <div className="space-y-1">
                 <Label>{t('transactions.table.account')}</Label>
