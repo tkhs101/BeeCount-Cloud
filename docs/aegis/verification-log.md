@@ -1221,3 +1221,50 @@ PROBE status = 'skipped_not_due'
 ⚠️ 顺带说明:第 66-72 轮那七轮里,有几轮本可以做得更快 ——
 但那时**响应里确实没有可读的东西**,不是我懒得查,是查不出来。
 **这就是「先修可观测性,再补断言」那条顺序的实证。**
+
+## 第 85 轮:断言**钉死成 `done`** —— 它立刻抓出两个真问题(然后我卡住了)
+
+第 82 轮那条断言只是「全集成员」,所以对「什么都没还」是绿的。这轮改成
+**钉死 `done`**(今天是还款日 + 账单 30000 + 储蓄卡 100000 -> 必须真还了)。
+
+**它当场抓出两个不同的真实状态**,一个接一个:
+
+## 抓到的第一个:`skipped_not_due` —— 我的夹具用错了时区
+
+我把 `payment_due_day` 设成**今天**,结果还是 `skipped_not_due`。
+
+响应里 `server_timestamp` 是 `2026-10-11T21:25Z` —— **UTC 日期还是 10-11,
+而服务器本地(JST)已经是 10-12**。我按 **UTC** 设的 `payment_due_day=11`,
+但 `repay_one` 按**调度器时区**算「今天」(=12),对不上。
+
+修法不是「加 9 小时」,而是**用服务端同一个口径**:
+
+```python
+from src.services.backup.scheduler import _resolve_scheduler_tz
+_TODAY = datetime.now(_resolve_scheduler_tz()).date()   # ← 不接受参数
+```
+
+⚠️ 我第一次写成 `_resolve_scheduler_tz(_SCHEDULER_TZ)` ->
+`ImportError: cannot import name 'settings' from 'src.config'`。**别猜签名**,
+去看 `accounts.py` 里端点自己怎么写的 —— 它就一行,照抄即可。
+
+📌 这正是 CLAUDE.md 那条「一致的口径要有唯一来源」的**第 N 次**实证:
+手动触发与定时任务必须用同一个 `_resolve_scheduler_tz()`。
+
+## 抓到的第二个:`skipped_zero_outstanding`(未解决)
+
+时区修好后状态变成 `skipped_zero_outstanding` —— **今天是还款日了**,
+但 `repay_one` 算的**本期**窗口应还为 0。
+
+⚠️ 关键对照:同一条测试里 `assert card["statement_bill"] == 30000.0` **通过了**
+—— 说明**已出账单**的那期有 30000,而 `repay_one` 算的是**本期**,
+两者不是同一个窗口。我把 `billing_day` 设成 1(避开「今天正好是账单日」
+导致支出落在左开边界外),支出日期也改成了今天,但**本期仍为 0**。
+
+📌 **没查清就不下结论** —— 不知道是窗口右端的算法、`compute_statement`
+的口径,还是别的原因。**这需要再一轮**,而且现在判据已经完备
+(`status` 可读、夹具时区正确),只剩窗口这一个未知。
+
+⚠️ 本轮已恢复绿态(892 passed)。**这轮最有价值的产出不是完成,是那条
+「钉死具体值」的断言** —— 它两轮内抓出两个不同的问题,而「全集成员」
+版本对这两个全都绿。
