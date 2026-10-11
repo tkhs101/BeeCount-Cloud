@@ -162,10 +162,10 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | **1334 passed** |
+| `pytest -q` | 绿 | **绿** | **1347 passed** |
 | `mypy src` | 89 errors | **60 errors** | 比上游还少 29 个;**这条线到此为止**,见下文 |
 | `ruff check src tests alembic` | 1421 | **1255** | **1420 里 1131 条(80%)是同一条 `F405`**(桶导入)—— 系统性问题。已清掉可自动修复的 168 处(`F401` + `I001`) |
-| 前端 `build` + `test` | 绿 | **绿** | **338 passed** + `tsc -b` 两道门都过(见下)|
+| 前端 `build` + `test` | 绿 | **绿** | **341 passed** + `tsc -b` 两道门都过(见下)|
 
 📌 **这些数字是快照,以实际跑出来的为准** —— 补了测试就会变。
 **别照抄这张表当现状**,照抄会写出「文档声称有保护、实际裸奔」那种事。
@@ -666,7 +666,7 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 (此前每一次都是**事后**补一条专用测试 —— 那是症状处理不是解决方案。
 第 6 列被加进来时同样的事会再发生一次,仍然要等用户发现数据被抹了才有人查。)
 
-专用护栏:`tests/test_tx_split_invariants.py`(20 条)、
+专用护栏:`tests/test_tx_split_invariants.py`(22 条)、
 `tests/test_account_balance_paths.py`(两条余额路径必须一致)、
 `frontend/apps/web/src/txSplitsParity.test.ts`(两条提交路径不许只改一处)。
 
