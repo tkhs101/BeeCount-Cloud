@@ -655,12 +655,19 @@ async def update_transaction(
     note: str | None = None,
     tags: list[str] | None = None,
     tax_amount: float | None = None,
+    splits: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """更新现有交易。只更新传入的字段。
 
     tax_amount(0020,消费税):省略 = 不变;**传 0 = 清除这笔的税额**(PATCH 的
     显式 null 在 MCP 层没法与「没传」区分,所以用 0 当清除信号);正数 = 覆盖。
     照抄小票绝对值,不要按税率倒算(各家舍入不同,倒推会对不上收银机)。
+
+    splits(0021,组合支付):省略 = 不变;**传 `[]` = 清除所有腿**。
+    与 mutator 的约定一致(键消失 = 不动,空 list = 清除)。
+    有腿时父交易的 `account` 会被清空,`amount` 仍是实付总额。
+    ⚠️ 此前**只有 create 支持** —— update 这条链三层都漏了它,
+    于是 agent 建了拆分交易却改不了,只能删了重建。
     """
     with SessionLocal() as db:
         existing = db.scalar(
@@ -704,6 +711,19 @@ async def update_transaction(
             if effective_tx_type != "expense":
                 raise ValueError("tax_amount is only allowed on expense transactions")
             patch["tax_amount"] = float(tax_amount)
+
+    # ⚠️ **键消失 = 不动,空 list = 清除** —— 必须显式放进去:
+    # `patch` 里没这个键时,mutator 看不到它,腿就保持原样。
+    # 传 `[]` 才会走 mutator 的清除路径(CLAUDE.md 记的「改写空 list 当信号」)。
+    if splits is not None:
+        # 📌 **原样透传,不要改键名**。这条链走 `_self_call` -> REST PATCH ->
+        # `WriteTransactionUpdateRequest.splits: list[TxSplit]`,而 `TxSplit` 的
+        # 字段是**蛇形** `account_id` / `account_name`(src/schemas.py:527)。
+        #
+        # ⚠️ mutator 内部用驼峰(`accountId`)是**再下一层**的事,
+        # 由写路径负责转换 —— 我第一版在这里先翻成驼峰,结果 Pydantic 直接拒,
+        # 看起来像「功能没生效」。
+        patch["splits"] = splits
     if happened_at is not None:
         patch["happened_at"] = _parse_dt(happened_at).isoformat()
     if note is not None:

@@ -256,6 +256,7 @@ class _UpdateTransactionKw(TypedDict):
     note: str | None
     tags: list[str] | None
     tax_amount: float | None
+    splits: list[dict[str, Any]] | None
 
 
 class _CreateTxKw(TypedDict):
@@ -729,17 +730,22 @@ async def update_transaction(
     note: str | None = None,
     tags: list[str] | None = None,
     tax_amount: float | None = None,
+    splits: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Patch an existing transaction. Only the fields you pass are changed.
 
     `tax_amount` (consumption tax): omit to leave it unchanged, pass 0 to CLEAR
     it, pass a positive number to set it. Pass the absolute figure from the
     receipt rather than deriving it from a rate — retailers round differently.
+
+    `splits` (split payment, 0021): omit to leave the legs unchanged, pass `[]`
+    to clear them. `amount` stays the total actually paid; a transaction with
+    legs carries no single `account`.
     """
     kw: _UpdateTransactionKw = dict(
         sync_id=sync_id, amount=amount, tx_type=tx_type, category=category,
         account=account, happened_at=happened_at, note=note, tags=tags,
-        tax_amount=tax_amount,
+        tax_amount=tax_amount, splits=splits,
     )
     return await _logged_call(
         ctx, name="update_transaction", scope=SCOPE_MCP_WRITE, kwargs=kw,

@@ -2521,3 +2521,61 @@ expect(keys.length).toBeGreaterThanOrEqual(9)          // <- 只数条数
 > 📌 一个断言的强度,要用**它本该抓但抓不到**的那种变异来量。
 「删掉一个键」旧版能抓到(条数变了);**「改一个键的名」抓不到** ——
 而后者在真实编辑里同样常见。
+
+## 第 133 轮:MCP `update_transaction` 的 `splits` —— 三层都漏了
+
+查「税额在 MCP 侧接上了没」时顺带发现:`create_transaction` 有 `splits`,
+`update_transaction` 没有。
+
+| 层 | create | update |
+|---|---|---|
+| `mcp/server.py` | 有 | **无** |
+| `mcp/tools/write_tools.py` | 有 | **无** |
+| `snapshot_mutator` | 有 | **有**(payload 是 dict) |
+
+底层一直是支持的 —— agent 建了拆分交易却**改不了**,只能删了重建。
+按 `tax_amount` 的同一形状补上:签名 + `patch["splits"]` + TypedDict。
+
+**TypedDict 当场抓到我**:`_UpdateTransactionKw` 少写 `splits`,mypy 报
+`typeddict-unknown-key`(60 -> 61)。补回 60。这个 TypedDict 存在的意义正是
+「字段必须与签名一一对应,少写一个 mypy 就报」。
+
+### ⚠️ 但我没能写出会通过的测试 —— 撤回了
+
+这是本轮更值得记的部分。测试连修**八轮**都红,最后定位到两个真问题:
+
+1. **`write_tools.update_transaction` 是 `async`** —— 我第一版同步调用它,
+   得到一个**从未被 await 的 coroutine 对象**。什么都没执行,测试却继续往下走。
+   **「改了腿」这一步从来没真的执行过,而测试看起来只是在断言读回结果。**
+2. **`sync_id` 不在写响应里、也不在读响应里** —— MCP 按 `(user_id, sync_id)`
+   查,传 `entity_id` 或读端的 `id` 都得到 `Transaction not found`。
+
+第2 条追下去又撞上「测试查的 engine 与 MCP 用的不是同一个库」(模块级全局
+engine 那条老规矩的**第二例**)。
+
+**决定:撤回这两条测试,保留已验证安全的实现改动。**
+
+> 📌 **宁可没有测试,也不要一条靠猜通过的测试。**
+> 前者是「没保护」,后者是「**看起来有保护**」—— 而后者正是 CLAUDE.md
+> 反复警告的那一类:hook 插进函数体、字符串存在性断言、恒真的判据。
+> 我这条测试如果留下来,会是一条**永远绿、永远证明不了任何事**的测试。
+
+### 这一轮最该记住的
+
+我在**同一个文件里连续猜错了六次字段形状**:
+
+| 我猜的 | 实际 |
+|---|---|
+| `account_name`(读端) | 读端是 `account_id` |
+| `accountId` | 写路径才是驼峰 |
+| `r.json()["id"]` | 是 `entity_id`,且**不是**读端的 id |
+| `TS.remove()` | `app.dependency_overrides.clear()` |
+| 单条 `/transactions/{id}` | 得用列表端点挑 |
+| 同步调用 async 函数 | 得 `asyncio.run` |
+
+> 📌 **每写一个字段名之前,先去同文件里找现成的用例。**
+同文件第 96 行就写着 `{"account_id": ids["招行卡"], ...}` —— 我读了 `_setup`
+却没读它下面三行的例子。
+
+这正是 CLAUDE.md 记的「**别先给字段编语义,再去套现象**」的同一个错误,
+只是这次编的是 API 形状而不是字段语义。
