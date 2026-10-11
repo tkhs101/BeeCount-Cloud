@@ -179,15 +179,71 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 | `poster-*.js` | 60 kB | 20 kB | html-to-image + qrcode |
 | `cmdk-*.js` | 44 kB | 14 kB | 命令面板 |
 
-**已经排除的两个嫌疑**(我各花了一轮才确认):
+### ⚠️ 这里有一条**我写错过、后来更正**的结论(别再踩)
+
+我第一轮量 i18n 时跑的是:
+
+```bash
+du -sh packages/ui/src/locale      # -> 1.3 kB
+```
+
+于是写进文档:「i18n 不是问题」。**那量错了地方** —— 那个目录只有
+`LanguageToggle` / `LocaleProvider` 三个小文件。真正的词典在:
+
+| 文件 | 源大小 | 进包后 |
+|---|---|---|
+| `apps/web/src/i18n/en.ts` | 92.5 kB | **90.2 kB** |
+| `apps/web/src/i18n/zh-CN.ts` | 93.0 kB | **70.9 kB** |
+| `apps/web/src/i18n/zh-TW.ts` | 91.9 kB | **70.0 kB** |
+| | | **合计 231 kB** |
+
+而 `apps/web/src/i18n/index.ts` 顶部是**静态导入**:
+
+```ts
+import en from './en'
+import zhCN from './zh-CN'
+import zhTW from './zh-TW'
+```
+
+**所有用户都下载全部三种语言,哪怕只读一种。** 这占主块的 **28%**。
+
+**教训**:「排除一个嫌疑」要确认量的是**同一个东西**。我量的路径和
+结论指向的路径不是同一个,却写得很笃定 —— 与「grep 搜不到就断定不存在」
+是同一类错误。
+
+### 已排除的嫌疑(这些量对了)
 
 - **`lucide-react` 不是问题**:临时给它加一条 `manualChunks` 重新 build,
   主块**大小不变**(849.99 kB)、也没生成对应分块 —— 它已被 tree-shake
-  到几乎为零。53 处 `from 'lucide-react'` 桶导入**不用改**。
-- **i18n 不是问题**:词典总共 **1.3 kB**(`packages/ui/src/locale`)。
+  到几乎为零。53 处桶导入**不用改**。
 
-所以主块那 850 kB 是**应用自身代码**。要再压就得先装 bundle analyzer
-定位到具体模块 —— 别凭猜拆包,`manualChunks` 已经处理过所有大依赖了。
+### 主块的完整构成(rollup generateBundle 实测)
+
+不装新依赖:在 `build.rollupOptions.plugins` 里临时挂一个
+`generateBundle` 钩子,把 `bundle[...].modules` 写出去即可
+(配置是 ESM,用 `import { writeFileSync } from 'node:fs'`,
+**`require` 不可用**)。
+
+| 项 | 大小 |
+|---|---|
+| 依赖(全在 `.pnpm` 下,已拆成独立 chunk 的除外) | ~607 kB |
+| **i18n 三种语言** | **231 kB** |
+| `AccountsPanel.tsx` | 48.7 kB |
+| `CategoriesPanel.tsx` | 32.4 kB |
+| `TransactionsPanel.tsx` | 31.3 kB |
+
+### 要不要做 i18n 按需加载(**有意暂缓**)
+
+改成 `() => import('./zh-CN')` 能把首屏从 231 kB 降到约 90 kB,
+对「只用 Web/PWA + 多为移动网络」这个部署形态是实打实的收益。
+
+**但我没做**,原因是风险收益比不合适:它会改 `LocaleProvider` 的加载
+时机,而**每一个渲染出来的字符串**都依赖它 —— 词典没到位就是满屏 key 或
+闪一下原文。`zh-CN` 用户首屏会多一次往返。
+
+要动的话按这个顺序:先给 `LocaleProvider` 加「词典未加载」的显式状态
+(别靠 `?? key` 兜底 —— 那会把加载失败变成满屏原始 key 而没人发现),
+再加按需 `import`,最后**实测首屏 chunk 变小**再提交。
 
 ⚠️ `dist/` 是 **gitignore** 的,不在仓库里 —— 部署时现 `pnpm build`。
 本地产物过期无所谓,但这也意味着 **CI 的 build 结果才是发布依据**。
