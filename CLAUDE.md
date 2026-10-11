@@ -543,31 +543,33 @@ node_modules 路径调用),**不能**写 `expect(src).not.toContain('recharts')`
 灌 225 笔 / 193 天后,概览页实测:本月结余 `¥4.66万`、本月收入 `¥38.5万`、
 账本 `日常`、货币 **JPY**(`¥` 是日元符号,不是人民币 —— 别当成币种错)。
 
-#### ⚠️ 组合支付:**两条余额路径的「互相比对」没有带 splits**(第 56 轮查证)
+#### ✅ 组合支付:两条余额路径的「互相比对」补上了(第 57 轮,变异验证过)
 
-按 CLAUDE.md 自己的规则去查组合支付(0021)的护栏,逐条读判据而不是数文件。
-**覆盖比预想的好,但有一个窄缺口**:
+第 56 轮记的缺口已补:`tests/test_account_balance_paths.py`
+`test_two_paths_agree_on_split_payments` —— 一笔 5000 的支出拆成
+卡 3000 + 现金 2000,外加一笔普通支出,然后**SQL 聚合与逐笔 delta
+逐账户比对**。
 
-| 侧 | 覆盖 |
-|---|---|
-| `_split_legs`(SQL 聚合) | ✅ `test_credit_statement_amount.py::test_rule2_split_legs_are_counted` |
-| `account_balance_delta`(逐笔) | ✅ `tx_split_invariants::test_split_balance_delta_matches_leg_sum` |
-| **两条路径互相比对(带 splits)** | ❌ **没有** |
+📌 **变异验证:把 `account_balance_delta` 的 `if splits is not None`
+改成 `if False`,测试变红** —— 两个账户的 `per_tx_delta` 变成 `0.0`。
 
-⚠️ `test_account_balance_paths.py` 里 **`splits` 出现 0 次** —— 那条
-「SQL 聚合 == 逐笔 delta,逐账户比对」只在**没有组合支付**的交易上验过。
+这个失败形状值得记:**父交易的 `account_sync_id` 被清空了**,所以
+「忘了展开腿」不等于「扣在父账户上」,而是**这笔支出对所有账户零影响**,
+账户页余额显示 0。**不报错,只是数字错。**
 
-而 `test_split_balance_delta_matches_leg_sum` 的 **docstring 写的是
-「逐笔 delta 与 SQL 聚合对腿的口径一致」,断言却只比了 delta vs 腿和**,
-**SQL 那侧不在这个测试里**。
+⚠️ **补这条时踩的三个坑(都是猜签名猜出来的)**:
 
-📌 **风险形状**:两条路径可以各自自洽、却在 splits 上互相不一致 ——
-而 CLAUDE.md 把「两条余额路径必须一致」列为必守不变式。
-要补的话,判据应该是:同一笔带 splits 的交易,
-`account_balance_delta(..., splits=legs)` 的结果 == SQL 聚合的结果。
+| 我写的 | 实际 | 报什么 |
+|---|---|---|
+| `account_balance_stats(db, "lg1")` | 收 **`Sequence[内部 ledger id]`** | 字符串被逐字符迭代 -> `IN expression list` ArgumentError |
+| 直接用 `agg[sid]` | 返回**嵌套 dict** `{sid: {count, income, expense, balance}}` | KeyError / 取到 dict |
+| 自己查账户取 `initial_balance` | 用 `UserAccountProjection` + `account_balance_from_stats` | 多余代码 |
 
-(不急着补 —— 两条路径的输入不同、SQL 那侧要走真库,成本不低。
-但**别以为这条已经验过了**。)
+⚠️ **`ledger_internal` 要自己查**:`Ledger.external_id == "lg1"` -> `.id`,
+**不能把 `external_id` 直接传给内部函数**。
+
+⚠️ 变异验证完**第一件事是确认源码真的恢复了**(`git diff --stat` 应为空)
+—— 我第一版 `cp` 的备份忘了确认,差点把变异留在仓库里。
 
 #### ✅ 默认分类种子实测:0 → 181,且**只播撒一次**(第 55 轮)
 

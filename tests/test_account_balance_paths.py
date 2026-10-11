@@ -227,3 +227,85 @@ def test_account_balance_from_stats_missing_row_returns_initial():
     from src.routers.read._shared import account_balance_from_stats
     assert account_balance_from_stats("nope", 1234.0, {}) == 1234.0
     assert account_balance_from_stats("nope", 1234.0, None) == 1234.0
+
+
+# --------------------------------------------------------------------------
+# 组合支付(0021):两条路径必须都能展开 splits 并给出一致结果        #
+# --------------------------------------------------------------------------
+# 上面那条不变式只覆盖**没有组合支付**的数据 —— 这个文件里 `splits`
+# 出现过 0 次。而组合支付正是最容易「改一条忘一条」的场合:一笔支出拆成
+# 两条腿,SQL 聚合靠 `_split_legs` join,逐笔靠 `account_balance_delta(
+# splits=...)`。**两条路径各自自洽、却在 splits 上互相不一致**是完全可能
+# 的,而症状是「账户页余额和净值曲线对不上」—— 不报错,只是数字错。
+
+def test_two_paths_agree_on_split_payments():
+    """同一笔带 splits 的交易,SQL 聚合与逐笔 delta 必须逐账户一致。"""
+    client, TS = _make_client()
+    try:
+        H = _seed(client)
+        for name in ("卡", "现金"):
+            client.post("/api/v1/write/ledgers/lg1/accounts", headers=H, json={
+                "base_change_id": 0, "name": name,
+                "account_type": "credit_card" if name == "卡" else "cash",
+                "initial_balance": 0.0})
+        A = _accounts(client, H)
+        卡, 现金 = A["卡"], A["现金"]
+
+        # 一笔 5000 的支出:卡 3000 + 现金 2000(父交易的 account_* 会被清空)
+        _tx(client, H, amount=5000.0, category_name="餐饮",
+            splits=[{"account_id": 卡, "amount": 3000.0},
+                    {"account_id": 现金, "amount": 2000.0}])
+        # 再来一笔普通支出,确保比对不是「只有一条数据恰好一致」
+        _tx(client, H, amount=1000.0, category_name="餐饮", account_id=现金)
+
+        db = TS()
+        try:
+            from sqlalchemy import select
+            from src.models import ReadTxProjection, ReadTxSplitProjection
+
+            legs = {}
+            for s in db.scalars(select(ReadTxSplitProjection)).all():
+                legs.setdefault(s.tx_sync_id, []).append(
+                    {"accountId": s.account_sync_id, "amount": s.amount})
+
+            from src.models import Ledger, UserAccountProjection
+            ledger_internal = db.scalar(
+                select(Ledger).where(Ledger.external_id == "lg1")).id
+            stats = account_balance_stats(db, [ledger_internal])
+            accts = db.scalars(select(UserAccountProjection)).all()
+            agg = {str(a.sync_id): account_balance_from_stats(
+                str(a.sync_id), float(a.initial_balance or 0.0), stats)
+                for a in accts}
+            per = {}
+            for row in db.scalars(
+                select(ReadTxProjection).order_by(ReadTxProjection.happened_at)
+            ).all():
+                for sid, d in account_balance_delta(
+                    row.tx_type, float(row.amount or 0.0),
+                    row.account_sync_id, row.from_account_sync_id,
+                    row.to_account_sync_id,
+                    splits=legs.get(str(row.sync_id)),
+                ).items():
+                    per[sid] = per.get(sid, 0.0) + d
+
+            by_sid = {str(a.sync_id): a for a in accts}
+            assert all(sid in by_sid for sid in (卡, 现金)),                 f"账户没建出来,比对无效:{list(by_sid)}"
+
+            # **先自检**:腿真的落库了吗?没落库下面就是「两条路径都跳过
+            # splits、恰好一致」—— 护栏空跑(与转账那段的同一个坑)。
+            assert len(legs) == 1, f"组合支付腿没落库,比对无效:{legs}"
+            assert len(next(iter(legs.values()))) == 2, legs
+
+            expected = {
+                卡: -3000.0,
+                现金: -2000.0 - 1000.0,
+            }
+            got_agg = {sid: agg.get(sid) for sid in (卡, 现金)}
+            got_per = {sid: float(by_sid[sid].initial_balance or 0.0)
+                       + per.get(sid, 0.0) for sid in (卡, 现金)}
+            assert got_agg == expected, {"sql_aggregate": got_agg}
+            assert got_per == expected, {"per_tx_delta": got_per}
+        finally:
+            db.close()
+    finally:
+        app.dependency_overrides.clear()
