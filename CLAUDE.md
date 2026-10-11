@@ -161,7 +161,7 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | **874 passed** |
+| `pytest -q` | 绿 | **绿** | **879 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
 | 前端 `build` + `test` | 绿 | **绿** | **307 passed**(2026-10-12 实跑 build,12s) |
@@ -712,16 +712,30 @@ for k, v in _PRE.items():                       # import 后立刻还原
 pytest 结束时删临时库会 `PermissionError (WinError 32)`。DB 文件名带 pid,
 残留交给系统清理 Temp。
 
-### 加 projection 表时:三条**结构性**护栏(别再事后补)
+### 加列 / 加表时:三张**手工登记表**,各有默认红的护栏
 
-本会话前两条组合支付的坑都是**事后**补测试 —— 而 `CLAUDE.md` 自己写着
-「下一次同样的事还会发生」。现在补上三条默认红的结构性护栏:
+本会话前两条组合支付的坑都是**事后**补测试 —— 而下面这句自己就写着
+「下一次同样的事还会发生」。所以现在三张表全部有结构性护栏:
 
-| 护栏 | 挡住什么 |
-|---|---|
-| `test_projection_reverse_bridge_coverage.py` | 漏了新列的反向桥 |
-| `test_truncate_ledger_coverage.py` | 忘了把新表登记进 `_truncate_ledger` |
-| `test_backup_restore_data.py` | 还原路径真的丢数据 |
+| 登记表 | 漏登记的后果 | 护栏 |
+|---|---|---|
+| `_projection_row_to_tx_dict`(反向桥) | Web PATCH 静默抹掉新列 | `test_projection_reverse_bridge_coverage.py` |
+| `_truncate_ledger`(清理清单) | rebuild / 还原后余额「凭空多出来」 | `test_truncate_ledger_coverage.py` |
+| `_LEDGER_MERGE_SPECS`(同步 merge) | **`/sync/push` 静默丢弃新列** | `test_sync_merge_spec_coverage.py` |
+
+三者都是**白名单式**:加新东西时**默认红**,要求显式论证为什么可以不登记。
+黑名单在加东西时**默认通过** —— 而那正是要防的情况。
+每条白名单都带**上限**,防止有人往里塞真列来「让测试绿」。
+
+**第三张的失败模式最隐蔽**:mobile 推带新字段的交易,服务端返回 **200**、
+`accepted` 计数**正常**,但字段**没落库**;下次 pull 回来还是没有,
+两端「看起来同步了」。没有报错、没有日志、没有任何信号。
+
+`splits` 故意不在 merge spec 里(子表没有列),由
+`_merge_tx_splits_after_merge` 后处理 —— 有测试显式记这笔,免得有人误加。
+
+另外 `test_backup_restore_data.py` 补的是**还原路径真的丢数据**那条
+(与上面三张表不同,它验的是端到端结果而非登记完整性)。
 
 `_truncate_ledger` 那条是**白名单式**:新增 `Read*` 表时默认红。
 用「有 `ledger_id` 列」区分 ledger-scoped 与 per-user ——
