@@ -243,6 +243,27 @@ chunk 叫什么名字不影响它在不在入口的 import 图里。
   `CommandPalette.tsx`,而后者用 cmdk。命令面板本该按需打开,
   这是唯一一条已定位且可改的
 
+**`cmdk` 和 `poster` 是同一类,import 图上已经没有可改的了**
+
+i18n 那轮改完重新查,发现 `CommandPalette` 在 `AppHeader` 里**本来就是
+`React.lazy` 的**(`AppHeader.tsx:26`),而且:
+
+- 全仓 `grep -rnE "^\s*import .*CommandPalette"` -> **零结果**(那几处命中全是**注释**)
+- 全仓 `from 'cmdk'` 只有 `CommandPalette.tsx` 一处
+- i18n 改完后,入口块里**已经不再静态 import cmdk**
+
+**结论:这两个不是「谁静态引了它」的问题,而是 Vite 会给「入口的动态 import
+之间的共享 chunk」发 `modulepreload`。** `cmdk`(只被命令面板用)和
+`poster`(html-to-image + qrcode,被年报页和设置页共用)都是这种情况。
+
+⚠️ 所以别再花时间查「谁静态引了 cmdk/poster」—— 查不到,因为没人静态引。
+唯一的杠杆是关掉 `build.modulePreload`,而那**要拿掉所有预取**(见下),不做。
+
+⚠️ 查的时候注意**注释里出现的名字会让 grep 误报**:
+`GlobalSharedLedgerDialogs.tsx:13` 和两个 `lib/*Events.ts` 的文件头
+都写着 `CommandPalette`,但那是**说明文字**,不是 import 语句。
+必须用 `grep -rnE "^\s*import ..."` 只认 import 行。
+
 **`poster`(36 kB)为什么还在首屏 —— 范围已收窄**
 
 从 `dist/index.html` 那一行入手,实测到的事实:
