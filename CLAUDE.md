@@ -161,10 +161,10 @@ SyncChange,找不到就 404。方案 B 之后没有任何代码再写那种行,�
 
 | 步骤 | 上游基线 | 本 fork 现在 | 说明 |
 |---|---|---|---|
-| `pytest -q` | 绿 | **绿** | 743 passed |
+| `pytest -q` | 绿 | **绿** | **822 passed** |
 | `mypy src` | 89 errors | **80 errors** | 比上游还少 9 个 |
 | `ruff check src tests alembic` | 1421 | **1420** | `ruff>=0.5.5` 未锁版本，新版 ruff 对这份存量代码报得极多；**非本次改动引入** |
-| 前端 `build` + `test` | 绿 | **绿** | 160 passed |
+| 前端 `build` + `test` | 绿 | **绿** | **191 passed** |
 
 mypy 那边本 fork 用 `TypedDict` 声明各工具的 kwargs（`kw = dict(...)` 会让
 `**kw` 展开每一行都报 arg-type，上游 `parse_and_create_from_text` 就是这么
@@ -301,7 +301,7 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 | `payment_due_day=0` | 调度**永远不触发**,用户半年后才发现没还过 |
 | 跨币种还款 | transfer 两端共用一个 `amount` → ¥10000 原样加到 JPY 卡 |
 
-### 静默丢失的坑(第三次同类)
+### 静默丢失的坑(「同一件事两份实现」这一族)
 
 `tax_amount` 在 `_projection_row_to_tx_dict` 被漏 → `splits` 在同一函数被漏
 → **`autorepay_*` 在 `snapshot_builder` 被漏**。同一形状:「projection →
@@ -331,6 +331,37 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
    200,用户什么都看不到。现在 failed→502 / 配错→400
 3. **一致的口径要有唯一来源** —— 时区走 `_resolve_scheduler_tz()`,
    别用 `date.today()`
+
+### 缺口检测只告警,永不自动补跑
+
+停机超过 `CATCH_UP_DAYS = 7` 天时,那一期**永远补不上**(补跑窗口已过),
+而真实信用卡那边已经是逾期。catch-up 跑完会检测「`autorepay_last_period`
+落后 **≥ 2 期**」并打 `WARNING`。
+
+**只告警,不自动扣** —— 计划文档反对无界补跑,理由是对的:补几十笔真钱。
+用户可以用 `POST /write/accounts/.../autorepay/run` 手动补。
+
+基准是「**最近一个已过去的还款日**」(`_last_past_due_date`),**不用**
+`current_billing_period` / `period_for_payment_due_date`:
+后者只对**还款日当天**成立(其余日子直接 raise),前者指向**窗口右端**
+(下期)—— 两者都会把「上月已还、本月还没到期」判成落后两期,每天一条
+假告警。用户很快学会无视日志,真正该看见的那条就夹在里面了。
+
+阈值必须 **2 不是 1**:落后 1 期是正常状态(本月还没到还款日)。
+
+### 时区:`_parse_happened_at` 必须归一到 UTC(第四次同类)
+
+SQLite 没有原生 datetime 类型,SQLAlchemy 存的是**墙钟字符串**。写一个
+aware `18:00+09:00`(= UTC 09:00)进去,库里落 `18:00` —— **那 9 个小时
+消失了**;读回来是 naive,读路径的 `_to_utc` 一律「假设是 UTC」→
+序列化成 `18:00Z` → 前端按本地时区渲染成**次日 03:00**。
+
+`snapshot_mutator._to_iso8601` 早就归一,而 `projection._parse_happened_at`
+(写 ORM 的那个)**没有** —— 又一次「同一个转换两份实现,一份对一份错」。
+这条影响**所有非 UTC 时区用户的每一笔交易**,新 UI 团队实测发现。
+
+护栏:`tests/test_happened_at_timezone.py`,含一条**真 DB round-trip**
+(单元测试只能证明函数返回值对,丢掉时区那一步发生在 SQLite 驱动里)。
 
 ### 验证护栏时先确认回退真的生效
 

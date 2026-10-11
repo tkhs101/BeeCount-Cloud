@@ -201,6 +201,93 @@ class AutoRepayScheduler:
                                    exc_info=True)
             self._started = False
 
+    def _detect_gaps(self) -> list[dict[str, Any]]:
+        """找出「该还但没还上、而且已经出了补跑窗口」的卡。
+
+        ## 为什么只提示不自动扣
+
+        `CATCH_UP_DAYS = 7` 之后再也补不上。机器关机 10 天,
+        第 8 天之前的那一期**永远不会被自动还** —— 而真实信用卡
+        那边已经是逾期,利息/滞纳金真金白银。
+
+        计划文档明确反对**无界补跑**,理由是对的:补几十笔真钱。
+        所以这里只**检测并告警**,让用户自己决定要不要手动补
+        (有 `/autorepay/run` 手动触发端点)。
+
+        ## 判据
+
+        `autorepay_last_period` 落后当前期 **≥ 2 期** ——
+        落后 1 期是正常的(本月还没到还款日),落后 2 期以上说明
+        有一期彻底漏了。
+
+        只读一遍投影表,不动任何钱,所以它自己也要能失败而不影响主流程
+        (`_safe_run` 兜住)。
+        """
+        import logging as _logging
+
+        from sqlalchemy import select
+
+        from ...models import User, UserAccountProjection
+
+        log = _logging.getLogger("beecount.credit_autorepay")
+        today = datetime.now(self._timezone).date()
+
+        from .repay import period_key
+
+        # **直接查所有启用自动还款的卡**,而不是先遍历 `User` 再逐个查账户。
+        #
+        # 第一版走 User 表,于是:① N+1 次查询;② 用户行缺失的卡(管理员建的、
+        # 导入来的、用户行被删的)**完全检测不到** —— 而那些恰恰是最可能
+        # 出问题、也最需要告警的。检测逻辑不该依赖一张与它无关的表。
+        from ...models import UserAccountProjection
+
+        cards = SessionLocal().scalars(
+            select(UserAccountProjection).where(
+                UserAccountProjection.autorepay_enabled.is_(True),
+            )
+        ).all()
+
+        gaps: list[dict[str, Any]] = []
+        for card in cards:
+            due = int(card.payment_due_day or 0)
+            bill = int(card.billing_day or 0)
+            # 没配齐日号的卡没有「这期」的概念,查不出缺口 —— 配置不完整
+            # 由 `validate_autorepay_config` 在执行器里报错,不在这里重复。
+            if not (1 <= due <= 31) or not (1 <= bill <= 31):
+                continue
+
+            # 基准 = **最近一个已经过去的还款日**(含今天)。
+            #
+            # 为什么不用 `current_billing_period` / `period_for_payment_due_date`:
+            #  · `period_for_payment_due_date` 只对**还款日当天**成立,
+            #    其余日子直接 raise —— 而用户绝大多数日子不是还款日,
+            #    第一版就这么写的,于是**非还款日上整个检测被异常打掉**。
+            #  · `current_billing_period` 指向**窗口右端**(下期),
+            #    6/28 算出来是 7/25,于是「5 月已还、6 月还没到期」的正常
+            #    状态被判成落后 2 期 —— 每天一条假告警。
+            #
+            # 缺口检测问的是「**有什么该还的没还**」,答案只需要一个日期:
+            # 上一个已经过去的还款日。直接算,不用绕账期推导。
+            past_due = _last_past_due_date(today, due_day=due)
+            want = period_key(past_due)
+            have = card.autorepay_last_period
+            # 从没还过(`last_period` 为空)不报警 —— 那是「还没到第一次」,
+            # 不是「漏了一期」。
+            if not have or _months_behind(have, want) < 2:
+                continue
+            entry = {
+                "user_id": str(card.user_id), "card": str(card.sync_id),
+                "name": card.name, "last_period": have,
+                "current_period": want,
+            }
+            gaps.append(entry)
+            log.warning(
+                "autorepay gap: card=%s(%s) last=%s current=%s "
+                "—— 有一期没还上(可能 VPS 停机超过 %d 天)。"
+                "补跑窗口已过,需要手动补。",
+                card.sync_id, card.name, have, want, CATCH_UP_DAYS)
+        return gaps
+
     # -- 执行 ------------------------------------------------------------- #
 
     def _tick(self) -> None:
@@ -221,6 +308,10 @@ class AutoRepayScheduler:
 
     def _catch_up(self) -> None:
         _safe_run(self._today, catch_up=True)
+        # 补跑完检测**跑不到的缺口**。见 detect_gaps 的 docstring:
+        # 机器关机超过 CATCH_UP_DAYS 天时,那一期永远补不上,
+        # 而用户界面上零提示 —— 真实信用卡那边已经是逾期。
+        _safe_run(self._detect_gaps, catch_up=False)
 
     def _today(self, *, catch_up: bool) -> list[dict[str, Any]]:
         """跑今天该还的,并把结果写进日志。
@@ -331,6 +422,38 @@ def _log_level_for(status: str) -> int:
     if status in _QUIET_STATUSES:
         return logging.DEBUG
     return logging.INFO
+
+
+def _last_past_due_date(today, *, due_day: int):
+    """最近一个**已经过去**的还款日(含今天),并钳到月末。
+
+    `due_day=31`、今天是 2 月 20 号 → 上一个还款日是 **1 月 31 号**;
+    2 月没有 31 号,不能算出 2/31。同理 4/30、6/31 都会钳到当月最后一天。
+    """
+    from .billing import _shift_month, clamp_to_month_end
+
+    this_month = clamp_to_month_end(today.year, today.month, due_day)
+    if this_month <= today:
+        return this_month
+    # 本月的还款日还没到 → 上一个月的。**跨年交给 **
+    # (2026-01-05、还款日 25 → 2025-12-25)。手写  会在 1 月
+    # 算出 month=0 然后 calendar 直接抛 IllegalMonthError —— 而这函数
+    # 是给「今天可能是任意一天」用的,1 月 5 号早上开机就会踩到。
+    y, m = _shift_month(today.year, today.month, -1)
+    return clamp_to_month_end(y, m, due_day)
+
+
+def _months_behind(have: str, want: str) -> int:
+    """`want` 比 `have` 晚几个月。格式都是 `YYYY-MM`。
+
+    落后 0/1 期是正常的(本月还没到还款日),>= 2 才叫「有一期彻底漏了」。
+    """
+    try:
+        hy, hm = (int(x) for x in have.split("-"))
+        wy, wm = (int(x) for x in want.split("-"))
+    except (ValueError, AttributeError):
+        return 0          # 解析不了就不报警,别误报
+    return (wy - hy) * 12 + (wm - hm)
 
 
 def _publish_run_metrics(results: list[dict[str, Any]]) -> None:
