@@ -115,17 +115,28 @@ def test_endpoint_requires_admin_not_just_scope(client) -> None:
     from src.deps import require_admin_user
     from src.routers.admin import admin_me
 
-    src = inspect.getsource(admin_me)
-    assert "require_admin_user" in src, (
+    # ⚠️ 这里原来断言的是「源码里有 `require_admin_user`」+「源码里**没有**
+    # `require_scopes`」—— 两条**源码文本判据**(151-158 轮实测了这一族:
+    # 文本还在、代码已经不跑,护栏照样绿)。更要命的是**改名就绕过**:
+    # 把 `require_scopes` 换成 `require_ops_write`,同样加回了 scope 依赖,
+    # 而字符串判据**照样绿**。
+    #
+    # 现在改成**结构判据**:这个端点的依赖集合**恰好只有** `require_admin_user`。
+    # 对改名免疫(那才是真正要防的),也不依赖任何源码文本。
+    deps = [
+        p.default.dependency
+        for p in inspect.signature(admin_me).parameters.values()
+        if hasattr(p.default, "dependency")
+    ]
+
+    assert require_admin_user in deps, (
         "本端点必须依赖 require_admin_user —— 少了它,有写权限的人"
-        "都会被当成管理员")
-    assert "require_scopes" not in src, (
-        "本端点**不该**再加 scope 依赖 —— 那会重新引入它要消灭的歧义")
-    # 依赖的确实是你以为的那个函数
-    sig = inspect.signature(admin_me)
-    assert any(p.default.dependency is require_admin_user
-               for p in sig.parameters.values()
-               if hasattr(p.default, "dependency"))
+        "都会被当成管理员。实际依赖:" + str(deps)
+    )
+    assert deps == [require_admin_user], (
+        "本端点**不该**再加别的依赖(尤其 scope 类)—— 那会重新引入它要消灭的歧义。"
+        "实际依赖:" + str(deps)
+    )
 
 def test_real_admin_passes_with_user_id(client, monkeypatch) -> None:
     """真管理员 → 200 + is_admin: true + user_id。
