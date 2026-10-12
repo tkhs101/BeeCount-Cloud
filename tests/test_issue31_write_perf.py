@@ -246,3 +246,72 @@ def test_a3_bulk_unknown_category_errors(monkeypatch) -> None:
             )
     finally:
         app.dependency_overrides.clear()
+
+
+# --------------------------------------------------------------------------- #
+# MCP 批量入口的组合支付 —— 真跑一遍(结构判据只证明「schema 有字段」)   #
+# --------------------------------------------------------------------------- #
+#
+# 141 轮把 `splits` 补进了 `BatchTxItem`(TypedDict)与那份**手写白名单**,
+# 142 轮加了护栏证明「schema 暴露了字段」。
+#
+# ⚠️ 但那两条都是**结构**判据。CLAUDE.md 写着:
+# 「凡是替换掉真实 IO 的测试夹具,它证明的只是算法对,不是接线对。
+#   接线只能靠真跑一遍。」
+#
+# 这条走**完整链路**:MCP 工具 -> `_self_call`(ASGI in-process)
+#   -> REST `/transactions/batch` -> `_build_tx_payload` -> mutator -> 落库 -> 读回。
+
+
+def test_mcp_bulk_creates_split_payment(monkeypatch) -> None:
+    client, TS = _make_client_and_engine(monkeypatch)
+    try:
+        u = _register(client, "bulksplit@example.com")
+        token = u["access_token"]
+        ledger_id = _make_ledger(client, token, "Split Ledger")
+
+        for name, kind in (("招行卡", "bank_card"), ("现金", "cash")):
+            res = client.post(
+                f"/api/v1/write/ledgers/{ledger_id}/accounts",
+                json={"base_change_id": 0, "name": name, "account_type": kind,
+                      "initial_balance": 100000.0},
+                headers={"Authorization": f"Bearer {token}",
+                         "X-Device-ID": "d-web"},
+            )
+            assert res.status_code == 200, res.text
+        accs = client.get(
+            "/api/v1/read/workspace/accounts",
+            headers={"Authorization": f"Bearer {token}", "X-Device-ID": "d-web"},
+        ).json()
+        ids = {a["name"]: a["id"] for a in accs}
+
+        user = _fetch_user(TS, "bulksplit@example.com")
+        result = _run_async(
+            write_tools.create_transactions(
+                user,
+                ledger_id=ledger_id,
+                transactions=[{
+                    "amount": 5000.0,
+                    "tx_type": "expense",
+                    "category": "购物",
+                    "happened_at": "2026-10-03T12:00:00Z",
+                    "splits": [
+                        {"account_id": ids["招行卡"], "amount": 3000.0},
+                        {"account_id": ids["现金"], "amount": 2000.0},
+                    ],
+                }],
+            )
+        )
+        assert result["status"] == "created", result
+
+        txs = client.get(
+            f"/api/v1/read/ledgers/{ledger_id}/transactions",
+            headers={"Authorization": f"Bearer {token}", "X-Device-ID": "d-web"},
+        ).json()
+        tx = next(t for t in txs if t["amount"] == 5000.0)
+        legs = {s["account_id"]: float(s["amount"]) for s in (tx.get("splits") or [])}
+        assert legs == {ids["招行卡"]: 3000.0, ids["现金"]: 2000.0}, (
+            f"MCP 批量建的组合支付没有落库腿:{legs}"
+        )
+    finally:
+        app.dependency_overrides.clear()
