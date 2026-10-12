@@ -422,9 +422,33 @@ async def create_transaction(
                 raise ValueError(f"splits[{i}] amount must be a number") from None
             if leg_amount <= 0:
                 raise ValueError(f"splits[{i}] amount must be positive")
-            leg_account = leg.get("account") or leg.get("account_id")
-            if not leg_account:
-                raise ValueError(f"splits[{i}] is missing `account`")
+            # ⚠️ **`account` 是名字,`account_id` 才是 id** —— 两者不能混着塞。
+            #
+            # 原实现 `leg.get("account") or leg.get("account_id")` 全塞进
+            # `account_id`,而 mutator 的 `_normalize_splits` **只检查该字段非空**、
+            # **从不验证账户存在** —— 于是传名字会造出一条 `account_id="招行卡"` 的腿:
+            # 余额聚合按 account_id join,查不到就**什么都不扣**。
+            #
+            # 实测:建了 5000 的组合支付、返回正常,**两个账户余额一分没动**。
+            # 这就是 CLAUDE.md 记的「静默丢失」那一族 —— 零报错,钱没了。
+            leg_account: Any
+            leg_name = leg.get("account")
+            leg_id = leg.get("account_id")
+            if leg_name and not leg_id:
+                # 和主交易的 `account` 同一套解析(CLAUDE.md:一致的口径唯一来源)。
+                # ⚠️ helper 在名字查不到时**自己会抛**,所以这里只补腿序号 ——
+                # 「splits[1] account not found」比裸的 Account not found 可用得多
+                # (LLM / 用户要重试哪一条,一眼可见)。
+                try:
+                    leg_account = _lookup_account_sync_id(db, user.id, str(leg_name))
+                except ValueError:
+                    raise ValueError(
+                        f"splits[{i}] account not found: {leg_name}"
+                    ) from None
+            else:
+                leg_account = leg_id or leg_name
+                if not leg_account:
+                    raise ValueError(f"splits[{i}] is missing `account`")
             entry: dict[str, Any] = {"account_id": str(leg_account),
                                      "amount": leg_amount}
             if leg.get("account_name"):

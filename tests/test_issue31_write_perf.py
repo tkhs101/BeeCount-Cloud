@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -379,5 +380,86 @@ def test_mcp_update_transaction_rebuilds_split_legs(monkeypatch) -> None:
         assert legs == {ids["现金"]: 4000.0, ids["招行卡"]: 1000.0}, (
             f"MCP update 改腿没生效(旧腿还在 = 降级块吃掉了):{legs}"
         )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_split_leg_account_name_resolves_to_the_right_account(monkeypatch) -> None:
+    """腿里传 `account`(**名字**)必须解析成 sync_id,并且**余额真的扣对**。
+
+    ⚠️ 这条抓到的是一个真 bug(149 轮):预校验写的是
+    `leg.get("account") or leg.get("account_id")`,两者**都塞进 `account_id`**;
+    而 mutator 的 `_normalize_splits` **只检查该字段非空**,**从不验证账户存在**。
+
+    于是传名字会造出一条 `account_id="招行卡"` 的腿 —— 余额聚合按 account_id
+    join,查不到就**什么都不扣**:交易建成了、返回正常、**两个账户一分没动**。
+
+    📌 **静默丢失比报错难查得多** —— 修复前 `CREATE` 返回正常,只有拿余额
+    一比对才发现。这正是 CLAUDE.md 记的「同一件事两份实现」+「反向桥漏字段」
+    那一族:错误发生在**别的层**,而这一层看起来完全正常。
+    """
+    client, TS = _make_client_and_engine(monkeypatch)
+    try:
+        u = _register(client, "splitlegname@example.com")
+        token = u["access_token"]
+        H = {"Authorization": f"Bearer {token}", "X-Device-ID": "d-web"}
+        ledger_id = _make_ledger(client, token, "LegName Ledger")
+
+        for name, kind in (("招行卡", "bank_card"), ("现金", "cash")):
+            r = client.post(
+                f"/api/v1/write/ledgers/{ledger_id}/accounts",
+                json={"base_change_id": 0, "name": name, "account_type": kind,
+                      "initial_balance": 100000.0}, headers=H)
+            assert r.status_code == 200, r.text
+
+        def balances() -> dict[str, float]:
+            return {a["name"]: float(a.get("balance") or 0) for a in
+                    client.get("/api/v1/read/workspace/accounts", headers=H).json()}
+
+        user = _fetch_user(TS, "splitlegname@example.com")
+        res = _run_async(
+            write_tools.create_transaction(
+                user, ledger_id=ledger_id, amount=5000.0, tx_type="expense",
+                category="购物", happened_at="2026-10-03T12:00:00Z",
+                splits=[{"account": "招行卡", "amount": 3000.0},
+                        {"account": "现金", "amount": 2000.0}],
+            )
+        )
+        assert res.get("sync_id"), res
+
+        after = balances()
+        assert after["招行卡"] == 97000.0, (
+            f"招行卡该扣 3000,实际 {after['招行卡']} —— 腿没解析成 sync_id,"
+            "余额按 account_id join 查不到,什么都没扣"
+        )
+        assert after["现金"] == 98000.0, f"现金该扣 2000,实际 {after['现金']}"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_split_leg_with_unknown_account_name_is_rejected(monkeypatch) -> None:
+    """**查不到的**账户名必须**报错**,不能造出一条指向虚无的腿。
+
+    ⚠️ 与上一条成对:上一条保证「名字能被解析」,这一条保证「解析不了会喊」。
+    只做前一条的话,一个**打错的名字**会退化成上一条那个静默丢失 ——
+    而那正是本次修复前的行为。
+    """
+    client, TS = _make_client_and_engine(monkeypatch)
+    try:
+        u = _register(client, "splitlegmissing@example.com")
+        token = u["access_token"]
+        H = {"Authorization": f"Bearer {token}", "X-Device-ID": "d-web"}
+        ledger_id = _make_ledger(client, token, "Missing Ledger")
+
+        user = _fetch_user(TS, "splitlegmissing@example.com")
+        with pytest.raises(ValueError, match="account not found"):
+            _run_async(
+                write_tools.create_transaction(
+                    user, ledger_id=ledger_id, amount=5000.0, tx_type="expense",
+                    category="购物", happened_at="2026-10-03T12:00:00Z",
+                    splits=[{"account": "不存在的卡", "amount": 3000.0},
+                            {"account": "也不存在", "amount": 2000.0}],
+                )
+            )
     finally:
         app.dependency_overrides.clear()
