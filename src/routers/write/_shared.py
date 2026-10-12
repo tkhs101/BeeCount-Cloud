@@ -52,6 +52,7 @@ from ...models import (
     User,
 )
 from ...schemas import (
+    AutoRepayRunResult,
     WriteAccountCreateRequest,
     WriteAccountUpdateRequest,
     WriteBudgetCreateRequest,
@@ -66,7 +67,6 @@ from ...schemas import (
     WriteTagUpdateRequest,
     WriteTransactionCreateRequest,
     WriteTransactionUpdateRequest,
-    AutoRepayRunResult,
 )
 from ...security import SCOPE_APP_WRITE, SCOPE_WEB_WRITE
 from ...snapshot_mutator import (

@@ -234,3 +234,42 @@ def test_tax_zero_boundary_is_checked_per_entry_point() -> None:
         "update 必须是 `tax < 0`:`0` 在上面已被转成清除信号,"
         "若这里写 `<= 0` 就会拦下「清除税额」这个请求"
     )
+
+
+def test_every_leg_writer_resolves_account_names_or_refuses() -> None:
+    """**每个把腿写进库的口子**都必须二选一:解析名字,或拒绝。
+
+    ⚠️ 149 轮实测:`create_transaction`(MCP)把 `account`(**名字**)直接塞进
+    `account_id`,而 mutator **只查非空、从不验证账户存在** —— 结果余额聚合
+    按 account_id join 不上,**一分不扣、零报错**。
+
+    同一仓的 `import_data` 却做得**完全正确**:它显式解析名字,并且
+    **宁可整批失败也不把腿悄悄丢掉**。同一个坑,一条路有、一条路没有。
+
+    📌 所以判据不是「有没有校验」,而是「**是不是每一个口子都有校验**」。
+    这一条把三个写腿的口子同时圈住。
+    """
+    import inspect
+
+    from src.mcp.tools import write_tools
+
+    # ① MCP create_transaction:必须经过名字解析
+    create = inspect.getsource(write_tools.create_transaction)
+    assert "leg_name and not leg_id" in create, (
+        "MCP create_transaction 的 splits 不再区分 `account`(名字)与 "
+        "`account_id` —— 名字会被直接塞进 account_id,余额 join 不上"
+    )
+
+    # ② REST 写路径:腿只接受 account_id(Pydantic 必填,传名字会 **422** ——
+    #    响亮失败,不会静默)。这是「第三条路」,靠**类型**而不是靠自觉。
+    from src.schemas import TxSplit
+    assert "account_id" in TxSplit.model_fields, "TxSplit 必须要求 account_id"
+
+    # ③ CSV 导入:显式解析 + 查不到就整批失败
+    from src.routers.import_data import endpoints as imp_ep
+
+    imp_src = inspect.getsource(imp_ep)
+    assert "split legs reference unknown accounts" in imp_src, (
+        "CSV 导入不再对查不到的账户名整批失败 —— "
+        "那正是 149 轮那个静默丢余额的同款"
+    )
