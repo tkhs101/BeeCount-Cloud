@@ -278,7 +278,7 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 | `delete_account` 守卫只数父交易三列 | 有腿时那三列是空的 → 守卫失效 → 账户可删 → 子表悬空 → 余额永久漂移 |
 | `_truncate_ledger` 漏子表 | rebuild / 还原后父交易没腿、旧腿还在 → 余额「凭空多出来」 |
 | CSV 不导出 Splits 列 | 导出→导入后组合支付变「无账户的支出」,账户余额全错 |
-| `delete_tx` 只删父行、不删腿 | **删掉组合支付交易后钱永远扣着回不来** |
+| `delete_tx` 只删父行、不删腿 | **已修,205 轮验证**:批量删除带腿交易后**腿会跟着删干净**(护栏 `test_tx_split_invariants.py::test_batch_delete_cascades_split_legs`,变异验证过)。注意这条以前**只有注释、没有测试** —— 注释不是护栏 |
 
 **通用护栏(加新列时立刻红)**:`tests/test_projection_reverse_bridge_coverage.py`
 枚举 `ReadTxProjection.__table__.columns` 全部列,减去白名单后要求**每一列**

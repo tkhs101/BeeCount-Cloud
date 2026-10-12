@@ -818,3 +818,125 @@ def test_split_payment_is_counted_in_analytics() -> None:
     assert abs(a["summary"]["expense_total"] - 6000.0) < 1e-6, (
         f"统计里没有把组合支付算进去(或被账户过滤掉了):{a['summary']}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# 5: 批量删除带腿交易 -> 腿必须一起删                                              #
+# --------------------------------------------------------------------------- #
+
+# 205 轮补。起因:枚举 src/**.py 找「tests 里零引用的模块」,
+# `transactions_batch_delete.py` 命中 —— 248 行的破坏性端点、零测试引用。
+# 而 CLAUDE.md 记着一个坑:「delete_tx 只删父行、不删腿 -> 删掉组合支付交易后
+# 钱永远扣着回不来」。那张表**没写清是否已修**,前四条不变式也只测了「改备注」。
+#
+# 实测结论:**腿会跟着删干净** —— 那个坑在批量删除路径上**不成立**(负结果)。
+#
+# 请求体字段是 **`tx_ids`** 不是 `sync_ids` —— 从 `BatchTxDeleteRequest`
+# 读出来的,不是猜的。写成 sync_ids 会拿到 422,删除**根本没执行**。
+
+
+def test_batch_delete_cascades_split_legs() -> None:
+    from src.models import ReadTxProjection, ReadTxSplitProjection
+
+    client, TS, H, ids = _setup("bdel@t.com")
+    legs = [{"account_id": ids["招行卡"], "amount": 3000.0},
+            {"account_id": ids["现金"], "amount": 2000.0}]
+
+    r = _create_split_tx(client, H, ids, legs, amount=5000.0)
+    assert r.status_code == 200, r.text
+    tx_id = r.json().get("entity_id")
+    assert tx_id, r.text
+
+    with TS() as db:
+        before = db.scalars(select(ReadTxSplitProjection).where(
+            ReadTxSplitProjection.tx_sync_id == tx_id)).all()
+        assert len(before) == 2, f"前置不成立:只落了 {len(before)} 条腿"
+
+    d = client.post("/api/v1/write/ledgers/lg1/transactions/batch/delete",
+                    headers=H, json={"tx_ids": [tx_id], "base_change_id": 0})
+    assert d.status_code == 200, d.text
+    assert d.json()["deleted_tx_ids"] == [tx_id], d.json()
+    assert d.json()["failed"] == [], d.json()
+
+    with TS() as db:
+        parent = db.scalar(select(ReadTxProjection).where(
+            ReadTxProjection.sync_id == tx_id))
+        after = db.scalars(select(ReadTxSplitProjection).where(
+            ReadTxSplitProjection.tx_sync_id == tx_id)).all()
+
+    assert parent is None, "父行没删掉"
+    assert len(after) == 0, (
+        f"删掉组合支付交易后还剩 {len(after)} 条腿 —— 余额会被永久扣住"
+        f"(CLAUDE.md 记的「delete_tx 只删父行」那个坑)")
+
+
+# --------------------------------------------------------------------------- #
+# 5b: 批量里混着「带腿」和「普通」,两条都要删干净                                 #
+# --------------------------------------------------------------------------- #
+
+# 只测单条不够 —— 批量端点有 unique_ids 去重 + 逐条 try/except 记 failed 的循环
+# (transactions_batch_delete.py:132-146)。「其中一条失败时其余还删不删得掉」
+# 只有真跑才知道。
+
+
+def test_batch_delete_mixed_split_and_plain() -> None:
+    from src.models import ReadTxProjection, ReadTxSplitProjection
+
+    client, TS, H, ids = _setup("bmix@t.com")
+    legs = [{"account_id": ids["招行卡"], "amount": 3000.0},
+            {"account_id": ids["现金"], "amount": 2000.0}]
+    r = _create_split_tx(client, H, ids, legs, amount=5000.0, note="组合")
+    assert r.status_code == 200, r.text
+    split_id = r.json().get("entity_id")
+
+    r2 = client.post("/api/v1/write/ledgers/lg1/transactions", headers=H, json={
+        "base_change_id": 0, "tx_type": "expense", "amount": 800,
+        "happened_at": "2026-10-03T13:00:00+00:00",
+        "category_name": "餐饮", "category_kind": "expense",
+        "account_id": ids["招行卡"],
+    })
+    assert r2.status_code == 200, r2.text
+    plain_id = r2.json().get("entity_id")
+    assert plain_id and plain_id != split_id
+
+    d = client.post("/api/v1/write/ledgers/lg1/transactions/batch/delete",
+                    headers=H,
+                    json={"tx_ids": [split_id, plain_id], "base_change_id": 0})
+    assert d.status_code == 200, d.text
+    body = d.json()
+    assert body["failed"] == [], body
+    assert set(body["deleted_tx_ids"]) == {split_id, plain_id}, body
+
+    with TS() as db:
+        left_legs = db.scalars(select(ReadTxSplitProjection).where(
+            ReadTxSplitProjection.tx_sync_id == split_id)).all()
+        left_tx = db.scalars(select(ReadTxProjection).where(
+            ReadTxProjection.sync_id.in_([split_id, plain_id]))).all()
+
+    assert len(left_legs) == 0, f"混合批量删除后剩 {len(left_legs)} 条腿"
+    assert len(left_tx) == 0, f"混合批量删除后剩 {len(left_tx)} 条父行"
+
+
+# --------------------------------------------------------------------------- #
+# 这两条护栏是怎么写出来的 —— 探针失败 8 次,每次错在不同地方                    #
+# --------------------------------------------------------------------------- #
+#
+# | # | 我干了什么 | 实际 |
+# |---|---|---|
+# | 1 | `led.json()["ledgerId"]` | KeyError —— **我猜的字段名** |
+# | 2 | 直接 `python tests/probe.py` | ModuleNotFoundError + **绕过 conftest**,register 403 |
+# | 3 | 改用 pytest,但仍缺 `client_type` | 403 AUTH_INSUFFICIENT_SCOPE |
+# | 4 | tx_id 从 read 端 `json()[0]["id"]` | 那个响应不是数组 -> TypeError |
+# | 5 | `json={"sync_ids": ...}` | **422**,删除**根本没执行** |
+# | 6 | 看到「腿数=2」就以为有孤儿腿 | **否** —— 422 意味着没删过 |
+# | 7 | 只读 Pydantic 模型 | 字段是 **`tx_ids`** |
+# | 8 | 改成 `tx_ids` | 全 200,**腿干净删除** |
+#
+# 上面第 6 条最危险:探针失败时我把「**没发生**」读成了「**发生了且结果不对**」。
+# 探针坏掉时它的输出**不构成任何证据** —— 否定和肯定**都不算**
+# (CLAUDE.md 的「探针的否定结果不能当证据」在这里要扩写成:
+# **探针失败时的输出,什么都不证明**)。
+#
+# 真正让前 7 次全废的,是**没有一次先读现有测试怎么写**:
+# `_setup(email)` 第一版就写对了 `client_type: "web"`,而我试了 3 次才撞到。
+# **照抄现有模式,而不是重造一个。**
