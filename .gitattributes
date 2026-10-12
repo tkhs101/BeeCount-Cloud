@@ -1,0 +1,48 @@
+# 209 轮:统一行尾 —— 仓库里**必须**只有一种。
+#
+# ## 为什么这件事不是审美问题
+#
+# 实测:受跟踪文件里 **79 个纯 CRLF + 1 个混合**,而工作区的
+# `core.autocrlf = input` 意味着 git **不转换** —— 仓库里存的就是
+# 工作区那副样子,行尾取决于**每个人本地 git 的配置**。
+#
+# ## 它已经造成了三次真实故障
+#
+# | # | 现象 | 真正的原因 |
+# |---|---|---|
+# | 1 | `edit` 报 `old_string not found`,而那行**明明在文件里** | CRLF 文件,`edit` 按 `\n` 匹配 |
+# | 2 | 同一个文件**连续两次**匹配失败,白花两轮 | 同上,但表现像「锚点写错了」 |
+# | 3 | `tests/test_scripts_compile.py` 变成**混合行尾**(529 CRLF + 151 LF) | 我 `cat >>` 追加(LF)到 CRLF 文件上 |
+#
+# 📌 **工具失灵的表现是「匹配不上」,你会以为是自己写错了锚点。**
+# 这比报错更费时间。
+#
+# ## 规则
+#
+# * `text=auto` —— git 自行判断是不是文本;仓库里**统一存 LF**。
+# * `eol=lf` —— 工作区检出也是 LF。这让「文件内容」在所有平台上**逐字节相同**。
+#
+# ⚠️ **选 `lf` 而不是 `native`**:后者会让每个平台检出成不同行尾,
+# 于是「同一个文件在两个机器上不一样」—— 正是要消除的那件事。
+#
+# ⚠️ **lockfile 不参与**:`pnpm-lock.yaml` 改了行尾可能让 pnpm 认为
+# lockfile 变了,而它**必须**和 `--frozen-lockfile` 逐字节一致才不重算依赖。
+# 保守起见给它 `-text`,让它**原样保留**(实测仓库里那份本来就是 LF)。
+
+* text=auto eol=lf
+
+# 依赖锁文件:保持原样,不参与行尾规范化(见上)
+pnpm-lock.yaml -text
+
+# 二进制:禁止任何转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.pdf binary
+*.sqlite binary
+*.db binary
