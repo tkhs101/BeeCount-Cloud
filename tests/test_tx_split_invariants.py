@@ -656,6 +656,26 @@ def test_dirty_splits_survive_a_rest_note_patch() -> None:
     tx_id = r0.json().get("entity_id")
     assert tx_id, r0.json()
 
+    def _balances() -> dict[str, float]:
+        """真读余额(SQL 聚合路径),不是手算。"""
+        from sqlalchemy import select as _sel
+
+        from src.models import Ledger, UserAccountProjection
+        from src.routers.read._shared import (
+            account_balance_from_stats,
+            account_balance_stats,
+        )
+
+        with TS() as db:
+            lid = db.scalar(_sel(Ledger).where(
+                Ledger.external_id == "lg1")).id
+            stats = account_balance_stats(db, [lid])
+            return {
+                str(a.sync_id): account_balance_from_stats(
+                    str(a.sync_id), float(a.initial_balance or 0.0), stats)
+                for a in db.scalars(_sel(UserAccountProjection)).all()
+            }
+
     # 造出 sync 会推上来的那种脏腿:3000 + 1999 != 5000
     # ⚠️ 必须同时限定 **seq** —— 我第一版只按 tx_sync_id 过滤,
     # 结果**两条腿**都被改成 1999(合计 3998),断言直接扑空。
@@ -666,6 +686,11 @@ def test_dirty_splits_survive_a_rest_note_patch() -> None:
         ).update({ReadTxSplitProjection.amount: 1999.0})
         db.commit()
         assert changed == 1, f"只该改到一条腿,实际改了 {changed} 条"
+
+    # ⚠️ 161 轮那个「缺口 1 vs 5000」是我在探针里**手算**的。
+    # 修复真正要保护的东西是**余额**,所以这里真读一次:
+    # 无关编辑前后,两个账户的余额必须**一模一样**。
+    before_bal = _balances()
 
     r = client.patch(
         f"/api/v1/write/ledgers/lg1/transactions/{tx_id}",
@@ -693,3 +718,14 @@ def test_dirty_splits_survive_a_rest_note_patch() -> None:
         f"而它还照样进统计。现在库里剩:{legs}"
     )
     assert abs(sum(float(x.amount) for x in legs) - 4999.0) < 1e-6, legs
+
+    after_bal = _balances()
+    assert after_bal == before_bal, (
+        f"改个备注让账户余额变了:{before_bal} -> {after_bal}。"
+        "抹掉腿的话,整笔金额会从所有账户余额上消失。"
+    )
+    # 余额必须真的**含**了这笔腿(不是碰巧相等)
+    moved = sum(before_bal.values()) - 2 * 100000.0
+    assert abs(moved - (-4999.0)) < 1e-6, (
+        f"两条腿合计 4999,余额合计应该减少 4999,实得 {moved}"
+    )
