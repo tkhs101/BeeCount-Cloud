@@ -19,7 +19,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Ruff
-        run: ruff check src tests alembic
+        run: # ⚠️ scripts/ 也要查 —— pytest **不 import** 那些脚本,
+# 所以它们**没有任何门**(179 轮实测:一个 SyntaxError 一路进了主干)。
+ruff check src tests alembic scripts
       - name: Mypy
         run: mypy src
       - name: Pytest
@@ -55,7 +57,9 @@ jobs:
       - name: Migrate
         run: alembic upgrade head
       - name: Ruff
-        run: ruff check src tests alembic
+        run: # ⚠️ scripts/ 也要查 —— pytest **不 import** 那些脚本,
+# 所以它们**没有任何门**(179 轮实测:一个 SyntaxError 一路进了主干)。
+ruff check src tests alembic scripts
       - name: Mypy
         run: mypy src
       - name: Pytest

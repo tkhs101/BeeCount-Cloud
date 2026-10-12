@@ -871,6 +871,26 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 > `tests/`。改 `scripts/` 之后要**直接执行那个脚本**。
 > 与「分层测试全绿 ≠ 拼起来能工作」同源,只是这次**被测对象是工具**。
 
+### ✅ `scripts/` 之前**一道门都没有**(180 轮补上)
+
+| 门 | 覆盖 `scripts/` 吗 |
+|---|---|
+| `pytest tests/` | ❌ **不 import** —— 实测 `grep -rn "scripts/" tests/` -> **0** 命中 |
+| `ruff check src tests alembic` | ❌ CI 里**写死**这三个目录,`scripts/` 不在内 |
+
+**两处都补上了:**
+1. `ci.yml` 两处改成 `ruff check src tests alembic scripts`(实测
+   `scripts/` 8 个文件**零违规**,所以**基线不变**,仍是 1255)
+2. 新增 `tests/test_scripts_compile.py` —— 对每个脚本调 **`compile()`**
+   (真 Python 解析器),语法错就抛
+
+变异验证:往 `mutation_check.py` **追加一段语法错** -> **变红**;
+还原后恢复绿 ✅
+
+> 📌 **空集合的断言恒真**,比没有护栏更糟 —— 所以那条护栏**先断言
+> 「扫到了东西」**(`_SCRIPTS` 非空),再断言「都能编译」。
+
+
 ### ✅ 这条工具检查自己也配了护栏(179 轮,变异验证过)
 
 `tests/test_mutation_check_dead_branch.py` —— 真跑 CLI,断言**输出**。
