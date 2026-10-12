@@ -138,6 +138,26 @@ App**。改这个仓之前先读
 2. **金额运算不要写 `t.amount`** → 那是原币,多币种账本会把 CNY 和 JPY 直接
    相加。聚合一律走 `baseAmount()`。已有护栏
    `frontend/apps/web/src/amountBasisGuard.test.ts` 会拦。
+
+   **⚠️ 汇率覆盖:两个端点都叫 rates,但一个不含覆盖**(215 轮实测)
+
+   | 端点 | 返回 |
+   |---|---|
+   | `GET /read/exchange-rates?base=X` | **只有代理源的值**,**不含**用户覆盖 |
+   | `GET /read/exchange-rate-overrides` | 用户覆盖列表 |
+
+   **调用方必须自己合并**。前端 `currencies.ts::_effectiveRates` 就是这么做的:
+   `out[q] = 1/auto[q]`(代理取倒数)、`out[q] = override[q]`(手动不取倒数、**优先**)。
+   后端 `workspace.py` 的 `rates_to_base` 同样**应用**覆盖(先填缓存、后用覆盖盖上去)。
+
+   方向约定(两边一致,写代码前先看 `ExchangeRateCache` 的 docstring):
+   - 代理源 `payload_json` = **1 base = x quote** → 要**取倒数**成 `rates_to_base`
+   - 手动覆盖 `rate` = **1 quote = rate base** → **不取倒数**
+   - 现有测试用 `base=CNY quote=USD rate=7.20`,7.20 只可能是 USD→CNY
+
+   ⚠️ **我一度把「`/read/exchange-rates` 不用覆盖」误判成「覆盖功能失效」**
+   —— 因为两个端点名字相邻、返回体都叫 rates。护栏
+   `tests/test_rate_override_applied.py` 把这两条都钉住了。
 3. **hook 别插进函数体** → 语法完全合法但永不可达,`tsc` 和 build 都抓不到。
    护栏 `frontend/apps/web/src/hookPlacement.test.ts`。
 4. **`tax_amount = 0` 在三条 MCP 入口里含义不同**(实测踩过,改错会**弄坏清除功能**):
