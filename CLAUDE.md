@@ -744,6 +744,29 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 `tests/test_tx_split_invariants.py::test_unrelated_edit_keeps_inconsistent_legs`
 与 `::test_patch_amount_invalidates_splits`。
 
+### ⚠️ 删分类:两条路径**严格程度不一致**(实测,未改)
+
+同一个操作「删分类」,两个实现给了**两种答案**:
+
+| 路径 | 有子分类时 |
+|---|---|
+| `snapshot_mutator.delete_category`(Web/MCP) | **拒绝删除**,要求先迁移 —— 注释明说「比允许删除并 orphan 更好,避免无主交易污染 ledger」 |
+| `sync_applier._delete_user_category` | **照删**。只清 icon 附件,**子分类留下悬空 `parent_sync_id`** |
+
+这是「**同一件事两份实现,一份严一份松**」那一族。
+
+> 📌 本 fork **不用官方 App**(CLAUDE.md:部署形态是自托管云端 + Web/PWA),
+> 所以 sync 删除路径基本不被走 —— **实际影响低**。
+> 但不一致本身是隐患:哪天接了 mobile 或加了「从 mobile 删」的入口,
+> 就会出现「同一件事两种结果」。
+
+📌 **本轮只记录,没有改** —— 收紧 sync 侧会让「删了父分类」这个
+**mobile 已经做过**的操作开始 4xx,那是破坏性变更;要改得两侧一起定契约。
+
+实测到的形状: 是全库**唯一**的真子表
+(唯一带 `tx_sync_id` 指父行的表),其余 `*_sync_id` 列都只是**引用**不是**归属** ——
+所以「删父行要连带清子表」这件事**只需要保证 `delete_tx` 一处**。
+
 **腿没有 currency 字段** —— 与父交易同币种是**结构保证**,不是运行时校验。
 别加「跨币种拆分」检查:那无法表达,只会给出虚假的安全感。
 
