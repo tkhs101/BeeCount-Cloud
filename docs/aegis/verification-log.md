@@ -2624,3 +2624,40 @@ API 调用方传了、拿到 200、**什么都没发生**。
 
 ⚠️ 差点照着那个数字去「修」一堆并不存在的问题。
 **量出来的大差集,先问「这个比较本身成立吗」。**
+
+## 第 144 轮:把「改」那条链也真跑一遍 —— `splits` 的故事到此闭环
+
+143 轮证明了 MCP **批量建**组合支付能真落库。但 133 轮改的 **update** 那条链,
+至今只有 `monkeypatch(setattr(SessionLocal, TS))` 的单元测试 —— 那正是
+CLAUDE.md 说的「替换掉真实 IO 的夹具」,**证明算法对,不证明接线对**。
+
+### 这条路上埋着一个不报错的降级分支
+
+`update` 用 `exclude_unset=True`,不传 `amount` 时 mutator 的 `_normalize_splits`
+拿不到父总额 -> 判为不自洽 -> **静默丢弃整份 splits 并 WARNING**
+(`snapshot_mutator.py:638`)。**不报错、不返回失败**,腿就是没变。
+
+### 新增测试
+
+`tests/test_issue31_write_perf.py::test_mcp_update_transaction_rebuilds_split_legs`
+走完整链路:MCP 工具 -> `_self_call`(ASGI) -> REST PATCH -> mutator -> 读回。
+`sync_id` 直接取 `create_transactions` 返回的 `sync_ids[0]` —— 133 轮我
+为了找它折腾了很久(响应里没有、只能查库),**这里一开始就绕开了**。
+
+变异验证:`patch["splits"]` 改成 `pass` -> 变红。
+
+### `splits` 这一串的完整闭环
+
+| 轮 | 做了什么 |
+|---|---|
+| 133 | MCP `update_transaction` 补 splits(实现) |
+| 134 | 单元测试(带 monkeypatch) |
+| 135 | 发现 `create_transaction_with_receipt` 也缺 |
+| 140 | REST 批量端点 `BatchTransactionItem` 缺 |
+| 141 | MCP 批量 `BatchTxItem`(TypedDict)也缺 —— **两个不同的类** |
+| 142 | 把「登记点必须齐全」固化成护栏 |
+| 143 | 批量那条链**真跑** |
+| **144** | **update 那条链真跑** |
+
+> 📌 一共**四个入口**、**五个登记点**,前后**六轮**才补齐 + 验证完。
+每一轮我以为「这就是最后一个」—— 而下一轮总能在**另一层**找到一个。

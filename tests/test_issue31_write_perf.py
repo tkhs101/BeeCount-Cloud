@@ -315,3 +315,69 @@ def test_mcp_bulk_creates_split_payment(monkeypatch) -> None:
         )
     finally:
         app.dependency_overrides.clear()
+
+
+def test_mcp_update_transaction_rebuilds_split_legs(monkeypatch) -> None:
+    """MCP `update_transaction` 改腿 —— 走**完整链路**真跑。
+
+    134 轮只给了带 `monkeypatch(setattr(SessionLocal, TS))` 的单元测试。
+    ⚠️ 那正是 CLAUDE.md 说的「**替换掉真实 IO 的夹具**」——
+    证明算法对,不证明接线对:`_self_call` -> ASGI -> REST PATCH ->
+    `exclude_unset=True` -> mutator 的「不自洽就**静默丢弃**」那条降级块。
+
+    上一个用例证明了「建」能落库;这个证明「改」也能 —— 而改的那条路上
+    恰好埋着 mutator 那个**不报错只告警**的降级分支。
+    """
+    client, TS = _make_client_and_engine(monkeypatch)
+    try:
+        u = _register(client, "updsplit@example.com")
+        token = u["access_token"]
+        H = {"Authorization": f"Bearer {token}", "X-Device-ID": "d-web"}
+        ledger_id = _make_ledger(client, token, "Update Ledger")
+
+        for name, kind in (("招行卡", "bank_card"), ("现金", "cash")):
+            res = client.post(
+                f"/api/v1/write/ledgers/{ledger_id}/accounts",
+                json={"base_change_id": 0, "name": name, "account_type": kind,
+                      "initial_balance": 100000.0}, headers=H)
+            assert res.status_code == 200, res.text
+        ids = {a["name"]: a["id"] for a in client.get(
+            "/api/v1/read/workspace/accounts", headers=H).json()}
+
+        user = _fetch_user(TS, "updsplit@example.com")
+        created = _run_async(
+            write_tools.create_transactions(
+                user, ledger_id=ledger_id,
+                transactions=[{
+                    "amount": 5000.0, "tx_type": "expense", "category": "购物",
+                    "happened_at": "2026-10-03T12:00:00Z",
+                    "splits": [
+                        {"account_id": ids["招行卡"], "amount": 3000.0},
+                        {"account_id": ids["现金"], "amount": 2000.0},
+                    ],
+                }],
+            )
+        )
+        sync_id = created["sync_ids"][0]
+
+        # ⚠️ **必须同时传 amount**:update 路径用 `exclude_unset=True`,
+        # 不传时 mutator 的 `_normalize_splits` 拿不到父总额 -> 判为不自洽 ->
+        # **静默丢弃整份 splits** 并告警(snapshot_mutator.py:638)。
+        # 不报错、不返回失败,腿就是没变。
+        _run_async(
+            write_tools.update_transaction(
+                user, sync_id=sync_id, amount=5000.0,
+                splits=[{"account_id": ids["现金"], "amount": 4000.0},
+                        {"account_id": ids["招行卡"], "amount": 1000.0}],
+            )
+        )
+
+        txs = client.get(
+            f"/api/v1/read/ledgers/{ledger_id}/transactions", headers=H).json()
+        tx = next(t for t in txs if t["amount"] == 5000.0)
+        legs = {s["account_id"]: float(s["amount"]) for s in (tx.get("splits") or [])}
+        assert legs == {ids["现金"]: 4000.0, ids["招行卡"]: 1000.0}, (
+            f"MCP update 改腿没生效(旧腿还在 = 降级块吃掉了):{legs}"
+        )
+    finally:
+        app.dependency_overrides.clear()
