@@ -314,7 +314,8 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 (此前每一次都是**事后**补一条专用测试 —— 那是症状处理不是解决方案。
 第 6 列被加进来时同样的事会再发生一次,仍然要等用户发现数据被抹了才有人查。)
 
-专用护栏:`tests/test_tx_split_invariants.py`(23 条)、
+专用护栏:`tests/test_tx_split_invariants.py`(四条不变式 + 批量删除级联,
+条数会随轮次变,**要数字自己 `pytest --collect-only -q` 量**)、
 `tests/test_account_balance_paths.py`(两条余额路径必须一致)、
 `frontend/apps/web/src/txSplitsParity.test.ts`(两条提交路径不许只改一处)。
 

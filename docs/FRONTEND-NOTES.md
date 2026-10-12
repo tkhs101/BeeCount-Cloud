@@ -33,6 +33,37 @@
 验证方法(不装任何东西):build 完 `grep 'modulepreload' dist/index.html`,
 或起真服务器把引用的 `/assets/*` 逐个取回来。
 
+#### 🔴 抓的时候**别写精确的属性正则**(214 轮实测)
+
+我第一版用这个量「首屏有几个文件」:
+
+```python
+# ❌ 结果:0 个 —— 而实际有 3 条 preload
+re.findall(r'modulepreload\" href=\"/assets/([^\"]+)\"', html)
+```
+
+真实标签是 **`<link rel="modulepreload" crossorigin href="/assets/...">`** ——
+`href` **不在 `rel` 后面紧邻**。于是**三条 preload 一条都没匹配到**。
+
+⚠️ **我差点因此记下「首屏配置回归了」** —— 而实际首屏是
+**1316.1 kB raw / 4 个文件**,与基线一致。
+
+> 📌 这就是「**探针的否定结果不能当证据**」的一个具体形态:
+> 我拿到的是「**零条 preload**」,读成「首屏配置被改了」——
+> 而**真实原因是我的正则假设了属性顺序**。
+
+**正确抓法:抓路径,不抓属性**
+
+```bash
+grep -oE '/assets/[a-zA-Z0-9_-]+\.js' dist/index.html | sed 's|/assets/||' | sort -u
+```
+
+一条就够,**不关心它在哪个标签、什么属性顺序**。
+
+⚠️ 别用 Python 的 `re` 复刻这个 —— 在 Windows 上写临时文件再读回来时,
+`$TEMP` 的路径两边表示法不同(MSYS 的 `/tmp` vs Python 看到的别的),
+`FileNotFoundError` 会让人以为是正则写错了。
+
 #### 已修(2 处):先改 import 图,不是改 chunk 名字
 
 首屏从 **1672 kB 降到 1479 kB**(预取 5 条 -> 3 条)。两处的教训一样:
