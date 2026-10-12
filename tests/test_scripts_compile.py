@@ -557,3 +557,47 @@ def test_workflow_build_args_use_step_outputs_not_shell() -> None:
                         )
     detail = "\n  ".join(bad)
     assert not bad, f"workflow 的 with: 里不得用 shell 命令替换:\n  {detail}"
+
+
+def test_workflow_step_output_references_are_not_dangling() -> None:
+    """`${{ steps.X.outputs.Y }}` 里的 `X` 必须是**真实存在**的 step id。
+
+    🔴 196 轮的错误是「引用了拿不到的值」那一族。GitHub Actions 对
+    不存在的 step 求值成**空字符串**,**不报错** —— 所以拼错的 id 只会
+    让 `NODE_VERSION=` 静默变成空值,然后 Docker 拿默认版本。
+
+    ⚠️ 196 轮我修的是 `$(...)`(shell 展开)那类;但「引用了不存在的 step」
+    是**同一个后果的另一个入口**,而且它**完全可本地判定** —— 不需要 CI。
+
+    本仓实测(197 轮):只有 `release.yml` 用了 step 引用,3 个 id
+    (`meta` / `nodever` / `vars`)**全部有定义**,零悬空。
+    其它 6 个 job 一个 step 引用都没有。
+    """
+    import re
+
+    bad: list[str] = []
+    checked = 0
+    for wf_name, doc in _all_workflows():
+        for jn, job in (doc.get("jobs") or {}).items():
+            steps = (job or {}).get("steps") or []
+            ids = {(s or {}).get("id") for s in steps if (s or {}).get("id")}
+            refs: set[str] = set()
+            for s in steps:
+                blobs = [(s or {}).get(k) for k in ("with", "run", "env")]
+                for blob in blobs:
+                    if isinstance(blob, dict):
+                        blob = " ".join(str(v) for v in blob.values())
+                    refs |= set(re.findall(
+                        r"steps\.([A-Za-z0-9_-]+)\.outputs", str(blob or "")
+                    ))
+            if not refs:
+                continue
+            checked += 1
+            for r in sorted(refs - ids):
+                bad.append(f"{wf_name} job {jn}: 引用了不存在的 step id '{r}'")
+    detail = "\n  ".join(bad)
+    assert not bad, (
+        f"workflow 引用了不存在的 step id"
+        f"(Actions 会**静默求值成空字符串**,不报错):\n  " + detail
+    )
+    assert checked, "没扫到任何 step 引用 —— 正则或结构变了?"
