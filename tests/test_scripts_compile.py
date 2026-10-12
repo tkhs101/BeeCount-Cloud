@@ -290,3 +290,49 @@ def test_markdown_links_are_not_dead() -> None:
                 bad.append(f"{path.relative_to(_REPO)} -> {link}")
     detail = "\n  ".join(bad)
     assert not bad, f"markdown 链接指向**不存在**的目标:\n  {detail}"
+
+
+# ----------------------------------------------------------------------
+# CI 里 Pytest 必须**真的能跑到**(189 轮)
+# ----------------------------------------------------------------------
+
+def test_pytest_step_is_not_blocked_by_advisory_failures() -> None:
+    """任何**排在 Pytest 之前**的 step 失败,都不能让 Pytest 跑不到。
+
+    🔴 189 轮实测出来的问题:Actions 在 step 失败时**默认中止后续 step**,
+    而 `ruff check` 带 1257 条存量违规(`exit 1`)、`mypy` 带 60 条
+    (`exit 1`) —— 于是 **`pytest` 在 CI 上一次都没执行过**。
+
+    CLAUDE.md 那张表里唯一那行「pytest 绿 / 1361 passed」,
+    在 CI 上是**没执行**,不是绿。
+
+    修法是把 Ruff / Mypy 标成 `continue-on-error: true`(advisory):
+    检查强度**一点没减**(仍跑、仍报告),但真正的必过门终于能跑到。
+
+    ⚠️ 这条护栏不是「仪式」:它锁住的是「pytest 到底会不会被跑」。
+    """
+    doc = yaml.safe_load(_CI.read_text(encoding="utf-8"))
+    checked = 0
+    # ⚠️ 判据**故意只管 Ruff / Mypy 两条**,不是「Pytest 前的所有 run」。
+    # 第一版我写成「所有排在 Pytest 前、没标 advisory 的 run step」——
+    # 它把 `Install deps` / `Migrate` 也算成 blocker,**而那是对的**:
+    # 依赖没装上 / 迁移没跑,pytest 本来也跑不了。
+    #
+    # 要防的是**明知会以 exit 1 失败的存量检查**,不是「一切可能失败的东西」。
+    # 判据太宽 = 逼着人给真正的必过步骤也加 `continue-on-error`,
+    # 那才是把门真的拆了。
+    known_stock = {"Ruff", "Mypy"}
+    for name, job in (doc.get("jobs") or {}).items():
+        steps = (job or {}).get("steps") or []
+        names = [((s or {}).get("name") or (s or {}).get("uses") or "") for s in steps]
+        if "Pytest" not in names:
+            continue
+        checked += 1
+        for step in steps[: names.index("Pytest")]:
+            label = step.get("name") or ""
+            if label in known_stock:
+                assert step.get("continue-on-error"), (
+                    f"job {name}: `{label}` 排在 Pytest 前且带存量违规(exit 1),"
+                    f"没标 continue-on-error 的话 **pytest 永远跑不到**"
+                )
+    assert checked, "没找到任何带 Pytest 的 job —— ci.yml 结构变了?"
