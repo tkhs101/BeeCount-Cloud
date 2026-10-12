@@ -685,6 +685,32 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 `tests/test_account_balance_paths.py`(两条余额路径必须一致)、
 `frontend/apps/web/src/txSplitsParity.test.ts`(两条提交路径不许只改一处)。
 
+### ⚠️ `update_transaction` 会**静默抹掉**自相矛盾的既有腿(实测可达)
+
+实测复现(只改一个**无关字段**):
+
+```python
+# 既有一笔脏 splits(合计 4999 != amount 5000)
+update_transaction(snap, "tx_1", {"note": "改成新备注"})
+# -> note 更新了,splits 变成 [],accountName 仍是 None
+# -> 只有一条 logger.warning,**API 返回成功**
+```
+
+触发条件是 `snapshot_mutator.py:625` 那个 try/except:对**既有** legs
+再做一次自洽性检查,不过就 `item["splits"] = []`。
+
+⚠️ **为什么它可达**:`/sync/push` 不经过这个 mutator、merge 也不校验
+(代码注释自己写着),所以 mobile 推来的脏腿**确实能落库**;
+用户之后在 Web 上改个备注,就把它抹了。
+
+⚠️ **它与本文件另一条原则矛盾**:CSV 导入那节写着「**宁可整批失败,
+也不把腿悄悄丢掉**」(`endpoints.py:938`)。同一条原则,update 路径没遵守。
+
+📌 **本轮只记录,没有改** —— 这是**资金路径上的行为改动**,取舍是
+「保数据(留着脏腿,不变式被破坏)」还是「保不变式(丢数据)」。
+改之前要一起决定三件事:projection 收不收得到这些腿、
+`_split_legs` 的余额聚合怎么处理、和移动端怎么对齐。
+
 **腿没有 currency 字段** —— 与父交易同币种是**结构保证**,不是运行时校验。
 别加「跨币种拆分」检查:那无法表达,只会给出虚假的安全感。
 
