@@ -30,6 +30,69 @@
 | 静默损坏 | 反向桥漏列、CSV 往返、`/sync/push` 丢字段 |
 | 工具 | 变异审计脚本、数东西用权威来源、验证回退真的生效 |
 
+### ⚠️ 静态文本搜索 ≠ 动态覆盖(206 轮实测,判据直接失效)
+
+枚举「哪些 `src/**.py` 在 `tests/` 里连名字都没出现过」,得到 **10 个**模块,
+其中包括 `ledger_access.py` / `observability.py` / `websocket_manager.py`
+/ `snapshot_cache.py` / `exchange_rate_overrides.py` —— 看起来全是「没人管的高危模块」。
+
+用标准库 `trace` 真跑三个端到端测试文件后:
+
+| 模块 | 执行 / 总行 |
+|---|---|
+| `src/ledger_access.py` | 67 / 185 |
+| `src/routers/write/exchange_rate_overrides.py` | 58 / 195 |
+| `src/websocket_manager.py` | 46 / 131 |
+| `src/services/backup/rclone_config.py` | 42 / 363 |
+| …共 9 个 | **全部 > 0,零覆盖数 = 0** |
+
+**端到端测试经 `src/main.py` 的 import 图**间接跑到它们 ——
+中间件、缓存、备份辅助全都在请求路径上,**调用方根本没提到被调用方的名字**。
+
+工具:`scripts/measure_module_coverage.py`(纯标准库,**不装 coverage**)。
+`trace` 慢(约 10-50 倍),只适合**定点查少数模块**。
+
+> 📌 这是「grep 搜不到 ≠ 不存在」的**更深一层**:不只是「搜不到可能是
+> 名字被映射了」,而是**「代码里压根没提那个名字」也照样会执行到它**。
+>
+> ⚠️ **最危险的方向是反向的**:我拿「零引用」当**肯定**证据
+> (「这个模块没人管」),实际它**有覆盖**。
+> **探针的否定结果只能告诉你「这个判据不够」,不能告诉你「对象有问题」。**
+
+### ⚠️ `zip(两个不同顺序的列表)` 是个看不见的错(206 轮)
+
+脚本第一版写的是:
+
+```python
+for m, abs_path in zip(modules, sorted(norm)):   # ❌ 两套互不相关的顺序
+```
+
+一旦 `modules` 不是字母序,行号就会被归到**错误的模块**上 ——
+而输出**看起来完全正常**,只是数字张冠李戴。
+
+📌 这次**没有出事**(调用时恰好是字母序,连跑两次数字完全一致),
+所以它是**潜在 bug,不是已发生的 bug**。我一度在注释里写成
+「两个模块的数字互相对调了」—— **那是没看错就下了结论**。
+
+> ⚠️ **别把没发生的事写成经验。** 证据是:两次独立运行数字一致。
+> 判断「有没有出事」靠数字对不对得上,不靠「我知道那里有 bug」。
+
+### ⚠️ 脚本输出含中文/emoji,必须自己处理 console 编码
+
+`print(__doc__)` 直接 `UnicodeEncodeError: 'gbk' codec` 崩掉 ——
+中文 Windows 的默认 stdout 编码是 **GBK**。
+
+```python
+for stream in (sys.stdout, sys.stderr):
+    try:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+```
+
+📌 **不能要求调用方先设 `PYTHONIOENCODING=utf-8` 才能用你写的脚本** ——
+我自己这一路上踩过好几次这个坑。**工具要能在别人的机器上直接跑。**
+
 ---
 
 ### 时区:每一层都得输出 UTC(已栽五次,改之前先跑一遍排查)
