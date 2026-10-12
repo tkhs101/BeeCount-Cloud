@@ -60,7 +60,11 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # 194 轮:版本唯一来源是 `frontend/.nvmrc`,不在这里写死。
+          # 依赖里最高的 node 要求是 `react-router-dom` 的 `>=20.0.0`
+          # (从 pnpm-lock.yaml 的 engines 实测),所以 20 是**当前两边都
+          # 验证过**的值 —— 本地更高也满足 `>=`。
+          node-version-file: frontend/.nvmrc
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

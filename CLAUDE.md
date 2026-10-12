@@ -271,6 +271,16 @@ mypy src                                                      -> exit 1
 > 📌 **我一直在修一个文件,没问过其它文件有没有同样的问题** ——
 > 这正是 181 轮「门覆盖面要能自省」的精神,只是当时只用它查了 `.py`。
 
+> 📌 **Node 版本同样有唯一来源:`frontend/.nvmrc`**(194 轮)。
+改之前 `ci.yml` 写 `20`、`release.yml` 写 `'20'` —— **两份副本**,
+而仓库里**没有任何 Node 版本声明**,本地实测 Node **26.8.1**。
+没有声明 = 没有唯一来源 = 迟早漂移(pnpm 那条 193 轮已证实)。
+**为什么用 `.nvmrc` 而不是 `node-version-file: package.json`**:
+setup-node 文档列了 `package.json` 这个文件名,但**没写它读哪个字段**
+(volta? engines?)—— **不凭记忆选一个含义不明的输入**。
+选 20 的依据:lockfile 实测依赖里最高的 node 要求是 `react-router-dom`
+的 `>=20.0.0`,而 20 是 CI 一直在用、**已验证能跑**的值。
+
 > 📌 **192 轮抓到 191 轮的修法是错的**:我当时只凭记忆说「不指定
 > `version` 就会读 `packageManager`」就动手,查了 action-setup v4 README
 > 才发现 `package_json_file` 默认指向**仓库根**那个根本不存在的文件

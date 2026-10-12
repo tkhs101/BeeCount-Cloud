@@ -440,3 +440,42 @@ def test_ci_pnpm_version_comes_from_package_json() -> None:
         "CI 的 pnpm 版本来源有问题(要么写死了,要么跟着一个不存在的 "
         "package.json):\n  " + detail
     )
+
+
+def test_ci_node_version_comes_from_nvmrc() -> None:
+    """CI 的 Node 版本唯一来源必须是 `frontend/.nvmrc`,不能写死在 workflow。
+
+    🔴 194 轮实测到的形状(与 191 轮 pnpm 那个**一模一样**):
+    `ci.yml` 写 `node-version: 20`、`release.yml` 写 `node-version: '20'`
+    —— **两份副本**,而仓库里**没有任何 Node 版本声明**,
+    本地实测是 Node **26.8.1**。
+
+    没有声明 = 没有唯一来源 = 迟早漂移。pnpm 那条 193 轮已经证明了。
+
+    为什么用 `.nvmrc` 而不是 `node-version-file: package.json`:
+    setup-node 文档列了 `package.json` 这个文件名,但**没写它读哪个字段**
+    (volta? engines?)。**不凭记忆选一个含义不明的输入** ——
+    `.nvmrc` 的内容就是一行版本号,没有歧义。
+
+    选 20 的依据:lockfile 实测依赖里最高的 node 要求是
+    `react-router-dom` 的 `>=20.0.0`,而 20 是 CI 一直在用、
+    **已验证能跑**的值(本地更高,同样满足 `>=`)。
+    """
+    nvmrc = _REPO / "frontend" / ".nvmrc"
+    assert nvmrc.exists(), "frontend/.nvmrc 不存在 —— CI 的 node 版本会没来源"
+    assert nvmrc.read_text(encoding="utf-8").strip(), ".nvmrc 是空的"
+
+    bad: list[str] = []
+    for wf_name, doc in _all_workflows():
+        for name, job in (doc.get("jobs") or {}).items():
+            for step in ((job or {}).get("steps") or []):
+                if "actions/setup-node" not in ((step or {}).get("uses") or ""):
+                    continue
+                opts = (step or {}).get("with") or {}
+                if opts.get("node-version"):
+                    bad.append(f"{wf_name} job {name}: 写死了 node-version")
+                nvf = opts.get("node-version-file") or ""
+                if nvf and not (_REPO / nvf).exists():
+                    bad.append(f"{wf_name} job {name}: node-version-file={nvf} 不存在")
+    detail = "\n  ".join(bad)
+    assert not bad, f"CI 的 node 版本必须来自 frontend/.nvmrc:\n  {detail}"
