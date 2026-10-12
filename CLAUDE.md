@@ -712,6 +712,25 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 
 用户**显式**改腿时仍然被拒(`_normalize_splits` 抛出的异常不被那个 try 捕获)。
 
+#### 修复之后,用户**看得见**也**改得掉**(实测闭环)
+
+「保留脏腿」单独看只是少丢数据;它真正的价值是**形成了闭环**:
+
+| 环节 | 实测 |
+|---|---|
+| 脏腿留在库里 | 165 轮:读库两条腿都在 |
+| 前端**回显**两条腿 | `splitsToInput([3000, 1999])` -> 两条都在 |
+| UI **提示**差额 | `splitsRemainder(5000, rows)` -> **`1`**(非 null) |
+| 用户**改得掉** | 显式改腿会走 `_normalize_splits`,凑齐 5000 即成功 |
+
+`TransactionsPanel.tsx:682` 真的渲染了 `t('transactions.splits.remainder')`
+—— **有渲染出口,不是死代码**(这一条专门查过:函数存在不等于被用,
+仓库里死掉的纯函数不少)。
+
+> 📌 修复前这条路是**断**的:腿被抹掉 -> 用户只看到一笔 5000 的支出 ->
+> 余额却少了 4999 -> **无任何提示**。所以「保留」不只是不丢数据,
+> 它是「让用户有机会修」的**前提**。
+
 两条契约各有护栏,变异验证 2/2 抓到:
 `tests/test_tx_split_invariants.py::test_unrelated_edit_keeps_inconsistent_legs`
 与 `::test_patch_amount_invalidates_splits`。
