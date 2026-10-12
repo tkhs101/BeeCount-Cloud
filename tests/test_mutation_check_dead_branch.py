@@ -27,6 +27,7 @@ fixture 文件,但工具先跑 `git diff` 确认变异落地 —— **临时文�
 from __future__ import annotations
 
 import os
+import pathlib
 import subprocess
 import sys
 from pathlib import Path
@@ -43,6 +44,7 @@ _DEAD_FIND = (
     "ReadTxProjection.happened_at >= start_at)"
 )
 _DEAD_REPL = _DEAD_FIND + "  # v"
+_DEAD_FIND_TUPLE = (_DEAD_FIND, _DEAD_REPL)
 
 # 模块**顶层**赋值 —— 一定无条件执行,不该有提示(反例要先量,见测试注释)。
 _TOP = (
@@ -90,4 +92,50 @@ def test_quiet_for_a_module_level_anchor() -> None:
     assert _WARN not in out, (
         "模块顶层的锚点被误报 —— 会教人忽略这条提示。\n"
         f"输出:\n{out[-800:]}"
+    )
+
+
+def test_run_leaves_the_target_file_byte_identical() -> None:
+    """跑一次工具之后,目标文件必须**逐字节**未变(含行尾)。
+
+    🔴 210 轮实测:`read_text` + `write_text` 在 Windows 上**读一次写一次
+    就把 LF 文件变成 CRLF** —— `read_text` 做 universal newlines
+    (CRLF -> LF),`write_text` 又把 LF 转回 `os.linesep`(CRLF)。
+
+    它**三重隐蔽**,所以只能靠字节级断言发现:
+
+    | # | 它骗过了什么 |
+    |---|---|
+    | 1 | 工具 **exit 0**,输出还打印「✓ 已还原」 |
+    | 2 | **`git diff` 为空** —— `.gitattributes` 的 `eol=lf` 让 git 规范化比较 |
+    | 3 | **内容逐字节相同**,只有行尾变了,没有任何 diff 可看 |
+
+    ⚠️ 而后果是真的:全仓 LF 是 209 轮刚统一的,每次跑这个测试就把
+    `src/routers/read/workspace.py` 打回 CRLF,而且**只有行尾检查能看见**。
+
+    > 📌 这也是为什么**判据要比现象更细**:「内容没变」不等于「文件没变」。
+    > 只断言 `read_text() == original` 的话,**这个 bug 会被漏掉** ——
+    > 因为它比较的正是那两个被规范化过的字符串。
+
+    ⚠️ **第二版的第一版判据也有盲区**(210 轮自己踩到):先断言
+    `before == after`(before 是本测试自己读的)。但**污染发生在更早的
+    测试里** —— 轮到本测试时文件**已经是 CRLF**,于是 before/after 都脏、
+    两者相等 -> **变异后仍全绿**。
+    > 📌 **判据不能依赖「跑之前的状态是干净的」** —— 那正是被测对象
+    > 可能已经破坏掉的东西。所以改成**与 `git show HEAD:<file>` 的 blob 比**:
+    > 权威、不依赖执行顺序、顺带能抓「内容被改」。
+    """
+    target = pathlib.Path(_TARGET)
+    pristine = subprocess.run(
+        ["git", "show", f"HEAD:{_TARGET}"], capture_output=True, check=True
+    ).stdout
+    _run(*_DEAD_FIND_TUPLE)
+    after = target.read_bytes()
+    assert after == pristine, (
+        "工具跑完之后目标文件**不再与 git 里存的一模一样**。\n"
+        f"  git 里 : CRLF={pristine.count(bytes([13, 10]))}\n"
+        f"  跑之后: CRLF={after.count(bytes([13, 10]))}\n"
+        "  内容相同但行尾不同 = 210 轮那个 read_text/write_text 转换。"
+        "\n  ⚠️ `git diff` 看不见它(.gitattributes 的 eol=lf 会规范化比较),"
+        "\n     所以只能靠这里的字节级断言。"
     )

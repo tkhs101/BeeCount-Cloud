@@ -114,7 +114,13 @@ def main() -> int:
         print(f"✗ 文件不存在: {args.file}")
         return EXIT_ANCHOR_MISS
 
-    original = target.read_text(encoding="utf-8")
+    # ⚠️ newline='' 是**必须的**,不是洁癖(210 轮实测踩到):
+    # 不给的话 read_text 做 universal newlines(CRLF -> LF)、
+    # write_text 又把 LF 转回 os.linesep(CRLF)——
+    # **读一次写一次就把 LF 文件改成了 CRLF**。
+    # 而它 exit 0、git diff 为空(行尾被 .gitattributes 规范化)、
+    # 内容逐字节相同,所以**三重隐蔽,没有任何报错**。
+    original = target.read_text(encoding="utf-8", newline="")
     n = original.count(args.find)
     if n != 1:
         # ⚠️ **锚点必须恰好命中 1 次** —— 0 次是「变异没发生」,
@@ -187,7 +193,7 @@ def main() -> int:
         pass  # 源文件本来就解析不了,交给后面的测试去报
 
     mutated = original.replace(find, args.replace, 1)
-    target.write_text(mutated, encoding="utf-8")
+    target.write_text(mutated, encoding="utf-8", newline="")
 
     try:
         # 📌 **顺序在这里被固化**:先证明变异落地,再跑护栏。
@@ -245,8 +251,8 @@ def main() -> int:
         print("\n✓ 护栏变红 —— 变异被抓到。")
         return 0
     finally:
-        target.write_text(original, encoding="utf-8")
-        restored = target.read_text(encoding="utf-8") == original
+        target.write_text(original, encoding="utf-8", newline="")
+        restored = target.read_text(encoding="utf-8", newline="") == original
         print(f"\n{'✓ 已还原' if restored else '✗ **还原失败,需手动 git checkout**'}")
 
 
