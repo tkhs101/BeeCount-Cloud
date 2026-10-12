@@ -823,8 +823,8 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 | 177 | 反推取值点,推论「父账户不是 NULL」 | **推论是错的** |
 | 178 | 用 pytest 量父账户 + 换锚点 | **雷为真,护栏有效** |
 
-**真相**: /  **都是 None**(不变式 2 成立,
-用 pytest 跑  量到的)。176/177 轮的变异之所以无效,是因为锚点那行
+**真相**:`account_sync_id` / `account_name` **都是 None**(不变式 2 成立,
+用 pytest 跑 `_setup` 量到的)。176/177 轮的变异之所以无效,是因为锚点那行
 在 `if start_at is not None:` **里面** —— 而测试走 `scope=all`,
 `start_at` 是 None,**那一段从未执行**。
 
