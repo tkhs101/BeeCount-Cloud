@@ -64,8 +64,27 @@
 而且它会正确处理线程池);`trace` 适合「这个文件有没有被 import 过」这类
 粗问题,**不适合**「哪些行被执行了」。
 
+## `--selftest`:用**已知答案**验证这个工具本身
+
+207 轮真正的教训是「工具没验证过就拿它当证据」。
+与其把它记成一条纪律(纪律不会自己执行),不如**让工具自己带一个锚点**:
+
+    python scripts/measure_module_coverage.py --selftest
+
+它跑一个**答案已知**的样例 —— `tests/test_smoke_real_app.py`
+一定会走鉴权(`INFO src.routers.auth:auth.py:208 auth.register` 有日志实证),
+所以 `src/routers/auth.py` 的执行行数**必须 > 0**。
+
+**实测是 0** -> `trace` 漏记 -> 退出码 **3** 并打印
+「工具不可信,不要用它下任何覆盖率结论」。
+
+⚠️ 这个自检在 207 轮是**红的**(当时还不知道)。
+⚠️ 也就是说**本工具至今不可信**;留着它是因为自检一旦变绿就说明
+Python/pytest/项目结构变了、漏记机制消失,那时它才重新可用。
+
 ## 用法
 
+    python scripts/measure_module_coverage.py --selftest
     python scripts/measure_module_coverage.py \
         src/ledger_access.py src/snapshot_cache.py \
         tests/test_smoke_real_app.py
@@ -90,33 +109,75 @@ DEFAULT_TESTS = [
 # 但仍然让 trace 跳过它们,否则计数表会大到没有意义。
 SKIP_DIRS = [sys.prefix, sys.exec_prefix]
 
+# --selftest 用的**已知答案**锚点。
+#
+# `tests/test_smoke_real_app.py` 的 docstring 写着它走「注册 -> 建账本 -> ...」,
+# 而日志里也确实出现过 `INFO src.routers.auth:auth.py:208 auth.register`。
+# 所以**这个测试必然执行 auth.py**,执行行数**必须 > 0**。
+#
+# 这不是「我又挑了个高危模块」,而是一个**有正确答案的校准样例** ——
+# 工具能不能用,先在这个样例上验。
+ANCHOR_MODULE = "src/routers/auth.py"
+ANCHOR_TEST = "tests/test_smoke_real_app.py"
 
-def measure(modules: list[str], test_files: list[str],
-             top: int | None = None) -> int:
+SELFTEST_UNTRUSTED = 3      # 专用退出码,和 pytest 的 0/1 区分开
+
+
+def selftest() -> int:
+    """用已知答案验证 `trace` 本身。绿 = 工具可用,红 = 数字不可信。
+
+    刻意**不看** pytest 自己的 exit code —— 它绿只说明**测试**通过,
+    而这里要问的是**trace 有没有记到**。
+    """
+    hit, _code = _count_lines([ANCHOR_MODULE], [ANCHOR_TEST])
+    n = len(hit.get(ANCHOR_MODULE, ()))
+    print(f"\n锚点: {ANCHOR_TEST} -> {ANCHOR_MODULE}")
+    print(f"trace 记到的执行行数: {n}  (正确答案: > 0)")
+
+    if n == 0:
+        print("\n🔴 **工具不可信。** 已知答案下它记到 0 行,说明 trace 有漏记。")
+        print("   在机制查清之前,**不要用它下任何覆盖率结论**。")
+        print("   (要真测覆盖率就装 coverage —— 它有 C 扩展且线程池处理是对的。)")
+        return SELFTEST_UNTRUSTED
+    print("\n✅ 工具自检通过 —— 这次数字可以当参考(仍不等于覆盖率)。")
+    return 0
+
+
+def _count_lines(modules, test_files):
+    """跑一遍测试,返回「每个目标模块被执行到的行号集合」+ pytest 退出码。
+
+    ⚠️ `--selftest` 和正常量测**必须走同一个实现** —— 两份拷贝必然漂移,
+    然后「自检通过但实际量法不同」就又变成一个新版的「工具没验证过」。
+    """
     import pytest  # 延迟 import:让 `--help` 不必装 pytest
 
     repo = Path.cwd().resolve()
     # ⚠️ 这里**不能**写 `zip(modules, sorted(norm))` —— 那是**两套互不相关的
     # 顺序**,一旦 `modules` 不是字母序,行号就会被归到**错误的模块**上。
     #
-    # 第一版就是这么写的。这次**没有出事**——因为调用时 `modules` 恰好是
-    # 字母序,两套顺序碰巧一致(连跑两次的数字完全相同,21/46 对得上)。
-    # **所以这是潜在 bug,不是已发生的 bug** —— 我一度在注释里写成
-    # 「两个模块的数字互相对调了」,那是**我没看错就已经下了结论**。
-    # 真的对调了的话,两次运行的数字会不一致,而它们是一致的。
+    # 第一版就是这么写的。这次**没有出事** —— 调用时 `modules` 恰好是字母序,
+    # 两套顺序碰巧一致(连跑两次数字完全相同)。所以这是**潜在 bug,
+    # 不是已发生的 bug** —— 我一度在注释里写成「两个模块的数字互相对调了」,
+    # 那是**没看错就下了结论**:真对调了的话两次数字会不一致,而它们一致。
     abs_by_module = {m: str((repo / m).resolve()).replace("\\", "/")
                      for m in modules}
 
     tracer = trace.Trace(count=1, trace=0, ignoredirs=SKIP_DIRS)
     code = tracer.runfunc(pytest.main, ["-p", "no:warnings", "-q", *test_files])
 
-    hit: dict[str, set[int]] = {m: set() for m in modules}
+    hit = {m: set() for m in modules}
     for (fname, lineno), _count in tracer.results().counts.items():
         key = str(fname).replace("\\", "/")
         for m, abs_path in abs_by_module.items():
             if key == abs_path:
                 hit[m].add(lineno)
+    return hit, code
 
+
+def measure(modules: list[str], test_files: list[str],
+             top: int | None = None) -> int:
+    repo = Path.cwd().resolve()
+    hit, code = _count_lines(modules, test_files)
     total_lines = {m: len(p.read_text(encoding="utf-8",
                                        errors="replace").splitlines())
                    for m, p in ((m, repo / m) for m in modules)}
@@ -163,6 +224,8 @@ def main(argv: list[str]) -> int:
             pass
 
     args = argv[1:]
+    if args and args[0] == "--selftest":
+        return selftest()
     if not args or args[0] in {"-h", "--help"}:
         print(__doc__)
         return 0
