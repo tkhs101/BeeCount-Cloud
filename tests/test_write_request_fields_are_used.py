@@ -36,6 +36,8 @@ import ast
 import json
 from pathlib import Path
 
+import pytest
+
 import src.schemas as S
 from src.mcp.tools.write_tools import BatchTxItem
 
@@ -273,3 +275,41 @@ def test_every_leg_writer_resolves_account_names_or_refuses() -> None:
         "CSV 导入不再对查不到的账户名整批失败 —— "
         "那正是 149 轮那个静默丢余额的同款"
     )
+
+
+def test_one_sided_transfer_is_refused_behaviourally() -> None:
+    """单边转账必须**真的**被拒 —— 判据是**行为**,不是源码里有那句话。
+
+    ⚠️ MCP `create_transaction` 的签名里**只有一个 `account` 参数**、没有
+    `to_account`,但 `tx_type` 接受 `"transfer"`。调用方很容易照着
+    「transfer + account=招行卡」写一个只转出的操作 —— 那是「钱凭空消失」,
+    比 149 轮那个静默丢腿更严重。
+
+    ### 这条护栏的第一版是**假的**,而且第一版变异就抓到了
+
+    第一版断言的是「mutator 源码里含 `one-sided transfer` 这句话」。
+    把 `if not (has_from and has_to):` 改成 `if False:` 之后 —— 那句 `raise`
+    与文案**仍然在源码里**,只是**永不可达**,而护栏**照样绿**。
+
+    > 📌 **代码在文件里 != 代码被执行到了。** 这是 CLAUDE.md 记的
+    > 「源码级断言自己也会恒真」那一族(tokenize、hook 插进函数体都是它)。
+
+    所以判据必须是**行为**:真造一笔单边转账,断言它**抛**。
+    """
+    from src.snapshot_mutator import create_transaction as mut_create
+
+    # ⚠️ snapshot 就是个普通 dict(照 `test_balance_adjustment.py` 的写法),
+    # **不需要**任何 helper —— 我第一版去 import 一个并不存在的
+    # `_empty_snapshot`,又一次「凭想象猜 API」。
+    snapshot = {"items": [], "accounts": [], "categories": [], "tags": []}
+
+    with pytest.raises(ValueError, match="transfer requires both"):
+        mut_create(
+            snapshot,
+            payload={
+                "tx_type": "transfer",
+                "amount": 100.0,
+                "from_account_name": "招行卡",
+                # ⚠️ **没有 to_account** —— 钱会离开来源却到不了目的地
+            },
+        )
