@@ -641,3 +641,40 @@ def test_markdown_files_have_no_raw_control_bytes() -> None:
         f"markdown 里有裸控制字节(grep 会判 binary,搜索时整个跳过):\n  "
         + detail
     )
+
+
+# 单轮上下文预算。这个数不是拍脑袋 —— CLAUDE.md 自己写着
+# 「单轮上下文预算只有 65 kB —— 每轮开头都是 truncated CLAUDE.md from
+# 86550 to 65243 bytes」,实测截断阈值就是 65243。
+_CONTEXT_BUDGET = 65244
+
+
+def test_claude_md_fits_the_context_budget() -> None:
+    """CLAUDE.md 必须放得进单轮上下文预算,否则它作为「阅读指南」失效。
+
+    🔴 202 轮实测的后果:CLAUDE.md 一度 **93347 B**,而预算 65244 ——
+    **每轮静默丢掉约 28 KB**。丢掉的正是这个文件存在的意义:
+    「三个会烧钱的配置陷阱」「时区:已栽五次」「全仓库只能有**一个**
+    `TestClient(app)`」「两个 scope 事实(踩过才知道)」。
+
+    **没有任何报错** —— 表现只是每轮开头那句 `truncated ...`,
+    以及「我明明记得 CLAUDE.md 里有这条」的错觉。
+    我因此有**二十几轮是在只读到 2/3 的前提下做判断的**。
+
+    修法是拆(`docs/CI-AND-BUILD.md` / `docs/FRONTEND-NOTES.md`),
+    这条护栏负责让它**不再复发** —— 少了余量时下一轮就会红,
+    而不用等几十轮后从「怎么文档又少了」倒推。
+
+    > 📌 判据方向是**硬上限**,不是风格偏好:超了就会**丢内容**,
+    > 那不是「写得不够好」,是**功能坏了**。
+    """
+    size = (_REPO / "CLAUDE.md").stat().st_size
+    slack = _CONTEXT_BUDGET - size
+    assert size <= _CONTEXT_BUDGET, (
+        f"CLAUDE.md 有 {size} 字节,超过单轮上下文预算 {_CONTEXT_BUDGET}"
+        f"(超出 {size - _CONTEXT_BUDGET})。"
+        f"\n  后果:每轮开头静默丢掉这部分,**没有任何报错**。"
+        f"\n  修法:细节移到 docs/(见文首那张表),别在 CLAUDE.md 里堆。"
+    )
+    # 留一点余量提示,但**不因此变红** —— 余量小只是提醒,不是违规。
+    assert slack >= 0
