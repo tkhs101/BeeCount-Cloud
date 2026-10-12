@@ -290,22 +290,45 @@ def test_gap_needs_two_months_behind_not_one() -> None:
     assert _months_behind("", "2026-10") == 0
 
 
-def test_detect_gaps_never_moves_money() -> None:
-    """缺口检测**只读**,不写任何交易、不改任何配置。
+def test_detect_gaps_never_calls_repay_one(monkeypatch) -> None:
+    """缺口检测**只告警**,绝不动钱 —— 判据是**拦截调用**,不是查字符串。
 
-    计划文档明确反对无界补跑(补几十笔真钱),所以这一轮只告警。
-    若哪天有人给它加了 `repay_one` 调用,这条会红。
+    ⚠️ 这条原来叫 `..._never_moves_money`,但它只做了:
+    `assert "repay_one" not in inspect.getsource(AutoRepayScheduler._detect_gaps)`。
+    **名字承诺的是行为,机制验的是字符串** —— 这是 151-156 轮那一族里
+    最刺眼的一个:连**它自己叫什么**都在说「这条不测钱」。
+
+    📌 **源码文本判据证明不了「钱没动」**。文本里没有 `repay_one`,
+    不等于执行时不会调到它 —— 比如经由别的模块别名、或新加的一行。
+
+    现在改成:把 `repay_one` 换成会记账的假实现,真跑一次 `_detect_gaps`,
+    断言**一次都没被调到**。这是可观测行为,不是文本。
     """
-    import inspect
+    import datetime as dt
 
+    import src.services.credit_card.scheduler as sched_mod
     from src.services.credit_card.scheduler import AutoRepayScheduler
 
-    src = inspect.getsource(AutoRepayScheduler._detect_gaps)
-    assert "repay_one" not in src, (
-        "缺口检测里出现了 repay_one —— 它只能告警,不能自动扣钱")
-    assert "run_daily" not in src, src
-    # 只应该有一条 warning 把缺口说出来
-    assert "log.warning" in src
+    calls: list[int] = []
+
+    def _tripwire(*a, **k):
+        calls.append(1)
+        raise AssertionError("缺口检测调用了 repay_one —— 它只能告警")
+
+    # ⚠️ `raising=False`:实现里可能压根没 import 这个名字,
+    # 那正是「现在不调」的事实,不该让测试 ERROR。
+    monkeypatch.setattr(sched_mod, "repay_one", _tripwire, raising=False)
+    monkeypatch.setattr(
+        sched_mod, "datetime",
+        type("D", (), {"now": staticmethod(lambda tz=None: dt.datetime(2026, 6, 28, 3, 0))}),
+        raising=False,
+    )
+
+    sched = AutoRepayScheduler.__new__(AutoRepayScheduler)
+    sched._timezone = None
+    sched._detect_gaps(catch_up=False)
+
+    assert not calls, "缺口检测调用了 repay_one —— 那会真的扣钱"
 
 
 def test_detect_gaps_flags_two_months_behind(monkeypatch) -> None:
