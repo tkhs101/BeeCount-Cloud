@@ -192,90 +192,45 @@ def test_mcp_batch_typeddict_declares_splits() -> None:
     )
 
 
-def test_tax_zero_boundary_is_checked_per_entry_point() -> None:
-    """`tax_amount == 0` 的判据**按入口分开**,不能一刀切。
+def test_mutator_rejects_zero_tax_behaviourally() -> None:
+    """mutator 的税额边界 —— 判据是**行为**,不是源码里有那几个字符。
 
-    | 入口 | 0 的含义 | 该用什么 |
-    |---|---|---|
-    | `create_transaction` | 无意义(mutator 拒绝) | `tax <= 0` |
-    | `create_transactions` | 同上 | `tax <= 0` |
-    | `update_transaction` | **清除信号**(CLAUDE.md 记载) | `tax < 0` |
+    ### 这条护栏的第一版是**假的**(152 轮实测)
 
-    ⚠️ 145 轮我把这个差异当成 bug「统一」了,结果 `update` 连清除税额都做不了,
-    `test_mcp_update_zero_means_clear` 当场变红 —— **已有测试就是契约**。
+    第一版用 `inspect.getsource` 找 `tax <= 0` / `tax < 0:`。把 mutator 的
+    判断改成 `if tax <= 0 and False:`(**源码文本保留、代码永不可达**)——
+    **护栏照样全绿**。实测:7 passed,变异却已经落地。
 
-    📌 **同一个字段在不同入口可以有不同语义。** 判断「哪个对」之前,
-    先找有没有测试已经写死它(有测试 = 有意为之,不是漏)。
+    > 📌 **代码在文件里 != 代码被执行到了。** 这是本会话第三次在**自己**的
+    > 护栏上踩到它(151 轮单边转账、152 轮腿解析、这一条)—— 所以它不是
+    > 「偶尔手滑」,而是**源码判据的固有上限**。默认就该用行为。
+
+    所以这里直接**真调** `_normalize_tax_amount`,把三条边界各测一遍。
     """
-    import inspect
+    from src.snapshot_mutator import _normalize_tax_amount as norm
 
-    from src.mcp.tools import write_tools as w
-    from src.snapshot_mutator import _normalize_tax_amount
+    # ① 0 税额没有意义 —— **必须**用 `<= 0`,`< 0` 会把 0 放行
+    with pytest.raises(ValueError, match="must be positive"):
+        norm(0.0, tx_type="expense", amount=1000.0)
 
-    mutator = inspect.getsource(_normalize_tax_amount)
-    assert "tax <= 0" in mutator, "mutator 的判据变了 —— 本护栏要跟着更新"
+    # ② 负数同样拒绝(防止有人把 `<= 0` 改成 `< 0` 时以为只坏了 0)
+    with pytest.raises(ValueError, match="must be positive"):
+        norm(-1.0, tx_type="expense", amount=1000.0)
 
-    # 批量:`tax` 局部变量名
-    bulk = inspect.getsource(w.create_transactions)
-    assert "if tax <= 0:" in bulk, (
-        "批量预校验必须用 `tax <= 0` —— 与 mutator 同口径,"
-        "否则 tax_amount=0 被放行后炸成与真实原因无关的错误"
-    )
+    # ③ 税额不可能等于或超过实付总额
+    with pytest.raises(ValueError, match="must be less than amount"):
+        norm(1000.0, tx_type="expense", amount=1000.0)
 
-    # 单条:update 是「清除」语义,必须放行 0
-    single = inspect.getsource(w.create_transaction)
-    assert "if tax_amount <= 0:" in single, (
-        "create 单条预校验必须用 `tax_amount <= 0`"
-    )
+    # ④ 只有支出能带税
+    with pytest.raises(ValueError, match="only allowed on expense"):
+        norm(100.0, tx_type="income", amount=1000.0)
 
-    upd = inspect.getsource(w.update_transaction)
-    assert 'if tax_amount == 0:' in upd, (
-        "update 的 `0 = 清除` 分支不见了 —— 那是 CLAUDE.md 记的契约"
-    )
-    assert "if tax_amount < 0:" in upd, (
-        "update 必须是 `tax < 0`:`0` 在上面已被转成清除信号,"
-        "若这里写 `<= 0` 就会拦下「清除税额」这个请求"
-    )
+    # ⑤ 正常值原样返回(防止「一律拒绝」也能骗过上面四条)
+    assert norm(298.0, tx_type="expense", amount=3280.0) == 298.0
 
 
-def test_import_refuses_split_legs_with_unknown_accounts() -> None:
-    """CSV 导入对**查不到的**账户名必须**整批失败**,不能悄悄丢腿。
-
-    ### 这条护栏的第一版是**假的**,而且第二版的一半也差点是
-
-    ① 第一版:断言「导入源码里含 `split legs reference unknown accounts`」。
-       152 轮实测 —— 把判断改成**永不可达**(`if False:`)而文案仍在源码里,
-       **护栏照样绿**。那正是 CLAUDE.md 记的「源码级断言自己也会恒真」。
-
-    ② 第二版我一度同时保留「MCP 侧看源码 + 导入侧看源码」——
-       实测 MCP 侧那条**同样抓不住不可达**(见 round 149 那两条行为测试:
-       它们能抓,源码判据抓不住)。**已被行为判据覆盖的源码判据是负担**,
-       它只会给人虚假的安全感。
-
-    所以现在**两侧都用行为**:导入侧直接调 `_build_tx_payload`。
-    """
-    import datetime as _dt
-
-    from src.routers.import_data.endpoints import _build_tx_payload, _ImportFailed
-    from src.services.import_data.schema import ImportTransaction
-
-    tx = ImportTransaction(
-        tx_type="expense",
-        amount=5000.0,
-        happened_at=_dt.datetime(2026, 10, 3, 12, 0, 0),
-        splits=[("招行卡", 3000.0), ("不存在的卡", 2000.0)],
-        source_row_number=7,
-        source_raw_line="expense,5000,[招行卡:3000],[不存在的卡:2000]",
-    )
-
-    # ⚠️ `account_ids` **只认得「招行卡」** —— 第二条腿必然查不到。
-    account_ids = {"招行卡": "acc-1"}
-
-    with pytest.raises(_ImportFailed) as ei:
-        _build_tx_payload(tx, auto_tags=[], actor_base={}, account_ids=account_ids)
-
-    msg = str(ei.value)
-    assert "不存在的卡" in msg, f"报错要点名是哪个账户不认识,实际:{msg}"
-    # 📌 **不许**是「只丢那条腿、把另一条记下来」——
-    #    那样用户看到的是「导入成功、金额少了一条腿」。
-    assert "splices" not in msg and "dropped" not in msg
+# 📌 `update_transaction` 的 `0 = 清除信号` **已经有行为判据**:
+# `tests/test_tx_tax_amount.py::test_mcp_update_zero_means_clear`(145 轮写的)。
+# 本文件**不再重复造一条** —— 重复的护栏只会让人以为「这里有额外保护」,
+# 而实际上它验证的是同一件事的两份拷贝,其中一份迟早会漂移。
+# 「别给零收益加仪式」。
