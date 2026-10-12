@@ -259,6 +259,18 @@ mypy src                                                      -> exit 1
 `package_json_file: frontend/package.json`。
 **action 没有 `working-directory` 这一说**,只能在输入里指路径。
 
+> 📌 **这些修法只做过 `ci.yml` —— `release.yml` 里有一模一样的**
+(193 轮补):它是 **tag push 自动触发**的(不像 ci.yml 要手动),
+里面有 `version: 9` 和
+`pnpm install --frozen-lockfile || pnpm install --no-frozen-lockfile`。
+那个 fallback **比 ci.yml 那个更糟**:`--frozen-lockfile` 失败最常见的
+原因正是 **lockfile 与 package.json 不一致**,而 fallback 会**静默装上
+新版本**继续往下走,最后**绿灯放行一个没测过的依赖组合** ——
+**它把失败信号换成了沉默**。护栏已扩到**所有 workflow**。
+
+> 📌 **我一直在修一个文件,没问过其它文件有没有同样的问题** ——
+> 这正是 181 轮「门覆盖面要能自省」的精神,只是当时只用它查了 `.py`。
+
 > 📌 **192 轮抓到 191 轮的修法是错的**:我当时只凭记忆说「不指定
 > `version` 就会读 `packageManager`」就动手,查了 action-setup v4 README
 > 才发现 `package_json_file` 默认指向**仓库根**那个根本不存在的文件

@@ -64,13 +64,25 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
+        # 193 轮:同 ci.yml 192 轮的修法 —— 版本跟随 `packageManager`。
+        # 这里原来写死 `version: 9`,而 `frontend/package.json` 声明
+        # `pnpm@10.15.1`。**release.yml 是 tag push 自动触发的**
+        # (不像 ci.yml 要手动),所以这里的漂移比 ci.yml 那个更容易真的跑歪。
         with:
-          version: 9
+          package_json_file: frontend/package.json
           run_install: false
 
       - name: Install frontend deps
         working-directory: frontend
-        run: pnpm install --frozen-lockfile || pnpm install --no-frozen-lockfile
+        # ⚠️ 193 轮去掉 `|| pnpm install --no-frozen-lockfile`。
+        # 那个 fallback **掩盖了真正的错误**:`--frozen-lockfile` 失败最常见的
+        # 原因正是 **lockfile 与 package.json 不一致** —— 而 fallback 会
+        # **静默装上新版本**继续往下走,最后**绿灯放行一个没测过的依赖组合**。
+        #
+        # 「frozen 失败就退回宽松」看起来是稳妥,实际是把**失败信号换成
+        # 沉默**。要宽松就一开始就别写 `--frozen-lockfile`,
+        # 别用 fallback 假装两条路都走过。
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck web
         working-directory: frontend/apps/web

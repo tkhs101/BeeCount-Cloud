@@ -148,6 +148,31 @@ def test_yaml_files_are_not_empty() -> None:
     assert _yaml_files(), "没找到任何 .yml/.yaml —— glob 写错了。"
 
 
+def _all_workflows() -> list[tuple[str, dict]]:
+    """仓里**每一个** workflow,不只是 ci.yml。
+
+    🔴 193 轮:191/192 轮把 pnpm 版本来源修了 `ci.yml` 就收工 ——
+    **从没打开过 `release.yml`**。而 `release.yml` 是 **tag push 自动触发**
+    的(不像 `ci.yml` 要手动),它里面有一模一样的 `version: 9` 和
+    `|| pnpm install --no-frozen-lockfile` fallback。
+
+    > 📌 **我一直在修一个文件,没问过其它文件有没有同样的问题** ——
+    > 这正是 181 轮「门覆盖面要能自省」的精神,只是当时只用它查了 .py。
+
+    ⚠️ 解析不了的 workflow 由 `test_every_yaml_file_parses` 负责报错,
+    这里跳过(否则两个异常叠在一起,看不懂哪个是哪个)。
+    """
+    out: list[tuple[str, dict]] = []
+    for path in sorted((_REPO / ".github" / "workflows").glob("*.y*ml")):
+        try:
+            doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(doc, dict) and (doc.get("jobs") or {}):
+            out.append((path.name, doc))
+    return out
+
+
 def test_every_yaml_file_parses() -> None:
     """每个 YAML 都必须能被 `yaml.safe_load` 解析。
 
@@ -311,31 +336,33 @@ def test_pytest_step_is_not_blocked_by_advisory_failures() -> None:
 
     ⚠️ 这条护栏不是「仪式」:它锁住的是「pytest 到底会不会被跑」。
     """
-    doc = yaml.safe_load(_CI.read_text(encoding="utf-8"))
     checked = 0
-    # ⚠️ 判据**故意只管 Ruff / Mypy 两条**,不是「Pytest 前的所有 run」。
-    # 第一版我写成「所有排在 Pytest 前、没标 advisory 的 run step」——
-    # 它把 `Install deps` / `Migrate` 也算成 blocker,**而那是对的**:
-    # 依赖没装上 / 迁移没跑,pytest 本来也跑不了。
-    #
-    # 要防的是**明知会以 exit 1 失败的存量检查**,不是「一切可能失败的东西」。
-    # 判据太宽 = 逼着人给真正的必过步骤也加 `continue-on-error`,
-    # 那才是把门真的拆了。
-    known_stock = {"Ruff", "Mypy"}
-    for name, job in (doc.get("jobs") or {}).items():
-        steps = (job or {}).get("steps") or []
-        names = [((s or {}).get("name") or (s or {}).get("uses") or "") for s in steps]
-        if "Pytest" not in names:
-            continue
-        checked += 1
-        for step in steps[: names.index("Pytest")]:
-            label = step.get("name") or ""
-            if label in known_stock:
-                assert step.get("continue-on-error"), (
-                    f"job {name}: `{label}` 排在 Pytest 前且带存量违规(exit 1),"
-                    f"没标 continue-on-error 的话 **pytest 永远跑不到**"
-                )
-    assert checked, "没找到任何带 Pytest 的 job —— ci.yml 结构变了?"
+    for wf_name, doc in _all_workflows():
+        # 判据**故意只管 Ruff / Mypy 两条**,不是「Pytest 前的所有 run」。
+        # 第一版我写成「所有排在 Pytest 前、没标 advisory 的 run step」——
+        # 它把 `Install deps` / `Migrate` 也算成 blocker,**而那是对的**:
+        # 依赖没装上 / 迁移没跑,pytest 本来也跑不了。
+        #
+        # 要防的是**明知会以 exit 1 失败的存量检查**,不是「一切可能失败的东西」。
+        # 判据太宽 = 逼着人给必过步骤也加 `continue-on-error`,
+        # 那才是把门真的拆了。
+        known_stock = {'Ruff', 'Mypy'}
+        for name, job in (doc.get('jobs') or {}).items():
+            steps = (job or {}).get('steps') or []
+            names = [((s or {}).get('name') or (s or {}).get('uses') or '')
+                     for s in steps]
+            if 'Pytest' not in names:
+                continue
+            checked += 1
+            for step in steps[: names.index('Pytest')]:
+                label = step.get('name') or ''
+                if label in known_stock:
+                    assert step.get('continue-on-error'), (
+                        f'{wf_name} job {name}: `{label}` 排在 Pytest 前且带存量'
+                        f'违规(exit 1),没标 continue-on-error 的话 '
+                        f'**pytest 永远跑不到**'
+                    )
+    assert checked, '没找到任何带 Pytest 的 job —— workflow 结构变了?'
 
 
 def test_ci_install_does_not_bypass_the_lockfile() -> None:
@@ -349,12 +376,12 @@ def test_ci_install_does_not_bypass_the_lockfile() -> None:
 
     护栏锁住的是「CI 装的必须是 lockfile 里那个版本」。
     """
-    doc = yaml.safe_load(_CI.read_text(encoding="utf-8"))
     installs = [
-        (s or {}).get("run") or ""
+        (st or {}).get("run") or ""
+        for _wf, doc in _all_workflows()
         for job in (doc.get("jobs") or {}).values()
-        for s in ((job or {}).get("steps") or [])
-        if "pnpm install" in ((s or {}).get("run") or "")
+        for st in ((job or {}).get("steps") or [])
+        if "pnpm install" in ((st or {}).get("run") or "")
     ]
     assert installs, "ci.yml 里没有 pnpm install —— 结构变了?"
     bad = [c for c in installs if "--no-frozen-lockfile" in c or "--frozen-lockfile" not in c]
@@ -386,16 +413,16 @@ def test_ci_pnpm_version_comes_from_package_json() -> None:
         "删掉 CI 里的 pnpm version 后就无从跟随了"
     )
 
-    doc = yaml.safe_load(_CI.read_text(encoding="utf-8"))
     bad: list[str] = []
-    for name, job in (doc.get("jobs") or {}).items():
+    for wf_name, doc in _all_workflows():
+      for name, job in (doc.get("jobs") or {}).items():
         for step in ((job or {}).get("steps") or []):
             uses = (step or {}).get("uses") or ""
             if "pnpm/action-setup" not in uses:
                 continue
             opts = (step or {}).get("with") or {}
             if opts.get("version"):
-                bad.append(f"job {name}: pnpm/action-setup 硬编码了 version")
+                bad.append(f"{wf_name} job {name}: pnpm/action-setup 硬编码了 version")
             # 🔴 192 轮:191 轮我只删了 version 就完事,**那是错的** ——
             # action-setup 读的是 `package_json_file`(默认 `package.json`,
             # **相对仓库根**),而本仓**仓库根没有 package.json**,
@@ -405,9 +432,9 @@ def test_ci_pnpm_version_comes_from_package_json() -> None:
             pjf = opts.get("package_json_file") or "package.json"
             pjf_path = _REPO / pjf
             if not pjf_path.exists():
-                bad.append(f"job {name}: package_json_file={pjf} 在仓库里不存在")
+                bad.append(f"{wf_name} job {name}: package_json_file={pjf} 不存在")
             elif not json.loads(pjf_path.read_text(encoding="utf-8")).get("packageManager"):
-                bad.append(f"job {name}: package_json_file={pjf} 里没有 packageManager")
+                bad.append(f"{wf_name} job {name}: {pjf} 里没有 packageManager")
     detail = "\n  ".join(bad)
     assert not bad, (
         "CI 的 pnpm 版本来源有问题(要么写死了,要么跟着一个不存在的 "
