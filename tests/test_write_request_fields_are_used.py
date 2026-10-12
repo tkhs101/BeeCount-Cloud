@@ -238,78 +238,44 @@ def test_tax_zero_boundary_is_checked_per_entry_point() -> None:
     )
 
 
-def test_every_leg_writer_resolves_account_names_or_refuses() -> None:
-    """**每个把腿写进库的口子**都必须二选一:解析名字,或拒绝。
+def test_import_refuses_split_legs_with_unknown_accounts() -> None:
+    """CSV 导入对**查不到的**账户名必须**整批失败**,不能悄悄丢腿。
 
-    ⚠️ 149 轮实测:`create_transaction`(MCP)把 `account`(**名字**)直接塞进
-    `account_id`,而 mutator **只查非空、从不验证账户存在** —— 结果余额聚合
-    按 account_id join 不上,**一分不扣、零报错**。
+    ### 这条护栏的第一版是**假的**,而且第二版的一半也差点是
 
-    同一仓的 `import_data` 却做得**完全正确**:它显式解析名字,并且
-    **宁可整批失败也不把腿悄悄丢掉**。同一个坑,一条路有、一条路没有。
+    ① 第一版:断言「导入源码里含 `split legs reference unknown accounts`」。
+       152 轮实测 —— 把判断改成**永不可达**(`if False:`)而文案仍在源码里,
+       **护栏照样绿**。那正是 CLAUDE.md 记的「源码级断言自己也会恒真」。
 
-    📌 所以判据不是「有没有校验」,而是「**是不是每一个口子都有校验**」。
-    这一条把三个写腿的口子同时圈住。
+    ② 第二版我一度同时保留「MCP 侧看源码 + 导入侧看源码」——
+       实测 MCP 侧那条**同样抓不住不可达**(见 round 149 那两条行为测试:
+       它们能抓,源码判据抓不住)。**已被行为判据覆盖的源码判据是负担**,
+       它只会给人虚假的安全感。
+
+    所以现在**两侧都用行为**:导入侧直接调 `_build_tx_payload`。
     """
-    import inspect
+    import datetime as _dt
 
-    from src.mcp.tools import write_tools
+    from src.routers.import_data.endpoints import _build_tx_payload, _ImportFailed
+    from src.services.import_data.schema import ImportTransaction
 
-    # ① MCP create_transaction:必须经过名字解析
-    create = inspect.getsource(write_tools.create_transaction)
-    assert "leg_name and not leg_id" in create, (
-        "MCP create_transaction 的 splits 不再区分 `account`(名字)与 "
-        "`account_id` —— 名字会被直接塞进 account_id,余额 join 不上"
+    tx = ImportTransaction(
+        tx_type="expense",
+        amount=5000.0,
+        happened_at=_dt.datetime(2026, 10, 3, 12, 0, 0),
+        splits=[("招行卡", 3000.0), ("不存在的卡", 2000.0)],
+        source_row_number=7,
+        source_raw_line="expense,5000,[招行卡:3000],[不存在的卡:2000]",
     )
 
-    # ② REST 写路径:腿只接受 account_id(Pydantic 必填,传名字会 **422** ——
-    #    响亮失败,不会静默)。这是「第三条路」,靠**类型**而不是靠自觉。
-    from src.schemas import TxSplit
-    assert "account_id" in TxSplit.model_fields, "TxSplit 必须要求 account_id"
+    # ⚠️ `account_ids` **只认得「招行卡」** —— 第二条腿必然查不到。
+    account_ids = {"招行卡": "acc-1"}
 
-    # ③ CSV 导入:显式解析 + 查不到就整批失败
-    from src.routers.import_data import endpoints as imp_ep
+    with pytest.raises(_ImportFailed) as ei:
+        _build_tx_payload(tx, auto_tags=[], actor_base={}, account_ids=account_ids)
 
-    imp_src = inspect.getsource(imp_ep)
-    assert "split legs reference unknown accounts" in imp_src, (
-        "CSV 导入不再对查不到的账户名整批失败 —— "
-        "那正是 149 轮那个静默丢余额的同款"
-    )
-
-
-def test_one_sided_transfer_is_refused_behaviourally() -> None:
-    """单边转账必须**真的**被拒 —— 判据是**行为**,不是源码里有那句话。
-
-    ⚠️ MCP `create_transaction` 的签名里**只有一个 `account` 参数**、没有
-    `to_account`,但 `tx_type` 接受 `"transfer"`。调用方很容易照着
-    「transfer + account=招行卡」写一个只转出的操作 —— 那是「钱凭空消失」,
-    比 149 轮那个静默丢腿更严重。
-
-    ### 这条护栏的第一版是**假的**,而且第一版变异就抓到了
-
-    第一版断言的是「mutator 源码里含 `one-sided transfer` 这句话」。
-    把 `if not (has_from and has_to):` 改成 `if False:` 之后 —— 那句 `raise`
-    与文案**仍然在源码里**,只是**永不可达**,而护栏**照样绿**。
-
-    > 📌 **代码在文件里 != 代码被执行到了。** 这是 CLAUDE.md 记的
-    > 「源码级断言自己也会恒真」那一族(tokenize、hook 插进函数体都是它)。
-
-    所以判据必须是**行为**:真造一笔单边转账,断言它**抛**。
-    """
-    from src.snapshot_mutator import create_transaction as mut_create
-
-    # ⚠️ snapshot 就是个普通 dict(照 `test_balance_adjustment.py` 的写法),
-    # **不需要**任何 helper —— 我第一版去 import 一个并不存在的
-    # `_empty_snapshot`,又一次「凭想象猜 API」。
-    snapshot = {"items": [], "accounts": [], "categories": [], "tags": []}
-
-    with pytest.raises(ValueError, match="transfer requires both"):
-        mut_create(
-            snapshot,
-            payload={
-                "tx_type": "transfer",
-                "amount": 100.0,
-                "from_account_name": "招行卡",
-                # ⚠️ **没有 to_account** —— 钱会离开来源却到不了目的地
-            },
-        )
+    msg = str(ei.value)
+    assert "不存在的卡" in msg, f"报错要点名是哪个账户不认识,实际:{msg}"
+    # 📌 **不许**是「只丢那条腿、把另一条记下来」——
+    #    那样用户看到的是「导入成功、金额少了一条腿」。
+    assert "splices" not in msg and "dropped" not in msg
