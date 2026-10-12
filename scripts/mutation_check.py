@@ -47,6 +47,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 #: 退出码:锚点没匹配 / 用法错。**与「护栏失效」严格区分**。
 EXIT_ANCHOR_MISS = 2
+#: 退出码:变异文件与护栏文件不属于同一个测试域(后端 pytest / 前端 vitest)。
+EXIT_WRONG_DOMAIN = 3
 
 
 def _git(*args: str) -> str:
@@ -108,6 +110,28 @@ def main() -> int:
 
         print(f"✓ 变异已落地({args.file},{len(diff.splitlines())} 行 diff)")
         print(f"  {args.find!r}\n  -> {args.replace!r}\n")
+
+        # ⚠️ **门与被变异文件必须属于同一个测试域**,否则「护栏仍绿」是**必然**的,
+        # 不是「护栏可能失效」。
+        #
+        # 实测过一次:变异改的是 `frontend/apps/web/src/i18n/en.ts`(vitest 护栏
+        # `i18nKeyCoverage.test.ts`),而我传的 `--test` 是**后端 pytest 文件** ——
+        # 那个测试压根读不到那个文件,当然全绿。
+        #
+        # 📌 **这与「探针的否定结果不能当证据」是同一族**:「护栏没反应」
+        # 可能意味着护栏坏了,也可能意味着**你根本没测到它**。
+        # 两者必须分开,否则就会写出「护栏失效」这个**假结论**。
+        mut_is_fe = args.file.startswith("frontend/")
+        test_is_fe = "frontend" in args.test.replace("\\", "/")
+        if mut_is_fe != test_is_fe:
+            print("⚠️ **门与变异文件不在同一个测试域** ——")
+            if mut_is_fe:
+                print("   变异在前端(要 `pnpm -C apps/web test`,vitest 护栏),")
+                print("   而 `--test` 是 pytest 文件 —— 那个护栏**读不到**这个文件,")
+                print("   「全绿」是必然的,不代表护栏有效。")
+            else:
+                print("   变异在后端(pytest),而 `--test` 指向前端 vitest 文件。")
+            return EXIT_WRONG_DOMAIN
 
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", args.test, "-p", "no:warnings", "-q"],
