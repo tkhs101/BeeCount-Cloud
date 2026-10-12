@@ -151,3 +151,48 @@ class TestBuildTxPayloadSplits:
             ACCOUNT_IDS,
         )
         assert len(payload["splits"]) == 2
+
+
+def test_inconsistent_legs_survive_a_csv_roundtrip() -> None:
+    """**自相矛盾**的腿也要能原样往返(实测:`_parse_splits` 不校验合计)。
+
+    ## 为什么要有这条
+
+    167 轮实测出:脏腿能原样导出再导入。但那是**负结果** ——
+    **没有任何护栏保护它**。将来有人给 `_parse_splits` 加上「合计必须等于
+    父金额」的校验,往返就会**静默**把腿丢掉,交易变成「无账户的支出」,
+    账户余额全错 —— 而**没有一条测试会红**。
+
+    这正是 CLAUDE.md「五个静默丢失的坑」里那条
+    「CSV 不导出 Splits 列 -> 导出→导入后变『无账户的支出』」的同族。
+
+    ## ⚠️ 必须用**真实导出器**造输入
+
+    格式是 `|` 分隔的 `招行卡:3000.00|现金:1999.00`
+    (`workspace.py:_splits_cell` 的 docstring 里写着)。
+    167 轮我第一版凭印象手搓 JSON 二元组,`_parse_splits` 返回 `None`,
+    差点记成「往返断了」的**假缺陷**。
+
+    往返要**无损**才合格 —— 少一条腿就是上面那个坑。
+    """
+    from src.routers.read.workspace import _splits_cell
+    from src.services.import_data.transformer import _parse_splits
+
+    dirty = [
+        {"account_id": "acc-1", "amount": 3000.0},
+        {"account_id": "acc-2", "amount": 1999.0},   # 4999 != 5000
+    ]
+    names = {"acc-1": "招行卡", "acc-2": "现金"}
+
+    cell = _splits_cell(dirty, names)
+    back = _parse_splits(cell)
+
+    assert back, (
+        "脏腿在 CSV 往返里被丢了 —— 导入后这笔交易会变成「无账户的支出」,"
+        f"账户余额全错。cell={cell!r}"
+    )
+    assert len(back) == 2, f"往返丢了腿:{back}"
+    assert [n for n, _ in back] == ["招行卡", "现金"], back
+    assert abs(sum(a for _, a in back) - 4999.0) < 1e-6, (
+        f"金额被改了(应当原样保留不自洽的 4999):{back}"
+    )
