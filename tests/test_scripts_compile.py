@@ -248,3 +248,45 @@ def test_claude_md_python_refs_are_not_dead_links() -> None:
     ]
     detail = "\n  ".join(dead)
     assert not dead, f"CLAUDE.md 引用了**磁盘上不存在**的源码文件:\n  {detail}"
+
+
+# ----------------------------------------------------------------------
+# markdown 链接不能是死链(188 轮)
+# ----------------------------------------------------------------------
+
+_MD_SKIP_PARTS = _SKIP_PARTS
+
+
+def test_markdown_links_are_not_dead() -> None:
+    """CLAUDE.md 与 `docs/` 里的**本地 markdown 链接**必须指向真实文件。
+
+    185/186 轮的护栏只认**反引号**里的路径 —— 但 CLAUDE.md 通篇用的是
+    `[x](./docs/y.md)` 这种 markdown 链接语法,**一条都没被查过**。
+    两套语法的引用会指向不同的东西,只查一套等于留一半在外面。
+
+    实测(188 轮):CLAUDE.md 4 条链接 + docs/ 2 条,**全部有效**(0 死链),
+    所以这条护栏是**当场绿**的 —— 它的价值在**以后**:
+    `docs/SELFHOST-RUNBOOK.md` 改名或删除时立刻红。
+
+    ⚠️ 跳过 `http(s)://` 与 `mailto:`(外链查不了),
+    也跳过 `#anchor`(同文档内跳转)。
+    ⚠️ 187 轮实测:`../BeeCount/CLAUDE.md` 指向**mobile 仓**(本仓之外),
+    **别把它当成死链** —— 那是**有意的跨仓引用**。
+    """
+    import re
+
+    roots = [(_REPO / "CLAUDE.md")] + sorted(
+        p for p in (_REPO / "docs").rglob("*.md")
+        if not (_MD_SKIP_PARTS & set(p.relative_to(_REPO).parts))
+    )
+    assert roots, "没找到任何 markdown —— glob 写错了。"
+
+    bad: list[str] = []
+    for path in roots:
+        for link in re.findall(r"\]\(([^)#][^)]*)\)", path.read_text(encoding="utf-8")):
+            if link.startswith(("http://", "https://", "mailto:", "../")):
+                continue
+            if not (path.parent / link).exists():
+                bad.append(f"{path.relative_to(_REPO)} -> {link}")
+    detail = "\n  ".join(bad)
+    assert not bad, f"markdown 链接指向**不存在**的目标:\n  {detail}"
