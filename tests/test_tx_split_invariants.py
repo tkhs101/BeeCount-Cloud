@@ -619,3 +619,77 @@ def test_unrelated_edit_keeps_inconsistent_legs() -> None:
         "而它还照样进统计(缺口 5000,而不是 1)"
     )
     assert len(legs) == 2, f"腿的数量被改了:{legs}"
+
+
+def test_dirty_splits_survive_a_rest_note_patch() -> None:
+    """**接线验证**:脏腿穿过真 REST PATCH 也不该被抹掉。
+
+    ## 为什么需要这条
+
+    163 轮修了「无关编辑抹掉脏腿」,但那条护栏只**直接调 mutator**。
+    接线那一段(真 HTTP -> 真鉴权 -> 真 projection)没人验过。
+
+    ## 为什么只有这条能造出「脏腿」
+
+    REST / MCP 两条写路径都经过 `_normalize_splits`,**自相矛盾会被拒**。
+    脏腿只能从 `/sync/push` 进来(`_merge_tx_splits_after_merge` 只看
+    腿的形状,从不校验合计)—— 那条路径要 app scope,在本文件不可用。
+    所以这里**真建一笔合法交易,再直接改库把腿改成不自洽**,
+    等价于 sync 推脏腿之后的库状态。
+
+    ⚠️ 我第一版把这条写进 `test_smoke_real_app.py`,那里的 token 是
+    app scope,读端点和 PATCH **全 403**。**选错文件比写错断言更难查** ——
+    断言写对了也是红的。
+    """
+    from sqlalchemy import select
+
+    from src.models import ReadTxSplitProjection
+
+    client, TS, H, ids = _setup("sp-dirty-patch@t.com")
+    # ⚠️ `_create_split_tx` 返回的是 **response**,不是 tx_id
+    # —— 我第一版直接当 tx_id 用,`KeyError: 0`。
+    r0 = _create_split_tx(client, H, ids, legs=[
+        {"account_id": ids["招行卡"], "amount": 3000.0},
+        {"account_id": ids["现金"], "amount": 2000.0},
+    ], amount=5000.0, note="原始备注")
+    assert r0.status_code == 200, r0.text
+    tx_id = r0.json().get("entity_id")
+    assert tx_id, r0.json()
+
+    # 造出 sync 会推上来的那种脏腿:3000 + 1999 != 5000
+    # ⚠️ 必须同时限定 **seq** —— 我第一版只按 tx_sync_id 过滤,
+    # 结果**两条腿**都被改成 1999(合计 3998),断言直接扑空。
+    with TS() as db:
+        changed = db.query(ReadTxSplitProjection).filter(
+            ReadTxSplitProjection.tx_sync_id == tx_id,
+            ReadTxSplitProjection.seq == 1,
+        ).update({ReadTxSplitProjection.amount: 1999.0})
+        db.commit()
+        assert changed == 1, f"只该改到一条腿,实际改了 {changed} 条"
+
+    r = client.patch(
+        f"/api/v1/write/ledgers/lg1/transactions/{tx_id}",
+        # ⚠️ PATCH 必须带 base_change_id —— 漏了是 422 VALIDATION_ERROR,
+        # 而不是 400,报错信息也不说缺哪个字段。
+        json={"base_change_id": 0, "note": "Web 上改的备注"}, headers=H)
+    assert r.status_code == 200, r.text
+    # ⚠️ **不要**断言 `r.json()["note"]` —— 响应体里根本没有这个键,
+    # 我第一版写了它,拿到 None。断言要落在**数据库**这个权威处。
+
+    from src.models import ReadTxProjection
+
+    with TS() as db:
+        legs = db.scalars(
+            select(ReadTxSplitProjection)
+            .where(ReadTxSplitProjection.tx_sync_id == tx_id)
+            .order_by(ReadTxSplitProjection.seq)).all()
+        note = db.scalar(select(ReadTxProjection.note).where(
+            ReadTxProjection.sync_id == tx_id))
+
+    assert note == "Web 上改的备注", f"备注本身没更新成功:{note!r}"
+
+    assert len(legs) == 2, (
+        "改个备注把用户的腿抹掉了 —— 整笔金额会从所有账户余额上消失,"
+        f"而它还照样进统计。现在库里剩:{legs}"
+    )
+    assert abs(sum(float(x.amount) for x in legs) - 4999.0) < 1e-6, legs
