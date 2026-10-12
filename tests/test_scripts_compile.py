@@ -27,29 +27,45 @@
 """
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
+import yaml
+
 _REPO = Path(__file__).resolve().parents[1]
+_CI = _REPO / ".github" / "workflows" / "ci.yml"
 
 # 「门覆盖到的」顶层目录 —— 每一项都要**有理由**在列表里。
 # ⚠️ 这是**白名单**而不是黑名单:新增顶层目录时**默认漏网**,
 # 那正是要防的情况。
 # ⚠️ 必须与 ci.yml 的 `ruff check` 参数**保持一致** ——
 # 本条护栏就是那道命令的「覆盖面」自省版。
-_GATED_DIRS = (
-    "src", "tests", "alembic", "scripts",
-    "new-apple-ui",  # Apple 客户端 + .local 验证脚本
-)
-# 白名单里的**单文件**例外(每个都要能说清为什么它自己够格)。
-_GATED_FILES = (
-    "server.py",  # 生产 ASGI 入口;语法坏了服务**直接起不来**
-)
 
 # 第三方 / 构建产物 / 缓存 —— 不是「漏网」,是**本来就不该扫**。
 _SKIP_PARTS = frozenset({
     ".venv", "venv", "node_modules", ".git", "__pycache__",
     ".pytest_cache", ".mypy_cache", "dist", "build", ".ruff_cache",
 })
+
+def _ruff_paths_from_ci() -> set[str]:
+    """**直接从 ci.yml 解析** `ruff check` 的路径参数。
+
+    📌 **唯一来源是 CI 配置本身**。181 轮我第一版在测试里维护了
+    一份白名单副本 —— 于是「两份清单要保持一致」变成一句**没有强制力**
+    的叮嘱:改 ci.yml 的人不会看到它。
+
+    副本必然漂移 —— 这与「一致的口径要有唯一来源」是同一条。
+    """
+    doc = yaml.safe_load(_CI.read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for job in (doc.get("jobs") or {}).values():
+        for step in (job or {}).get("steps") or []:
+            for line in ((step or {}).get("run") or "").splitlines():
+                parts = shlex.split(line.strip())
+                if len(parts) >= 3 and parts[0] == "ruff" and parts[1] == "check":
+                    found.update(parts[2:])
+    return found
+
 
 _SCRIPTS = sorted((_REPO / "scripts").rglob("*.py"))
 
@@ -61,7 +77,11 @@ def _uncovered() -> list[str]:
         rel = path.relative_to(_REPO)
         if _SKIP_PARTS & set(rel.parts):
             continue
-        if rel.parts[0] in _GATED_DIRS or rel.as_posix() in _GATED_FILES:
+        gated = _ruff_paths_from_ci()
+        posix = rel.as_posix()
+        if posix in gated or any(
+            posix == g or posix.startswith(g.rstrip("/") + "/") for g in gated
+        ):
             continue
         out.append(rel.as_posix())
     return out

@@ -19,9 +19,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Ruff
-        run: # ⚠️ scripts/ 也要查 —— pytest **不 import** 那些脚本,
-# 所以它们**没有任何门**(179 轮实测:一个 SyntaxError 一路进了主干)。
-ruff check src tests alembic scripts server.py new-apple-ui
+        # ⚠️ scripts/ 与 server.py 也要查 —— pytest **不 import** 那些
+        # 文件,所以它们**曾经一道门都没有**(179 轮实测:一个 SyntaxError
+        # 一路进了主干)。新增顶层 .py 时同步加进来。
+        run: ruff check src tests alembic scripts server.py new-apple-ui
       - name: Mypy
         run: mypy src
       - name: Pytest
@@ -57,9 +58,10 @@ ruff check src tests alembic scripts server.py new-apple-ui
       - name: Migrate
         run: alembic upgrade head
       - name: Ruff
-        run: # ⚠️ scripts/ 也要查 —— pytest **不 import** 那些脚本,
-# 所以它们**没有任何门**(179 轮实测:一个 SyntaxError 一路进了主干)。
-ruff check src tests alembic scripts server.py new-apple-ui
+        # ⚠️ scripts/ 与 server.py 也要查 —— pytest **不 import** 那些
+        # 文件,所以它们**曾经一道门都没有**(179 轮实测:一个 SyntaxError
+        # 一路进了主干)。新增顶层 .py 时同步加进来。
+        run: ruff check src tests alembic scripts server.py new-apple-ui
       - name: Mypy
         run: mypy src
       - name: Pytest
