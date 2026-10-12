@@ -231,14 +231,20 @@ def test_claude_md_python_refs_are_not_dead_links() -> None:
     skip = {".venv", "venv", "node_modules", ".git", "__pycache__",
             ".pytest_cache", ".mypy_cache", "dist", "build", ".ruff_cache"}
     by_name = {
-        p.name for p in _REPO.rglob("*.py")
+        p.name for ext in ("py", "ts", "tsx")
+        for p in _REPO.rglob(f"*.{ext}")
         if not (skip & set(p.relative_to(_REPO).parts))
     }
+    # ⚠️ **包含前端**:CLAUDE.md 那几大段(bundle 优化 / i18n / hookPlacement)
+    # 全在点名 `.ts` / `.tsx`。只查 `.py` 的话,前端改名/搬走**完全没人管**。
+    # 实测 186 轮:26 条前端引用按 basename **全部解析成功**(0 死链)。
     text = (_REPO / "CLAUDE.md").read_text(encoding="utf-8")
-    refs = sorted(set(re.findall(r"`([A-Za-z0-9_./-]+\.py)`", text)))
+    refs = sorted(set(re.findall(
+        r"`([A-Za-z0-9_./-]+\.(?:py|ts|tsx))`", text
+    )))
     dead = [
         r for r in refs
         if not (_REPO / r).exists() and r.rsplit("/", 1)[-1] not in by_name
     ]
     detail = "\n  ".join(dead)
-    assert not dead, f"CLAUDE.md 引用了**磁盘上不存在**的 .py:\n  {detail}"
+    assert not dead, f"CLAUDE.md 引用了**磁盘上不存在**的源码文件:\n  {detail}"
