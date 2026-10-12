@@ -131,7 +131,7 @@ App**。改这个仓之前先读
 | 前端口径 | `frontend/packages/web-features/src/lib/amountBasis.ts` |
 | MCP 工具 | `create_transaction` / `update_transaction` / `create_transactions` / `get_analytics_summary` |
 
-**三条容易踩的**(`CLAUDE.md` 上游那节讲的是移动端同步契约,这几个是本 fork 独有的):
+**四条容易踩的**(`CLAUDE.md` 上游那节讲的是移动端同步契约,这几个是本 fork 独有的):
 
 1. **`_projection_row_to_tx_dict` 漏了税额** → Web PATCH 更新会**静默抹掉它
    且不报错**。上游 `nativeAmount` 当年就踩过同一个坑,注释还在 `:895-899`。
@@ -140,6 +140,21 @@ App**。改这个仓之前先读
    `frontend/apps/web/src/amountBasisGuard.test.ts` 会拦。
 3. **hook 别插进函数体** → 语法完全合法但永不可达,`tsc` 和 build 都抓不到。
    护栏 `frontend/apps/web/src/hookPlacement.test.ts`。
+4. **`tax_amount = 0` 在三条 MCP 入口里含义不同**(实测踩过,改错会**弄坏清除功能**):
+
+   | 入口 | `0` 的含义 | 判据 |
+   |---|---|---|
+   | `create_transaction` | 无意义(mutator 拒绝) | `tax <= 0` |
+   | `create_transactions` | 同上 | `tax <= 0` |
+   | **`update_transaction`** | **清除信号**(PATCH 的显式 null 传不进来) | `tax < 0` |
+
+   update 的 `0` 在几行之前就被转成 `patch["tax_amount"] = None`,**根本到不了
+   那条校验** —— 所以那里写 `<= 0` 会**拦下「清除这笔税额」**。
+   `tests/test_tx_tax_amount.py::test_mcp_update_zero_means_clear` 立刻变红。
+
+   > 📌 **同一个字段在不同入口可以有不同语义,别把它们当同一处代码「统一」。**
+   > 判断「哪个对」之前**先找有没有测试已经写死它** —— 有测试 = 有意为之,不是漏。
+   > 护栏:`tests/test_write_request_fields_are_used.py` 里那三条分别断言。
 
 ## fork 修复:管理面板「备份」
 
