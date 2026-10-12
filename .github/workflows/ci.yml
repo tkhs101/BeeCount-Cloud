@@ -21,7 +21,7 @@ jobs:
       - name: Ruff
         run: # ⚠️ scripts/ 也要查 —— pytest **不 import** 那些脚本,
 # 所以它们**没有任何门**(179 轮实测:一个 SyntaxError 一路进了主干)。
-ruff check src tests alembic scripts
+ruff check src tests alembic scripts server.py new-apple-ui
       - name: Mypy
         run: mypy src
       - name: Pytest
@@ -59,7 +59,7 @@ ruff check src tests alembic scripts
       - name: Ruff
         run: # ⚠️ scripts/ 也要查 —— pytest **不 import** 那些脚本,
 # 所以它们**没有任何门**(179 轮实测:一个 SyntaxError 一路进了主干)。
-ruff check src tests alembic scripts
+ruff check src tests alembic scripts server.py new-apple-ui
       - name: Mypy
         run: mypy src
       - name: Pytest

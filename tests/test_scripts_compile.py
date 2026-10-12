@@ -29,7 +29,60 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_SCRIPTS = sorted((Path(__file__).resolve().parents[1] / "scripts").rglob("*.py"))
+_REPO = Path(__file__).resolve().parents[1]
+
+# 「门覆盖到的」顶层目录 —— 每一项都要**有理由**在列表里。
+# ⚠️ 这是**白名单**而不是黑名单:新增顶层目录时**默认漏网**,
+# 那正是要防的情况。
+# ⚠️ 必须与 ci.yml 的 `ruff check` 参数**保持一致** ——
+# 本条护栏就是那道命令的「覆盖面」自省版。
+_GATED_DIRS = (
+    "src", "tests", "alembic", "scripts",
+    "new-apple-ui",  # Apple 客户端 + .local 验证脚本
+)
+# 白名单里的**单文件**例外(每个都要能说清为什么它自己够格)。
+_GATED_FILES = (
+    "server.py",  # 生产 ASGI 入口;语法坏了服务**直接起不来**
+)
+
+# 第三方 / 构建产物 / 缓存 —— 不是「漏网」,是**本来就不该扫**。
+_SKIP_PARTS = frozenset({
+    ".venv", "venv", "node_modules", ".git", "__pycache__",
+    ".pytest_cache", ".mypy_cache", "dist", "build", ".ruff_cache",
+})
+
+_SCRIPTS = sorted((_REPO / "scripts").rglob("*.py"))
+
+
+def _uncovered() -> list[str]:
+    """所有**不在任何一道门**覆盖范围内的 .py。"""
+    out: list[str] = []
+    for path in sorted(_REPO.rglob("*.py")):
+        rel = path.relative_to(_REPO)
+        if _SKIP_PARTS & set(rel.parts):
+            continue
+        if rel.parts[0] in _GATED_DIRS or rel.as_posix() in _GATED_FILES:
+            continue
+        out.append(rel.as_posix())
+    return out
+
+
+def test_no_python_file_falls_outside_every_gate() -> None:
+    """仓库里**每一个** .py 都必须落在某道门的覆盖范围内。
+
+    ⚠️ 判据方向是**白名单**:新加一个顶层目录/文件时,它**默认漏网**
+    —— 而「没人在门里」正是本条要防的情况。
+
+    实测抓到过两个真漏网:仓根的 `server.py`(生产 ASGI 入口)和一个
+    `new-apple-ui/.local/` 下的验证脚本。
+    """
+    leaks = _uncovered()
+    assert not leaks, (
+        "这些 .py **不在任何一道门**的覆盖范围内(ruff / pytest 都不碰):\n  "
+        + "\n  ".join(leaks)
+        + "\n→ 要么把它们加进 `_GATED_DIRS`/`_GATED_FILES`,"
+          "要么加进 `_SKIP_PARTS`(并写明为什么它本来就不该扫)。"
+    )
 
 
 def test_scripts_dir_is_not_empty() -> None:
