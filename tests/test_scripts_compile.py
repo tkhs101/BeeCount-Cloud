@@ -601,3 +601,43 @@ def test_workflow_step_output_references_are_not_dangling() -> None:
         f"(Actions 会**静默求值成空字符串**,不报错):\n  " + detail
     )
     assert checked, "没扫到任何 step 引用 —— 正则或结构变了?"
+
+
+def test_markdown_files_have_no_raw_control_bytes() -> None:
+    """仓里任何 `.md` 都不许含**裸**控制字节。
+
+    🔴 199 轮:`docs/aegis/verification-log.md` 第 2086 行有三个真实控制字节
+    (`0x00` / `0x08` / `0x0b`) —— 某个轮次用 bash heredoc 写日志时,
+    把 `` `/[\x00-\x08...]/` `` 这样的正则字面量**真的解释成了字节**。
+
+    **后果不是「显示乱码」而已**:grep 判该文件为 **binary** ->
+    **搜索与审阅会整个跳过它** —— 而 CLAUDE.md 恰恰让读者去那里查证。
+    `file` 仍报 "UTF-8 text"(它按 BOM/启发式判断),**只有 grep 的
+    binary 判定会暴露**。
+
+    ⚠️ 这正是本文件顶部那条纪律的第一个实例:「含反斜杠的代码一律用
+    `write`/`edit` 工具写,不用 bash heredoc」—— 199 轮自己又犯了,
+    所以要有护栏,而不是只记一条纪律。
+
+    判据:除 `\t` / `\n` / `\r` 外,0x00-0x1F 一律不许出现。
+    """
+    offenders: list[str] = []
+    for md in sorted(_REPO.rglob("*.md")):
+        parts = md.relative_to(_REPO).parts
+        if "node_modules" in parts or ".git" in parts or "new-apple-ui" in parts:
+            continue
+        raw = md.read_bytes()
+        bad = sorted({
+            c for c in range(0x20)
+            if c not in (0x09, 0x0A, 0x0D) and bytes([c]) in raw
+        })
+        if bad:
+            offenders.append(
+                f"{md.relative_to(_REPO).as_posix()}: "
+                f"{[hex(c) for c in bad]}"
+            )
+    detail = "\n  ".join(offenders)
+    assert not offenders, (
+        f"markdown 里有裸控制字节(grep 会判 binary,搜索时整个跳过):\n  "
+        + detail
+    )

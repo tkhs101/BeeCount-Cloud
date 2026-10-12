@@ -332,6 +332,18 @@ setup-node 文档列了 `package.json` 这个文件名,但**没写它读哪个�
 (`meta` / `nodever` / `vars`)**全部有定义**,零悬空;其它 6 个 job
 **一个 step 引用都没有**。
 
+> 📌 **markdown 里不许有裸控制字节**(199 轮拾到):
+`docs/aegis/verification-log.md` 第 2086 行有三个**真实**控制字节
+(`0x00` / `0x08` / `0x0b`) —— 某个轮次用 bash heredoc 写日志时,
+把 `` `/[ -...]/` `` 这样的正则字面量**真的解释成了字节**。
+**后果不是“显示乱码”而已**:grep 判该文件为 **binary**
+-> **搜索与审阅会整个跳过它** —— 而 CLAUDE.md 恰恰让读者去那里查证。
+(`file` 仍报 "UTF-8 text" ——**只有 grep 的 binary 判定会暴露**)。
+
+> 📌 这正是本文件顶部那条纪律的第一个实例:「含反斜杠的代码一律用
+> `write`/`edit` 工具写,不用 bash heredoc」—— 199 轮自己又犯了,
+> 所以要有护栏,而不是只记一条纪律。护栏:`test_markdown_files_have_no_raw_control_bytes`。
+
 > 📌 **192 轮抓到 191 轮的修法是错的**:我当时只凭记忆说「不指定
 > `version` 就会读 `packageManager`」就动手,查了 action-setup v4 README
 > 才发现 `package_json_file` 默认指向**仓库根**那个根本不存在的文件
