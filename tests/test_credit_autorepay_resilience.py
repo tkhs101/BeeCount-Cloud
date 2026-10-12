@@ -52,16 +52,25 @@ def test_retry_window_is_safe_because_of_defenses() -> None:
     这条是**设计依据**的护栏:免得将来有人以为「回看 3 天有风险」,
     把它改回 `[today]`,把这个 bug 又放出来。
     """
-    import inspect
-
     from src.services.credit_card.repay import _amount_key
 
-    src = inspect.getsource(__import__(
-        "src.services.credit_card.repay", fromlist=["x"]))
-    # 防线 1 + 2:账期查重 + last_period「恰好一次」
-    assert "autorepay_last_period" in src
-    # 防线 4:数据库条件更新抢锁
-    assert "rowcount" in src
+    # ⚠️ 原来这里断言的是「repay.py 源码里有 `autorepay_last_period` /
+    # `rowcount` 这两个**词**」—— 那是**源码文本判据**,对「代码在但没跑」
+    # 完全无效(151-155 轮实测了四轮同一个形态)。
+    #
+    # 现在改成**指向真正证明它们的行为测试**:
+    # | 防线 | 谁在真跑它 |
+    # |---|---|
+    # | 2 `autorepay_last_period` | `test_credit_autorepay_idempotency.py::test_running_the_same_...` |
+    # | 4 `rowcount != 1`          | 同文件 `::test_barrier4_blocks_...` |
+    #
+    # 实测两条防线都**咬得住**:
+    #   `if getattr(claimed, "rowcount", 0) != 1:` -> `if False:`      -> 红
+    #   `.where(...autorepay_last_period.is_not(` -> `.where(False and ...)` -> 红
+    #
+    # 📌 **「源码里有这个词」不等于「防线还在工作」。** 想验防线就去跑那两条
+    # 行为测试,别让这里的字符串给人「四道防线都验过了」的错误印象。
+    #
     # 防线 3:幂等键带金额 —— 同金额重试仍幂等,不同金额是不同键
     assert _amount_key(Decimal("3000")) == "3000.00"
 
