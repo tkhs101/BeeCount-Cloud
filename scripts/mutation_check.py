@@ -19,6 +19,33 @@ CLAUDE.md「变异审计脚本」那节早就记了这些要点(绝对路径 / f
 
 > **变异没落地,就不许跑护栏。**
 
+## 两种变异模式
+
+### `--mode replace`(默认)
+
+直接换掉锚点,用于验证「这条护栏抓的是它该抓的那件事」。
+
+### `--mode unreachable` —— **专门抓「源码判据的假护栏」**
+
+把 `if <cond>:` 变成 `if <cond> and False:`。
+
+> ⚠️ **源码文本一字不改,代码却永不可达。**
+> 任何「源码里有这句话」的判据**一定不会红**。
+
+**为什么需要它**:本会话连着三轮(151/152/153)在**自己**写的护栏上踩到
+同一个坑 —— 它们都断言「源码里有某段文本」,而把那段代码改成不可达之后,
+**护栏照样全绿**。实测对照:
+
+| 护栏 | unreachable 变异 |
+|---|---|
+| `assert "tax <= 0" in inspect.getsource(_normalize_tax_amount)` | **绿**(假) |
+| `with pytest.raises(...): _normalize_tax_amount(0.0, ...)` | **红**(真) |
+
+> 📌 **同一个变异,两条判据一真一假** —— 这就是「静态 vs 行为」的可测量差。
+
+⚠️ 用它做变异审计时,**只对行为判据有意义**:静态判据本来就抓不到,
+它绿是**预期**,不是「护栏可能失效」。
+
 ## 用法
 
 ```bash
@@ -71,6 +98,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", required=True, help="仓库根相对路径")
     ap.add_argument("--find", required=True, help="要替换的原文本(精确)")
+    ap.add_argument(
+        "--mode",
+        choices=("replace", "unreachable"),
+        default="replace",
+        help="unreachable:把 `if <cond>:` 变成 `if <cond> and False:` —— "
+             "**源码文本一字不改,代码却永不可达**。专门用来抓源码判据的假护栏。",
+    )
     ap.add_argument("--replace", required=True, help="替换成的新文本")
     ap.add_argument("--test", required=True, help="要跑的测试路径")
     args = ap.parse_args()
@@ -92,7 +126,20 @@ def main() -> int:
         return EXIT_ANCHOR_MISS
 
     before = _changed_files()
-    mutated = original.replace(args.find, args.replace, 1)
+    if args.mode == "unreachable":
+        # `if <cond>:` -> `if <cond> and False:`
+        # ⚠️ **源码文本一字不改** —— 所以任何「源码里有这句话」的判据都不会红。
+        #    这正是 151-153 轮连续三次踩到的失败模式。
+        find = args.find
+        if not find.rstrip().endswith(":"):
+            print(f"✗ --mode unreachable 需要一个以 `:` 结尾的 if 行,收到 {find!r}")
+            return EXIT_ANCHOR_MISS
+        repl = find.rstrip()[:-1].rstrip() + " and False:"
+        args.replace = repl
+        find = find
+    else:
+        find = args.find
+    mutated = original.replace(find, args.replace, 1)
     target.write_text(mutated, encoding="utf-8")
 
     try:
