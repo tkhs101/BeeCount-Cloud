@@ -967,6 +967,12 @@ class BatchTxItem(TypedDict):
     tags: NotRequired[list[str]]
     currency: NotRequired[str]
     tax_amount: NotRequired[float]
+    # 组合支付(0021):**它同时是给 LLM 看的 JSON Schema 声明** ——
+    # 不写这一项,LLM 根本不知道这个工具能建组合支付。
+    # ⚠️ 底层 `transactions_batch.BatchTransactionItem` 是**另一个模型**
+    # (Pydantic),两者都要有 —— 只改一个,LLM 看得见但发不出去,
+    # 或者发得出去但 schema 里没有。
+    splits: NotRequired[list[dict[str, Any]]]
 
 
 async def create_transactions(
@@ -1054,6 +1060,17 @@ async def create_transactions(
                     f"transactions[{i}]: tax_amount is only allowed on expense transactions"
                 )
             item["tax_amount"] = float(tax)
+        # 组合支付(0021):同样是**白名单式搬运**,少一个键就静默丢。
+        # ⚠️ 判据用 `is not None` 而不是真假判断 —— `splits: []` 在
+        # mutator 那层是**清除信号**,空 list 不能当成「没传」。
+        # ⚠️ 判据用 `is not None` 而不是真假判断 —— `splits: []` 在
+        # mutator 那层是**清除信号**,空 list 不能当成「没传」。
+        legs = raw.get("splits")
+        if legs is not None:
+            item["splits"] = [
+                {"account_id": str(x["account_id"]), "amount": float(x["amount"])}
+                for x in legs
+            ]
         norm_items.append(item)
 
     # 3. 预校验 category / account 名是否存在(O(1) 查询,给 LLM 清晰报错,

@@ -149,3 +149,36 @@ def test_receipt_variant_forwards_every_param_to_the_implementation() -> None:
         "  -> 签名和 schema 都对,但底层实际拿不到这些参数 —— "
         "**结构判据全绿,功能却是坏的**"
     )
+
+
+def test_create_transactions_schema_exposes_splits() -> None:
+    """批量建交易的 MCP schema **必须**暴露 `splits`。
+
+    ⚠️ `BatchTxItem` 是 **TypedDict**,而它的另一个身份是
+    **给 LLM 看的 JSON Schema 声明**。不写这个字段,LLM **根本不知道**
+    这个工具能建组合支付 —— 工具没坏,只是没人会调用那个参数。
+
+    这与 `test_no_write_request_field_is_declared_and_forgotten` 是同一族,
+    但那一条只看「代码有没有读」;这一条看「**schema 有没有暴露**」。
+    少任何一半,功能都不完整。
+    """
+    import asyncio
+
+    tools = {t.name: t for t in asyncio.run(S.mcp.list_tools())}
+    schema = tools["create_transactions"].inputSchema
+    item = schema["properties"]["transactions"]["items"]
+
+    # ⚠️ **`items` 是 `$ref`,不是内联对象** —— 第一版直接读
+    # `items["properties"]`,于是 `props` 恒为空,**判据恒假**。
+    # 这与「扫到 0 个字段就说没问题」是同一类:安静地什么都不检查。
+    # 所以这里两条路径都处理,并断言**确实解析出了 properties**。
+    if "$ref" in item:
+        ref_name = item["$ref"].rsplit("/", 1)[-1]
+        item = schema["$defs"][ref_name]
+    props = item.get("properties") or {}
+    assert props, "既没解析出 $defs,也没有内联 properties —— 判据失效"
+
+    assert "splits" in props, (
+        "批量建交易的 schema 里没有 splits —— LLM 看不到这个能力。"
+        f" 实际字段:{sorted(props)}"
+    )
