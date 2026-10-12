@@ -92,13 +92,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        # ⚠️ 191 轮:**不要在这里写 `version:`**。
-        # `frontend/package.json` 的 `packageManager` 字段才是唯一来源
-        # (当前 `pnpm@10.15.1`,与本地实测一致)。写死一个版本就是它的
-        # **副本**,必然漂移 —— 191 轮量到时 CI 写的是 `9`,而仓库声明 10.15.1。
-        # action-setup 不指定 version 时会**读 packageManager**。
+        # ⚠️ 192 轮:`version` 不指定时,action-setup 会去读
+        # `package_json_file`(默认 `package.json`,**相对仓库根**)。
         #
-        # 与 182 轮那条同构:**副本必然漂移**。
+        # 本仓**仓库根没有 package.json**,`packageManager` 在
+        # `frontend/package.json` —— 所以 `package_json_file` **必须显式写**。
+        # `pnpm/action-setup` 是 action,**没有 `working-directory`** 这一说,
+        # 只能在输入里指路径。191 轮我只删了 version 没改路径,那样
+        # **两个来源同时缺失**,CI 会直接报错。
+        #
+        # 依据(action-setup v4 README):`version` 在有 `packageManager`
+        # 字段时是 Optional;`package_json_file` 默认 `package.json`。
+        with:
+          package_json_file: frontend/package.json
       - uses: actions/setup-node@v4
         with:
           node-version: 20

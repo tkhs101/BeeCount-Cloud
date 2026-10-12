@@ -391,7 +391,25 @@ def test_ci_pnpm_version_comes_from_package_json() -> None:
     for name, job in (doc.get("jobs") or {}).items():
         for step in ((job or {}).get("steps") or []):
             uses = (step or {}).get("uses") or ""
-            if "pnpm/action-setup" in uses and ((step or {}).get("with") or {}).get("version"):
+            if "pnpm/action-setup" not in uses:
+                continue
+            opts = (step or {}).get("with") or {}
+            if opts.get("version"):
                 bad.append(f"job {name}: pnpm/action-setup 硬编码了 version")
+            # 🔴 192 轮:191 轮我只删了 version 就完事,**那是错的** ——
+            # action-setup 读的是 `package_json_file`(默认 `package.json`,
+            # **相对仓库根**),而本仓**仓库根没有 package.json**,
+            # `packageManager` 在 `frontend/package.json`。
+            # 两个来源同时缺失 -> CI 直接报错。
+            # action **没有 `working-directory`**,只能在输入里指路径。
+            pjf = opts.get("package_json_file") or "package.json"
+            pjf_path = _REPO / pjf
+            if not pjf_path.exists():
+                bad.append(f"job {name}: package_json_file={pjf} 在仓库里不存在")
+            elif not json.loads(pjf_path.read_text(encoding="utf-8")).get("packageManager"):
+                bad.append(f"job {name}: package_json_file={pjf} 里没有 packageManager")
     detail = "\n  ".join(bad)
-    assert not bad, f"CI 的 pnpm 版本必须是 package.json 的副本之外的东西:\n  {detail}"
+    assert not bad, (
+        "CI 的 pnpm 版本来源有问题(要么写死了,要么跟着一个不存在的 "
+        "package.json):\n  " + detail
+    )

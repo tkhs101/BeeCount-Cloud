@@ -252,6 +252,19 @@ mypy src                                                      -> exit 1
 > 全都列出来才是异常。**用工具自己的判据(`--frozen-lockfile`),
 > 别自己发明一个。**
 
+📌 **pnpm 版本跟着 `package.json`,但 `pnpm/action-setup` 在仓库根跑**:
+`version` 不指定时 action-setup 会读 `package_json_file`(默认
+`package.json`,**相对仓库根**)。本仓**仓库根没有 package.json**,
+`packageManager` 在 `frontend/package.json` —— 所以必须显式写
+`package_json_file: frontend/package.json`。
+**action 没有 `working-directory` 这一说**,只能在输入里指路径。
+
+> 📌 **192 轮抓到 191 轮的修法是错的**:我当时只凭记忆说「不指定
+> `version` 就会读 `packageManager`」就动手,查了 action-setup v4 README
+> 才发现 `package_json_file` 默认指向**仓库根**那个根本不存在的文件
+> —— 两个来源同时缺失,CI 会直接报错。
+> **「我记得 action 的行为」不是证据,文档才是。**
+
 📌 这些数字是快照,以实际跑出来的为准 —— 补了测试就会变。
 **别照抄这张表当现状**,照抄会写出「文档声称有保护、实际裸奔」那种事。
 
