@@ -1086,6 +1086,14 @@ if row.tax_amount is not None:      # 列名在这里
 把 `upsert_tx` 里的 `if "splits" in payload:` 改成 `if True:`
 （复现 `CLAUDE.md` 记的那个坑),**没有任何测试变红**。
 
+**还有第三种原因:测的根本是别的路径。** 173 轮实测:把 delete_tx 里
+那句 delete_tx_splits 去掉, `test_backup_restore_data.py` 的 **4 条全绿** ——
+因为那 4 条走的是 `_truncate_ledger`/`rebuild`,**压根不调 `delete_tx`**。
+换成 `test_tx_split_invariants.py` 立刻变红。
+
+📌 **「变异没被检出」先问三件事:护栏失效?被上层挡住?还是**它测的是
+另一条路**?第三种最容易被误判成第一种。
+
 不是护栏失效,是**上层还有一道**:`_merge_tx_splits_after_merge` 总会把
 `splits` 补进 merged（要么来自 payload,要么来自现有腿）,所以同步路径
 走到 `upsert_tx` 时那个条件**恒真**。
