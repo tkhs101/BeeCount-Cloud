@@ -139,6 +139,52 @@ def main() -> int:
         find = find
     else:
         find = args.find
+
+    # ⚠️ **锚点可能在死分支里**(178 轮实测踩到的第四种「变异没被检出」)
+    # 锚点行若被包在 `if`/`for`/`while`/`try`/`with` 里面,护栏那条测试
+    # **不一定进得去** —— 那一段从未执行,变异于是**永远绿**。
+    # 它和「护栏失效」在观测上**完全一样**(都绿),但结论相反:
+    # 前者要**换锚点**,后者要**补护栏**。
+    # 详见 CLAUDE.md「变异没被检出的四种原因」。
+    try:
+        import ast
+
+        _tree = ast.parse(original)
+        _hit_line = original[: original.index(find)].count("\n") + 1
+        for _node in ast.walk(_tree):
+            if not isinstance(_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            _fn_end = _node.end_lineno or _node.lineno
+            if not (_node.lineno <= _hit_line <= _fn_end):
+                continue
+            for _sub in ast.walk(_node):
+                # ⚠️ `ast.walk` 会走到没有 `end_lineno` 的节点
+                # (`arguments` / `alias` / ...),先判再取属性。
+                _end = getattr(_sub, "end_lineno", None) or getattr(_sub, "lineno", 0)
+                _start = getattr(_sub, "lineno", 0)
+                if not (_start < _hit_line <= _end):
+                    continue
+                # ⚠️ 块头**自己**的那一行(`for x in ...:` / `if cond:`)
+                # 是「无条件执行到」的 —— 只有**块体内部**才算死分支。
+                if getattr(_sub, "body", None) and _hit_line <= _sub.body[0].lineno:
+                    continue
+                if isinstance(_sub, (ast.If, ast.For, ast.While, ast.Try, ast.With)):
+                    print(
+                        f"\n⚠️ **锚点可能落在死分支里** —— 第 {_hit_line} 行被包在"
+                        f" `{type(_sub).__name__}`(第 {_sub.lineno} 行)内部。\n"
+                        "  → 测试若**没有**进入这个分支,那一段**从未执行**,\n"
+                        "    变异会**永远绿** —— 而这与「护栏失效」在观测上**完全一样**。\n"
+                        "  → **先确认变异真的执行了**(量一个可观测副作用),\n"
+                        "    再谈护栏强不强;或者把锚点挪到**无条件执行**的位置。\n"
+                        "  → 这只是**提示**,不是拒绝:测试**确实**可能进这个分支。
+    ⚠️ 本检查只到「**某一层**分支」为止,不区分嵌套 —— 所以
+    「在分支里」**不等于**「测试进不去」。判据仍然是**变异有没有真的执行**。"
+                    )
+                    break
+            break
+    except SyntaxError:
+        pass  # 源文件本来就解析不了,交给后面的测试去报
+
     mutated = original.replace(find, args.replace, 1)
     target.write_text(mutated, encoding="utf-8")
 
