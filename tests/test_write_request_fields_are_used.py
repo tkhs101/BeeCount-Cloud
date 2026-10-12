@@ -188,3 +188,49 @@ def test_mcp_batch_typeddict_declares_splits() -> None:
         "MCP 的 BatchTxItem(TypedDict) 没有 splits —— "
         "它是给 LLM 看的 JSON Schema 声明,不写 LLM 就看不到这个能力"
     )
+
+
+def test_tax_zero_boundary_is_checked_per_entry_point() -> None:
+    """`tax_amount == 0` 的判据**按入口分开**,不能一刀切。
+
+    | 入口 | 0 的含义 | 该用什么 |
+    |---|---|---|
+    | `create_transaction` | 无意义(mutator 拒绝) | `tax <= 0` |
+    | `create_transactions` | 同上 | `tax <= 0` |
+    | `update_transaction` | **清除信号**(CLAUDE.md 记载) | `tax < 0` |
+
+    ⚠️ 145 轮我把这个差异当成 bug「统一」了,结果 `update` 连清除税额都做不了,
+    `test_mcp_update_zero_means_clear` 当场变红 —— **已有测试就是契约**。
+
+    📌 **同一个字段在不同入口可以有不同语义。** 判断「哪个对」之前,
+    先找有没有测试已经写死它(有测试 = 有意为之,不是漏)。
+    """
+    import inspect
+
+    from src.mcp.tools import write_tools as w
+    from src.snapshot_mutator import _normalize_tax_amount
+
+    mutator = inspect.getsource(_normalize_tax_amount)
+    assert "tax <= 0" in mutator, "mutator 的判据变了 —— 本护栏要跟着更新"
+
+    # 批量:`tax` 局部变量名
+    bulk = inspect.getsource(w.create_transactions)
+    assert "if tax <= 0:" in bulk, (
+        "批量预校验必须用 `tax <= 0` —— 与 mutator 同口径,"
+        "否则 tax_amount=0 被放行后炸成与真实原因无关的错误"
+    )
+
+    # 单条:update 是「清除」语义,必须放行 0
+    single = inspect.getsource(w.create_transaction)
+    assert "if tax_amount <= 0:" in single, (
+        "create 单条预校验必须用 `tax_amount <= 0`"
+    )
+
+    upd = inspect.getsource(w.update_transaction)
+    assert 'if tax_amount == 0:' in upd, (
+        "update 的 `0 = 清除` 分支不见了 —— 那是 CLAUDE.md 记的契约"
+    )
+    assert "if tax_amount < 0:" in upd, (
+        "update 必须是 `tax < 0`:`0` 在上面已被转成清除信号,"
+        "若这里写 `<= 0` 就会拦下「清除税额」这个请求"
+    )

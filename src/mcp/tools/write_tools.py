@@ -387,7 +387,12 @@ async def create_transaction(
     # 消费税(0020):有值才发字段。硬校验在 server(snapshot_mutator),这里
     # 只挡明显非法的负数,好让 LLM 拿到可读的报错而不是 500。
     if tax_amount is not None:
-        if tax_amount < 0:
+        # ⚠️ 必须是 `<= 0`,不是 `< 0` —— mutator 的 `_normalize_tax_amount`
+        # 用的是 `tax <= 0`(0 税额没有意义)。放行 0 的话,它会在 mutator 里
+        # 炸成「write validation failed」—— 一条与真实原因无关的错误。
+        # 145 轮发现**两处**(create / update)都是 `< 0`,批量那处也一样。
+        # 护栏:tests/test_write_request_fields_are_used.py。
+        if tax_amount <= 0:
             raise ValueError("tax_amount must be positive")
         if tax_amount >= amount:
             raise ValueError("tax_amount must be less than amount")
@@ -703,6 +708,11 @@ async def update_transaction(
     # 消费税(0020):0 当「清除」信号(PATCH 的显式 null 与「没传」在 MCP 层
     # 无法区分);正数覆盖。amount 取本次生效值做 < amount 校验。
     if tax_amount is not None:
+        # ⚠️ 这里用 `< 0` 不是 `<= 0`:**上游 8 行已经把 `tax_amount == 0`
+        # 转成 `patch["tax_amount"] = None`(清除信号),根本到不了这里。
+        # 145 轮我把它错改成 `<= 0`,结果**拦下了本该清除税额的请求** ——
+        # tests/test_tx_tax_amount.py::test_mcp_update_zero_means_clear 当场变红。
+        # 📌 **同一个字段在不同入口可以有不同语义**,别把它们当同一处代码。
         if tax_amount < 0:
             raise ValueError("tax_amount must be positive")
         if tax_amount == 0:
@@ -1051,7 +1061,13 @@ async def create_transactions(
         # 消费税(0020):照抄小票绝对值。校验口径跟单条一致,给 LLM 可读报错。
         tax = raw.get("tax_amount")
         if tax is not None:
-            if tax < 0:
+            # ⚠️ 必须是 ,不是  —— mutator 的 
+            # 用的是 (0 税额没有意义)。这里放行 0 的话,
+            # 批量会把它写进 payload,然后在 mutator 里炸成
+            # 「write validation failed」—— **用户看到的是一条与
+            # 真实原因无关的错误**,而单条路径直接透传、报的是这条。
+            # 两条入口对同一个值给出不同的错误,是「同一件事两份实现」那一族。
+            if tax <= 0:
                 raise ValueError(f"transactions[{i}]: tax_amount must be positive")
             if tax >= float(amount):
                 raise ValueError(f"transactions[{i}]: tax_amount must be less than amount")
