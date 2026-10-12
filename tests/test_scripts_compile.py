@@ -479,3 +479,51 @@ def test_ci_node_version_comes_from_nvmrc() -> None:
                     bad.append(f"{wf_name} job {name}: node-version-file={nvf} 不存在")
     detail = "\n  ".join(bad)
     assert not bad, f"CI 的 node 版本必须来自 frontend/.nvmrc:\n  {detail}"
+
+
+def test_dockerfile_has_no_bypass_and_no_hardcoded_node() -> None:
+    """Dockerfile 同样不许绕过 lockfile,Node 版本也不许写死。
+
+    🔴 195 轮实测:Dockerfile 里同时有两处「副本 / 绕过」——
+    - `FROM node:20-alpine` —— Node 版本的**副本**。194 轮建了
+      `frontend/.nvmrc` 当唯一来源,但**base image 的 tag 不是
+      `setup-node` 能管的地方**,得靠 build arg 传进去。
+    - `RUN pnpm install --frozen-lockfile || pnpm install --no-frozen-lockfile`
+      —— 193 轮在 release.yml 里删掉的同一个 fallback,**这里还有一个**。
+      而这个文件**每次 tag push 都会跑**,fallback 影响的是
+      **真正发布出去的镜像**。
+
+    > 📌 **我修了 5 轮 workflow,却从没打开过 Dockerfile** ——
+    > 同一个错误能在没被检查的地方一直躺着。
+    """
+    dockerfile = (_REPO / "Dockerfile").read_text(encoding="utf-8")
+
+    # ⚠️ 判据**只看真正的 RUN 行**。第一版直接对整个文件做字符串包含,
+    # 结果**被我自己写的注释触发** —— 注释里为了说明问题写了那个命令,
+    # 护栏当场变红。
+    #
+    # 这与「变异让测试报错 != 护栏抓到了变异」同族:**护栏被非代码内容
+    # 触发**。文档里写示例是很正常的,不该让护栏把它当违规。
+    run_lines = [
+        ln for ln in dockerfile.splitlines()
+        if ln.strip().startswith("RUN ")
+    ]
+    bad_runs = [ln for ln in run_lines if "--no-frozen-lockfile" in ln]
+    detail = "\n  ".join(bad_runs)
+    assert not bad_runs, (
+        "Dockerfile 的 RUN 行里有 `--no-frozen-lockfile` fallback —— "
+        "它会**静默装上新版本**并把没测过的依赖组合打进发布的镜像:\n  "
+        + detail
+    )
+
+    # `FROM node:<version>-alpine` 里 <version> 不能是字面量数字。
+    bad = [
+        ln for ln in dockerfile.splitlines()
+        if ln.startswith("FROM node:") and "-alpine" in ln
+        and not ln.split("FROM node:")[1].split("-alpine")[0].startswith("${")
+    ]
+    detail = "\n  ".join(bad)
+    assert not bad, (
+        "Dockerfile 的 base image 写死了 Node 版本(副本):\n  " + detail
+        + "\n  唯一来源应是 frontend/.nvmrc,靠 `--build-arg NODE_VERSION=` 传入"
+    )

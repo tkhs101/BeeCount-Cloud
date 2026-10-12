@@ -2,7 +2,13 @@
 # 多阶段构建：frontend (pnpm + Vite) + Python (FastAPI + Alembic)
 
 # ===== Stage 1: frontend 构建 =====
-FROM node:20-alpine AS frontend-builder
+# 195 轮:Node 版本**唯一来源是 frontend/.nvmrc**,由 release.yml 用
+# `--build-arg NODE_VERSION=$(cat frontend/.nvmrc)` 传进来。
+# 写死 `node:20-alpine` 就是 .nvmrc 的**副本** —— 与 194 轮在
+# ci.yml/release.yml 里改掉的是同一种漂移,只是这个在 base image 上,
+# `node-version-file` **管不到**它。
+ARG NODE_VERSION=20
+FROM node:${NODE_VERSION}-alpine AS frontend-builder
 WORKDIR /workspace/frontend
 RUN corepack enable
 
@@ -13,7 +19,11 @@ COPY frontend/packages/api-client/package.json /workspace/frontend/packages/api-
 COPY frontend/packages/ui/package.json /workspace/frontend/packages/ui/package.json
 COPY frontend/packages/web-features/package.json /workspace/frontend/packages/web-features/package.json
 
-RUN pnpm install --frozen-lockfile || pnpm install --no-frozen-lockfile
+# 195 轮去掉 `|| pnpm install --no-frozen-lockfile`。
+# 那个 fallback **掩盖真正的错误**:--frozen-lockfile 失败最常见的原因
+# 正是 lockfile 与 package.json 不一致,而 fallback 会**静默装上新版本**
+# 继续走,最后把一个**没测过的依赖组合**打进**真正发布的镜像**。
+RUN pnpm install --frozen-lockfile
 
 COPY frontend /workspace/frontend
 ARG VITE_API_BASE_URL=/api/v1

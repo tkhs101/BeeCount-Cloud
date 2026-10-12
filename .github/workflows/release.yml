@@ -154,6 +154,10 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ steps.vars.outputs.version }}
+            # 195 轮:Node 版本的**唯一来源**是 frontend/.nvmrc(194 轮建的)。
+            # Dockerfile 的 `FROM node:${NODE_VERSION}` 只能靠 build arg
+            # 拿到值 —— base image 的 tag **不是** setup-node 能管的地方。
+            NODE_VERSION=$(cat frontend/.nvmrc)
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

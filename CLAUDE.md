@@ -281,6 +281,19 @@ setup-node 文档列了 `package.json` 这个文件名,但**没写它读哪个�
 选 20 的依据:lockfile 实测依赖里最高的 node 要求是 `react-router-dom`
 的 `>=20.0.0`,而 20 是 CI 一直在用、**已验证能跑**的值。
 
+> 📌 **`Dockerfile` 里也有这两样,而且它每次 tag push 都会跑**(195 轮):
+`FROM node:20-alpine` 是 Node 版本的又一份副本(**base image 的 tag 不是
+`setup-node` 能管的地方**,得靠 `--build-arg NODE_VERSION=` 从 `.nvmrc` 传);
+`RUN pnpm install --frozen-lockfile || pnpm install --no-frozen-lockfile`
+是 193 轮已删的同一个 fallback —— 而这里的 fallback 影响的是
+**真正发布出去的镜像**。**我修了 5 轮 workflow,却从没打开过 Dockerfile** ——
+同一个错误能在没被检查的地方一直躺着。
+
+> 📌 **护栏被注释触发**(195 轮):第一版对整个 Dockerfile 做字符串包含,
+> 结果我**为了说明问题在注释里写了那个命令**,护栏当场变红。
+> 判据改成**只看真正的 `RUN` 行**。这与「变异让测试报错 != 护栏抓到了变异」
+> 同族:**护栏被非代码内容触发**。文档里写示例很正常,不该当违规。
+
 > 📌 **192 轮抓到 191 轮的修法是错的**:我当时只凭记忆说「不指定
 > `version` 就会读 `packageManager`」就动手,查了 action-setup v4 README
 > 才发现 `package_json_file` 默认指向**仓库根**那个根本不存在的文件
