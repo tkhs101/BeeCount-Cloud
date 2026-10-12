@@ -98,7 +98,13 @@ jobs:
         with:
           node-version: 20
       - name: Install
-        run: pnpm install --no-frozen-lockfile
+        # ⚠️ 190 轮:去掉 `--no-frozen-lockfile`。它**恰好绕过 lockfile
+        # 一致性检查** —— 依赖漂移时 CI 会静默装上新版本而不是报错。
+        #
+        # 实测 lockfile 与 package.json **是一致的**
+        # (`pnpm install --frozen-lockfile --lockfile-only` -> exit 0,
+        #  且不改动任何文件),所以这个 flag 从来没有存在过的理由。
+        run: pnpm install --frozen-lockfile
         working-directory: frontend
       - name: Build
         run: pnpm -C apps/web build

@@ -336,3 +336,27 @@ def test_pytest_step_is_not_blocked_by_advisory_failures() -> None:
                     f"没标 continue-on-error 的话 **pytest 永远跑不到**"
                 )
     assert checked, "没找到任何带 Pytest 的 job —— ci.yml 结构变了?"
+
+
+def test_ci_install_does_not_bypass_the_lockfile() -> None:
+    """CI 装依赖必须用 `--frozen-lockfile`,不能用 `--no-frozen-lockfile`。
+
+    📌 190 轮实测:`--no-frozen-lockfile` **恰好绕过 lockfile 一致性检查** ——
+    依赖漂移时 CI 会**静默装上新版本**而不是报错。那不是「更宽松」,
+    是让 CI 在**跑一个别人没测过的依赖组合**。
+
+    同理也不能干脆去掉 flag(默认行为取决于 pnpm 版本与 CI 环境)。
+
+    护栏锁住的是「CI 装的必须是 lockfile 里那个版本」。
+    """
+    doc = yaml.safe_load(_CI.read_text(encoding="utf-8"))
+    installs = [
+        (s or {}).get("run") or ""
+        for job in (doc.get("jobs") or {}).values()
+        for s in ((job or {}).get("steps") or [])
+        if "pnpm install" in ((s or {}).get("run") or "")
+    ]
+    assert installs, "ci.yml 里没有 pnpm install —— 结构变了?"
+    bad = [c for c in installs if "--no-frozen-lockfile" in c or "--frozen-lockfile" not in c]
+    detail = "\n  ".join(bad)
+    assert not bad, f"CI 装依赖没锁 lockfile:\n  {detail}"

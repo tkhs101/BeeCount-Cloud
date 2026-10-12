@@ -238,6 +238,20 @@ mypy src                                                      -> exit 1
 - 181/186 轮那两条护栏在本地绿,是因为它们枚举的是**本地文件系统**;
   CI 上文件不存在,行为不同。**本地绿 ≠ CI 绿**,这是第三次栽在同一处。
 
+📌 **`frontend-check` 装依赖别用 `--no-frozen-lockfile`**(190 轮已改):
+那个 flag **恰好绕过 lockfile 一致性检查** —— 依赖漂移时 CI 会**静默装上
+新版本**而不是报错。那不是「更宽松」,是让 CI 跑一个**别人没测过的依赖
+组合**。实测 lockfile 与 package.json **一致**
+(`pnpm install --frozen-lockfile --lockfile-only` -> exit 0 且不改动文件),
+所以这个 flag 从来没有存在过的理由。护栏
+`test_ci_install_does_not_bypass_the_lockfile`。
+
+> 📌 **判据选错会造出 43 条假警报**:我第一版拿 lockfile v9 的
+> `specifiers` 跟 package.json 比,得出「43 项不一致」。实际是
+> **lockfile 只在依赖确实变更时记录 `specifiers`** —— 一致才是正常的,
+> 全都列出来才是异常。**用工具自己的判据(`--frozen-lockfile`),
+> 别自己发明一个。**
+
 📌 这些数字是快照,以实际跑出来的为准 —— 补了测试就会变。
 **别照抄这张表当现状**,照抄会写出「文档声称有保护、实际裸奔」那种事。
 
