@@ -262,8 +262,25 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
   Settings 按约定大写出来的(没设 `env_prefix`)。我查静态文件服务时因为
   「搜不到」就断定文档过时,差点把这条**正确**的部署指引删掉。
   护栏:`tests/test_config_env_mapping.py`
-- `TAX_CATEGORY_NAME` env 决定税额归到哪个分类名(默认「税与保险」);
-  **前端拿不到这个 env**,改它会让税额扇区不再被钉住显示
+- `TAX_CATEGORY_NAME` env 决定税额归到哪个分类名(默认「税与保险」),
+  **后端三处消费**(读端 `workspace.py`、MCP `read_tools.py`、默认分类播种
+  `default_categories.py`)—— **后端自洽**。
+
+  ⚠️ **前端是硬编码的**,所以改这个 env **只对后端生效**
+  (`apps/web/src/lib/taxCategory.ts` 写死 `TAX_CATEGORY_NAME = '税与保险'`),
+  生产代码里只有 **2 处**用它:`HomeMonthCategoryDonut.tsx` 与
+  `CategoryDetailDialog.tsx`。
+
+  **准确的后果**(以前这句写得太含糊):改了 env 之后,
+  后端把税额归到新名字,前端**找不到那个分类** ->
+  **税额从「税额扇区」掉进「其他」**,而**统计数字本身仍然正确**
+  (后端用的是同一个配置值)。不是「不显示」,是「不再单独成一块」。
+
+  📌 **修复方案(需要跨前后端,别只改一边)**:
+  后端在**前端本来就在调**的某个响应里带上 `tax_category_name`
+  (候选:`WorkspaceAnalyticsOut`,仪表盘本来就要它;仓库目前**没有**
+  config/settings 类端点),前端 `taxCategory.ts` 保留常量作 **fallback**,
+  组件优先用响应里的值。**必须三处一起改**,漏一处就是两处对不上。
 
 ## 新增:默认分类种子
 
