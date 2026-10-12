@@ -854,6 +854,37 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
 的锚点也落在分支内(它在 `if start_at` 的**上一层**分支里)。**所以这是
 **提示**,不是判据。**
 
+### ⚠️ 改**工具**之后:必须**跑工具本身**,不能只跑 pytest(179 轮)
+
+178 轮补完 AST 检查,**只跑了 pytest** 就提交 —— 而 pytest **根本不 import
+`scripts/mutation_check.py`**,于是那个 commit 推上远端的是**语法错误**的脚本。
+
+179 轮第一次真跑它才发现:
+
+    SyntaxError: unterminated string literal (detected at line 179)
+
+根因:我用 python 字符串替换改文案,源里的 `
+` 被写成**真换行**,
+把一个字符串字面量劈成两半。
+
+> 📌 **「测试全绿」对脚本类改动**什么也证明不了** —— pytest 只收集
+> `tests/`。改 `scripts/` 之后要**直接执行那个脚本**。
+> 与「分层测试全绿 ≠ 拼起来能工作」同源,只是这次**被测对象是工具**。
+
+### ✅ 这条工具检查自己也配了护栏(179 轮,变异验证过)
+
+`tests/test_mutation_check_dead_branch.py` —— 真跑 CLI,断言**输出**。
+变异(把 `if isinstance(...)` 改成 `if False`)-> **变红**。
+
+📌 **写这条护栏时自己错了三次,都值得记:**
+1. **用 `tmp_path` 造 fixture** -> 工具先跑 `git diff`,临时文件**不在 git 里**,
+   exit=2,**永远走不到** AST 检查。**给工具写护栏要用工具自己认的输入。**
+2. **拿 `for` 循环头当「无条件位置」的反例** -> 它其实落在外层 `If` 块**内部**,
+   工具**提示得对**,是我断言错了。**反例也要先量。**
+3. **用 python 写含 `
+` 的多行文档字符串** -> 又一次被劈成语法错误。
+   **写中文文档/多行字符串一律用 `write` 工具,不用 bash heredoc。**
+
 📌 **做这个检查时自己踩了两个坑**(都在实现里修掉了,值得记住):
 1. `ast.walk` 会走到**没有 `end_lineno`** 的节点(`arguments`/`alias`)——
    直接取属性会 `AttributeError`。**先 `getattr` 再用。**
