@@ -360,3 +360,38 @@ def test_ci_install_does_not_bypass_the_lockfile() -> None:
     bad = [c for c in installs if "--no-frozen-lockfile" in c or "--frozen-lockfile" not in c]
     detail = "\n  ".join(bad)
     assert not bad, f"CI 装依赖没锁 lockfile:\n  {detail}"
+
+
+def test_ci_pnpm_version_comes_from_package_json() -> None:
+    """CI 的 pnpm 版本**唯一来源**必须是 `frontend/package.json`。
+
+    🔴 191 轮实测到版本漂移:`ci.yml` 写死 `version: 9`,而
+    `frontend/package.json` 的 `packageManager` 是 `pnpm@10.15.1`
+    (本地实测也是 10.15.1,`lockfileVersion: '9.0'`)。
+
+    写死版本就是 `packageManager` 的**副本**,必然漂移 —— 与 182 轮
+    「白名单副本 vs ci.yml」是同一个形状。
+
+    两条断言:
+    1. `packageManager` 必须存在 —— 否则「不指定 version」让 CI 无处可跟随
+    2. `pnpm/action-setup` **不得**带 `version:`(它会去读 packageManager)
+    """
+    import json
+
+    manifest = _REPO / "frontend" / "package.json"
+    pkg = json.loads(manifest.read_text(encoding="utf-8"))
+    pm = pkg.get("packageManager") or ""
+    assert pm.startswith("pnpm@"), (
+        "frontend/package.json 缺 packageManager —— "
+        "删掉 CI 里的 pnpm version 后就无从跟随了"
+    )
+
+    doc = yaml.safe_load(_CI.read_text(encoding="utf-8"))
+    bad: list[str] = []
+    for name, job in (doc.get("jobs") or {}).items():
+        for step in ((job or {}).get("steps") or []):
+            uses = (step or {}).get("uses") or ""
+            if "pnpm/action-setup" in uses and ((step or {}).get("with") or {}).get("version"):
+                bad.append(f"job {name}: pnpm/action-setup 硬编码了 version")
+    detail = "\n  ".join(bad)
+    assert not bad, f"CI 的 pnpm 版本必须是 package.json 的副本之外的东西:\n  {detail}"

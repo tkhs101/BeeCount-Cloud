@@ -92,8 +92,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        # ⚠️ 191 轮:**不要在这里写 `version:`**。
+        # `frontend/package.json` 的 `packageManager` 字段才是唯一来源
+        # (当前 `pnpm@10.15.1`,与本地实测一致)。写死一个版本就是它的
+        # **副本**,必然漂移 —— 191 轮量到时 CI 写的是 `9`,而仓库声明 10.15.1。
+        # action-setup 不指定 version 时会**读 packageManager**。
+        #
+        # 与 182 轮那条同构:**副本必然漂移**。
       - uses: actions/setup-node@v4
         with:
           node-version: 20
