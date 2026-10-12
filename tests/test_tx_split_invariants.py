@@ -772,3 +772,49 @@ def test_delete_tx_also_removes_its_legs() -> None:
             ReadTxSplitProjection.tx_sync_id == tx_id))
 
     assert after == 0, f"删掉交易后还剩 {after} 条悬空腿"
+
+
+def test_split_payment_is_counted_in_analytics() -> None:
+    """组合支付必须**整笔**计入统计(有腿时父 `account_sync_id` 是空的)。
+
+    ## 为什么要有这条(实测出来的缺口)
+
+    174 轮查到:统计查询**只按时间过滤、没有账户过滤**,所以组合支付
+    现在**不会**从统计里消失。175 轮想验「有人加了账户过滤会怎样」,
+    两次探针都坏了(只数 FAILED 漏掉 ERROR / 变异插进 if 块中间变 SyntaxError)。
+
+    176 轮用 mutation_check 把变异做**对**了:给统计加
+    `account_sync_id.is_not(None)` —— **26 条测试全绿,一条都没红**。
+
+    > 📌 说明「组合支付计入统计」这件事**根本没有护栏**。
+    > 之前那条 `expense_total == 6000` 的 6000 来自**普通交易**,不是组合支付。
+
+    ⚠️ 这颗雷是真的:哪天给统计加了「按账户筛选」,组合支付会因为
+    父账户为空而**整笔从统计里消失**,而余额那边照扣 ——
+    用户会看到「账户少了 5000,但这个月支出里没有它」。
+
+    ## 判据落在**读回来的数字**上
+
+    一笔普通支出 1000 + 一笔组合支付 5000 -> `expense_total` 必须是 **6000**。
+    掉到 5000 就说明组合支付被过滤掉了。
+    """
+    client, TS, H, ids = _setup("sp-analytics@t.com")
+
+    client.post("/api/v1/write/ledgers/lg1/transactions", headers=H, json={
+        "base_change_id": 0, "tx_type": "expense", "amount": 1000.0,
+        "happened_at": "2026-10-03T12:00:00+00:00",
+        "category_name": "餐饮", "category_kind": "expense",
+        "note": "普通支出", "account_id": ids["招行卡"],
+    })
+
+    r0 = _create_split_tx(client, H, ids, legs=[
+        {"account_id": ids["招行卡"], "amount": 3000.0},
+        {"account_id": ids["现金"], "amount": 2000.0},
+    ], amount=5000.0, note="组合支付")
+    assert r0.status_code == 200, r0.text
+
+    a = client.get("/api/v1/read/workspace/analytics", headers=H,
+                   params={"scope": "all", "metric": "expense"}).json()
+    assert abs(a["summary"]["expense_total"] - 6000.0) < 1e-6, (
+        f"统计里没有把组合支付算进去(或被账户过滤掉了):{a['summary']}"
+    )
