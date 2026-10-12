@@ -294,6 +294,15 @@ setup-node 文档列了 `package.json` 这个文件名,但**没写它读哪个�
 > 判据改成**只看真正的 `RUN` 行**。这与「变异让测试报错 != 护栏抓到了变异」
 > 同族:**护栏被非代码内容触发**。文档里写示例很正常,不该当违规。
 
+> 📌 **`with:` 的值不做 shell 展开**(196 轮抓到 195 轮自己写错):
+`build-args:` 里写 `NODE_VERSION=$(cat frontend/.nvmrc)` 的话,那个
+`$(cat ...)` 会**原样**被当 build-arg 传给 Docker(只有 `run:` 走 shell)。
+正确写法是 `run: echo "version=$(cat ...)" >> "$GITHUB_OUTPUT"`,
+再用 `NODE_VERSION=${{ steps.<id>.outputs.version }}` 引用。
+**我查了两次 GitHub 文档都没抓到正文**(页面 JS 渲染)—— 与其赌语义,
+不如用**两种情况下都正确**的写法;护栏也**只查写法不查语义**
+(「`with:` 不展开 shell」没证据就不能写成判据,那是假护栏那一族)。
+
 > 📌 **192 轮抓到 191 轮的修法是错的**:我当时只凭记忆说「不指定
 > `version` 就会读 `packageManager`」就动手,查了 action-setup v4 README
 > 才发现 `package_json_file` 默认指向**仓库根**那个根本不存在的文件

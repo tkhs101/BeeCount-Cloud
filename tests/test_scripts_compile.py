@@ -527,3 +527,33 @@ def test_dockerfile_has_no_bypass_and_no_hardcoded_node() -> None:
         "Dockerfile 的 base image 写死了 Node 版本(副本):\n  " + detail
         + "\n  唯一来源应是 frontend/.nvmrc,靠 `--build-arg NODE_VERSION=` 传入"
     )
+
+
+def test_workflow_build_args_use_step_outputs_not_shell() -> None:
+    """workflow 的 `with:` 值里**不得**出现 shell 命令替换 `$(`。
+
+    🔴 196 轮抓到 195 轮自己写错的一行:`build-args:` 里写了
+    `NODE_VERSION=$(cat frontend/.nvmrc)`。`with:` 的值是**字面量**,
+    只有 `run:` 才走 shell —— 那样会把 `$(cat ...)` 原样当 build-arg 传进去。
+    而 release 是 **tag push 自动触发**的。
+
+    📌 **判据刻意不写成「with: 不展开 shell」这条断言** —— 我查了两次
+    GitHub 文档都没抓到正文(页面 JS 渲染),**没有证据就不写成判据**,
+    否则那正是 CLAUDE.md 记的「45% 假护栏」那一族。
+
+    判据落在**写法**上:`$(` 只允许出现在 `run:` 里,并且要用
+    `$GITHUB_OUTPUT` + `${{ }}` 传值。这个写法**无论语义如何都正确**。
+    """
+    bad: list[str] = []
+    for wf_name, doc in _all_workflows():
+        for name, job in (doc.get("jobs") or {}).items():
+            for step in ((job or {}).get("steps") or []):
+                opts = (step or {}).get("with") or {}
+                for key, val in opts.items():
+                    if "$(" in str(val):
+                        bad.append(
+                            f"{wf_name} job {name}: with.{key} 里有 shell "
+                            f"命令替换 `$(` —— with 的值是字面量,不展开 shell"
+                        )
+    detail = "\n  ".join(bad)
+    assert not bad, f"workflow 的 with: 里不得用 shell 命令替换:\n  {detail}"

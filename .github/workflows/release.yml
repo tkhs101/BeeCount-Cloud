@@ -143,6 +143,19 @@ jobs:
             org.opencontainers.image.version=${{ steps.vars.outputs.version }}
             org.opencontainers.image.source=${{ github.repositoryUrl }}
 
+      - name: Read node version
+        id: nodever
+        # 196 轮:195 轮我在这里写了 `NODE_VERSION=$(cat frontend/.nvmrc)`,
+        # **那是错的** —— `with:` 的值是**字面量**,不做 shell 命令替换
+        # (只有 `run:` 才走 shell)。那样会把 `$(cat frontend/.nvmrc)`
+        # **原样**当成 build-arg 的值传给 Docker。
+        #
+        # 正确写法:`run:` 里 `cat`,经 `$GITHUB_OUTPUT` 传给 `${{ }}`。
+        # 📌 这样写**不依赖「with: 到底展不展开 shell」这个假设** ——
+        # 我查了两次文档都没抓到正文(页面是 JS 渲染),与其赌语义,
+        # 不如用一个**两种情况下都正确**的写法。
+        run: echo "version=$(cat frontend/.nvmrc)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -154,10 +167,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ steps.vars.outputs.version }}
-            # 195 轮:Node 版本的**唯一来源**是 frontend/.nvmrc(194 轮建的)。
-            # Dockerfile 的 `FROM node:${NODE_VERSION}` 只能靠 build arg
-            # 拿到值 —— base image 的 tag **不是** setup-node 能管的地方。
-            NODE_VERSION=$(cat frontend/.nvmrc)
+            # 195/196 轮:Node 版本的**唯一来源**是 frontend/.nvmrc
+            # (194 轮建的)。Dockerfile 的 `FROM node:${NODE_VERSION}`
+            # 只能靠 build arg 拿到值 —— base image 的 tag **不是**
+            # setup-node 能管的地方。值由上面的 `Read node version`
+            # 从文件读出后经 `${{ }}` 传入。
+            NODE_VERSION=${{ steps.nodever.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
