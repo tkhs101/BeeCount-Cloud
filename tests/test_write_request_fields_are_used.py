@@ -36,6 +36,9 @@ import ast
 import json
 from pathlib import Path
 
+import src.schemas as S
+from src.mcp.tools.write_tools import BatchTxItem
+
 SRC = Path(__file__).resolve().parents[1] / "src"
 SCHEMAS = SRC / "schemas.py"
 
@@ -96,4 +99,92 @@ def test_no_write_request_field_is_declared_and_forgotten() -> None:
         + json.dumps(orphans, ensure_ascii=False, indent=2)
         + "\n\n→ 要么端点漏了把它放进 payload(调用方传了不生效),"
         "要么这个字段根本不该存在。"
+    )
+
+# --------------------------------------------------------------------------- #
+# 组合支付(0021)的「登记点必须齐全」                                            #
+# --------------------------------------------------------------------------- #
+#
+# `splits` 要在**两个不同的模型体系**里各登记一次,缺一个就有一半用户用不了:
+#
+# | 模型 | 身份 | 缺了会怎样 |
+# |---|---|---|
+# | `schemas.WriteTransactionCreateRequest`(Pydantic) | REST 收得下 | 400 / 字段被丢 |
+# | `mcp.BatchTxItem`(**TypedDict**) | **LLM 看得见的 JSON Schema** | LLM 根本不知道能建 |
+# | `transactions_batch.BatchTransactionItem`(Pydantic) | 批量端点收得下 | 批量导时腿被静默丢 |
+#
+# 📌 **前两轮分别踩了后两个**:139 轮修了 TypedDict 之外的,141 轮才发现 TypedDict
+# 自己也没有。它们看起来都叫「批量」,但**是两个类**。
+#
+# 判据:**所有「交易类」模型(同时含 amount 与 tx_type/happened_at)都必须带 splits**。
+# `test_tx_field_parity` 只查 `tax_amount` 一个字段;splits 是第二个,而且
+# 加它的时候两条护栏都自动生效了 —— 说明这个判据可以推广到更多字段。
+
+def _tx_like_fields(model) -> set[str]:
+    """TypedDict 的字段在 `__annotations__`,Pydantic 的在 `model_fields` —— 两条都要。"""
+    ann = set(getattr(model, "__annotations__", {}) or {})
+    return ann or set(getattr(model, "model_fields", {}) or {})
+
+
+def _collect_tx_like_models() -> list[tuple[str, type]]:
+    """所有「交易类」模型:字段里同时有 amount 与 (tx_type | happened_at)。"""
+    from src.routers.write.transactions_batch import BatchTransactionItem
+
+    out: list[tuple[str, type]] = []
+    for name in dir(S):
+        obj = getattr(S, name)
+        if not isinstance(obj, type):
+            continue
+        fields = _tx_like_fields(obj)
+        if "amount" in fields and ("tx_type" in fields or "happened_at" in fields):
+            out.append((f"schemas.{name}", obj))
+
+    fields = _tx_like_fields(BatchTransactionItem)
+    if "amount" in fields and ("tx_type" in fields or "happened_at" in fields):
+        out.append(("transactions_batch.BatchTransactionItem", BatchTransactionItem))
+    return out
+
+
+TX_LIKE = _collect_tx_like_models()
+
+
+def test_collects_the_expected_tx_models() -> None:
+    """⚠️ **下限自检** —— 收集到 0 个时,下面那条会**恒真**。"""
+    assert len(TX_LIKE) >= 4, (
+        f"只收集到 {len(TX_LIKE)} 个交易模型:{[n for n, _ in TX_LIKE]}"
+    )
+
+
+def test_every_tx_like_model_declares_splits() -> None:
+    """交易类模型必须带 `splits`。
+
+    缺了不会报错:请求照收、金额照记,只是**分摊明细没了** ——
+    而「无账户的支出」正是它本来的样子,看不出异常。
+    """
+    missing = []
+    for name, model in TX_LIKE:
+        fields = (
+            set(getattr(model, "model_fields", {}) or {})
+            if hasattr(model, "model_fields")
+            else _tx_like_fields(model)
+        )
+        if "splits" not in fields:
+            missing.append(name)
+
+    assert not missing, (
+        f"这些交易模型没有 splits 字段:{missing}\n"
+        "  -> 加新交易模型时,**两个模型体系**都要登记"
+        "(Pydantic 请求模型 + MCP 的 TypedDict)。"
+    )
+
+
+def test_mcp_batch_typeddict_declares_splits() -> None:
+    """`BatchTxItem` 是 TypedDict,**同时是 LLM 看的 JSON Schema**。
+
+    ⚠️ 它不会出现在 `model_fields` 里(那是 Pydantic 的属性),
+    所以上面那条按 `model_fields` 查的判据**抓不到它** —— 必须单独确认。
+    """
+    assert "splits" in BatchTxItem.__annotations__, (
+        "MCP 的 BatchTxItem(TypedDict) 没有 splits —— "
+        "它是给 LLM 看的 JSON Schema 声明,不写 LLM 就看不到这个能力"
     )
