@@ -205,3 +205,40 @@ def test_claude_md_tables_have_no_empty_first_column() -> None:
     assert not bad, f"CLAUDE.md 有表格首列为空(bash 吃掉过标识符):\n  {detail}"
 
     assert text.count("\n```") % 2 == 0, "``` 代码块围栏**没有配对**"
+
+
+# ----------------------------------------------------------------------
+# CLAUDE.md 引用的 .py 必须**真的存在**(185 轮)
+# ----------------------------------------------------------------------
+
+def test_claude_md_python_refs_are_not_dead_links() -> None:
+    """CLAUDE.md 里点名的每个 `.py` 都必须**在磁盘上**(或按 basename 找得到)。
+
+    🔴 185 轮实测抓到**一条真死链**:181 轮我删掉了探针残留
+    `bc_fixture_src.py`,但 CLAUDE.md「3 个漏网」那张表里**还在写它的名字**
+    —— 磁盘上早已没有,读者去找会找不到。
+
+    > 📌 **文档引用一个不存在的文件,正是它最不该做的事** ——
+    > 而这个文件的**全部存在意义**就是告诉读者「去哪儿改」。
+
+    ⚠️ 判据用 **basename 兜底**,因为 CLAUDE.md 大量使用**相对路径简写**
+    (`projection.py` 实际在 `src/`、`test_mcp_tools.py` 在 `tests/`)。
+    第一版我直接判 `Path(p).exists()`,得到 **20 条「不存在」** ——
+    其中 19 条是简写,只有 1 条是真的。**别把路径没写全当成死链。**
+    """
+    import re
+
+    skip = {".venv", "venv", "node_modules", ".git", "__pycache__",
+            ".pytest_cache", ".mypy_cache", "dist", "build", ".ruff_cache"}
+    by_name = {
+        p.name for p in _REPO.rglob("*.py")
+        if not (skip & set(p.relative_to(_REPO).parts))
+    }
+    text = (_REPO / "CLAUDE.md").read_text(encoding="utf-8")
+    refs = sorted(set(re.findall(r"`([A-Za-z0-9_./-]+\.py)`", text)))
+    dead = [
+        r for r in refs
+        if not (_REPO / r).exists() and r.rsplit("/", 1)[-1] not in by_name
+    ]
+    detail = "\n  ".join(dead)
+    assert not dead, f"CLAUDE.md 引用了**磁盘上不存在**的 .py:\n  {detail}"
