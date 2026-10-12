@@ -173,3 +173,35 @@ def test_every_yaml_file_parses() -> None:
             broken.append(f"{path.relative_to(_REPO)}: {exc}")
     detail = "\n  ".join(broken)
     assert not broken, f"这些 YAML **解析不了**:\n  {detail}"
+
+
+# ----------------------------------------------------------------------
+# CLAUDE.md 的 Markdown 表格不能有**空首列**(184 轮)
+# ----------------------------------------------------------------------
+
+def test_claude_md_tables_have_no_empty_first_column() -> None:
+    """CLAUDE.md 是**本仓的 AI 阅读指南** —— 它坏了,下一个助手就被误导。
+
+    🔴 184 轮抓到**四处真实损坏**,全是 bash 把反引号里的标识符吃掉留下的:
+
+        | | preload | 首屏 |          <- 「变体」没了
+        | | 首屏 JS |                  <- 「阶段」没了
+        实测到的形状: 是全库唯一的真子表  <- read_tx_split_projection 没了
+
+    这些痕迹**已经躺在文件里好几轮了**,因为 CLAUDE.md **没有任何门**。
+
+    ⚠️ 判据只查「表格首列为空」这一种**已实际发生**的损坏形态 ——
+    不试图猜「这里本来该写什么」,那需要人来判断。
+
+    同族:代码块 ``` 必须**配对**(奇数说明有未闭合的围栏)。
+    """
+    text = (_REPO / "CLAUDE.md").read_text(encoding="utf-8")
+    bad = [
+        f"L{i}: {line[:60]}"
+        for i, line in enumerate(text.splitlines(), 1)
+        if line.startswith("|") and line.split("|")[1].strip() == ""
+    ]
+    detail = "\n  ".join(bad)
+    assert not bad, f"CLAUDE.md 有表格首列为空(bash 吃掉过标识符):\n  {detail}"
+
+    assert text.count("\n```") % 2 == 0, "``` 代码块围栏**没有配对**"
