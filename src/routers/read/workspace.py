@@ -1233,6 +1233,7 @@ def workspace_analytics(
             start_at=start_at,
             end_at=end_at - timedelta(seconds=1) if end_at is not None else None,
         ),
+        tax_category_name=tax_bucket_name,
     )
 
 

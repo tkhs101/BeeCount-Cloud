@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest'
 
 import { buildDonutSlices, MAX_SLICES_DEFAULT } from './HomeMonthCategoryDonut'
 
-import { TAX_CATEGORY_NAME } from '../../lib/taxCategory'
+import { taxCategoryName, DEFAULT_TAX_CATEGORY_NAME } from '../../lib/taxCategory'
 
 const OTHER = '其他'
 const UNCATEGORIZED = '未分类'
@@ -39,18 +39,18 @@ describe('buildDonutSlices', () => {
       rank('日用品', 5000),
       rank('通讯', 3000),
       rank('医疗', 2000),
-      rank(TAX_CATEGORY_NAME, 298)
+      rank(DEFAULT_TAX_CATEGORY_NAME, 298)
     ]
     const slices = buildDonutSlices(
-      ranks, OTHER, UNCATEGORIZED, MAX_SLICES_DEFAULT, [TAX_CATEGORY_NAME]
+      ranks, OTHER, UNCATEGORIZED, MAX_SLICES_DEFAULT, [DEFAULT_TAX_CATEGORY_NAME]
     )
 
     const names = slices.map((s) => s.name)
-    expect(names).toContain(TAX_CATEGORY_NAME)
+    expect(names).toContain(DEFAULT_TAX_CATEGORY_NAME)
     // 只把上限从 5 提到 8 **不够** —— 这里有 9 个分类,纯排名制下它照样
     // 排第 9 被并进「其他」。必须靠 alwaysShow 钉住。
     expect(names.filter((n) => n === OTHER)).toHaveLength(1)
-    expect(names.indexOf(TAX_CATEGORY_NAME)).toBeGreaterThanOrEqual(0)
+    expect(names.indexOf(DEFAULT_TAX_CATEGORY_NAME)).toBeGreaterThanOrEqual(0)
     expect(names).not.toContain(OTHER + '(含税)')
   })
 
@@ -58,15 +58,15 @@ describe('buildDonutSlices', () => {
     const ranks = [
       rank('A', 100000), rank('B', 80000), rank('C', 20000), rank('D', 15000),
       rank('E', 8000), rank('F', 5000), rank('G', 3000), rank('H', 2000),
-      rank(TAX_CATEGORY_NAME, 298)
+      rank(DEFAULT_TAX_CATEGORY_NAME, 298)
     ]
     const slices = buildDonutSlices(
-      ranks, OTHER, UNCATEGORIZED, 8, [TAX_CATEGORY_NAME]
+      ranks, OTHER, UNCATEGORIZED, 8, [DEFAULT_TAX_CATEGORY_NAME]
     )
     // 8 个具名扇区 + 1 个「其他」= 9
     expect(slices).toHaveLength(9)
     expect(slices.filter((s) => s.name !== OTHER)).toHaveLength(8)
-    expect(slices.map((s) => s.name)).toContain(TAX_CATEGORY_NAME)
+    expect(slices.map((s) => s.name)).toContain(DEFAULT_TAX_CATEGORY_NAME)
     // 金额一分不差
     const sum = slices.reduce((s, r) => s + r.total, 0)
     expect(sum).toBe(ranks.reduce((s, r) => s + r.total, 0))
@@ -77,13 +77,13 @@ describe('buildDonutSlices', () => {
     const ranks = [
       rank('A', 900), rank('B', 800), rank('C', 700), rank('D', 600),
       rank('E', 500), rank('F', 400), rank('G', 300), rank('H', 200),
-      rank(TAX_CATEGORY_NAME, 298), rank('福利税', 1000)
+      rank(DEFAULT_TAX_CATEGORY_NAME, 298), rank('福利税', 1000)
     ]
     const slices = buildDonutSlices(
-      ranks, OTHER, UNCATEGORIZED, 8, [TAX_CATEGORY_NAME, '福利税']
+      ranks, OTHER, UNCATEGORIZED, 8, [DEFAULT_TAX_CATEGORY_NAME, '福利税']
     )
     const named = slices.filter((s) => s.name !== OTHER).map((s) => s.name)
-    expect(named).toContain(TAX_CATEGORY_NAME)
+    expect(named).toContain(DEFAULT_TAX_CATEGORY_NAME)
     expect(named).toContain('福利税')
     expect(named).toHaveLength(8)
     // 槽位让给了钉住项:H(200) 被挤进「其他」
@@ -153,7 +153,7 @@ describe('buildDonutSlices', () => {
 
 /**
  * **接线**层面的断言 —— 上面那些测的是纯函数,没覆盖组件真的把钉住名单
- * 传进去了。曾经出现过:组件里的 `[TAX_CATEGORY_NAME]` 被清成 `[]`,
+ * 传进去了。曾经出现过:组件里的 `[DEFAULT_TAX_CATEGORY_NAME]` 被清成 `[]`,
  * 而纯函数测试照样全绿(它们自己显式传参),税额扇区就静默掉进「其他」。
  *
  * 所以这里直接解析组件 AST,断言 `buildDonutSlices` 的调用实参里确实带着
@@ -185,10 +185,50 @@ describe('HomeMonthCategoryDonut 接线', () => {
     const pinned = call.arguments[4]
     expect(pinned, '第 5 个参数(钉住名单)缺失 —— 消费税扇区会被并进「其他」')
       .toBeDefined()
-    expect(pinned!.getText()).toContain('TAX_CATEGORY_NAME')
+    expect(
+      pinned!.getText(),
+      '钉住名单必须走 taxCategoryName(...)，不能直接用硬编码常量 —— ' +
+        '否则 217 轮那个修复等于没做'
+    ).toContain('taxCategoryName(taxCategoryNameFromBackend)')
 
     // 顺带锁住扇区上限
     const maxArg = call.arguments[3]
     expect(maxArg?.getText()).toContain('MAX_SLICES_DEFAULT')
+  })
+})
+
+// --------------------------------------------------------------------------- //
+// 217 轮:后端下发优先,常量只兜底                                            //
+// --------------------------------------------------------------------------- //
+
+describe('taxCategoryName', () => {
+  it('用后端下发的值,不用硬编码的默认值', () => {
+    // 🔴 这条才是 217 轮那个修复的意义:改了 TAX_CATEGORY_NAME env 之后,
+    //    后端给的是新名字。如果这里还返回默认值,税额就从扇区掉进「其他」。
+    expect(taxCategoryName('自定义税金科目')).toBe('自定义税金科目')
+  })
+
+  it('后端没给 / 给空 / 给纯空白 -> 退回默认值', () => {
+    expect(taxCategoryName(undefined)).toBe(DEFAULT_TAX_CATEGORY_NAME)
+    expect(taxCategoryName(null)).toBe(DEFAULT_TAX_CATEGORY_NAME)
+    expect(taxCategoryName('')).toBe(DEFAULT_TAX_CATEGORY_NAME)
+    expect(taxCategoryName('   ')).toBe(DEFAULT_TAX_CATEGORY_NAME)
+  })
+
+  it('不归一大小写 —— 后端原样下发,前端就逐字符比', () => {
+    // ⚠️ 这条锁住「不做归一」这个决定。后端 schema 注释里写明了。
+    expect(taxCategoryName('Tax')).toBe('Tax')
+    expect(taxCategoryName('税金')).toBe('税金')
+  })
+
+  it('混合批次里,按后端给的名字钉住扇区', () => {
+    const name = '自定义税金科目'
+    const slices = buildDonutSlices(
+      [rank('餐饮', 5000), rank(name, 300), rank('购物', 2000)],
+      OTHER, UNCATEGORIZED, MAX_SLICES_DEFAULT, [name]
+    )
+    expect(slices.map((s) => s.name)).toContain(name)
+    // 默认值那个名字**不该**出现(它是兜底,不是本批的真值)
+    expect(slices.map((s) => s.name)).not.toContain(DEFAULT_TAX_CATEGORY_NAME)
   })
 })

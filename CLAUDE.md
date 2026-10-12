@@ -266,21 +266,17 @@ Docker；含 systemd、Caddy、备份、升级、排查表、部署后浏览器�
   **后端三处消费**(读端 `workspace.py`、MCP `read_tools.py`、默认分类播种
   `default_categories.py`)—— **后端自洽**。
 
-  ⚠️ **前端是硬编码的**,所以改这个 env **只对后端生效**
-  (`apps/web/src/lib/taxCategory.ts` 写死 `TAX_CATEGORY_NAME = '税与保险'`),
-  生产代码里只有 **2 处**用它:`HomeMonthCategoryDonut.tsx` 与
-  `CategoryDetailDialog.tsx`。
+  ✅ **已修(217 轮)**:后端把值下发,前端不再硬编码。
+  `/read/workspace/analytics` 的响应多了 **`tax_category_name`**
+  (`WorkspaceAnalyticsOut`),就是 `TAX_CATEGORY_NAME` 的**原值**,
+  前端 `taxCategoryName(后端值)` 优先用它、空/缺省才退回
+  `DEFAULT_TAX_CATEGORY_NAME`。三处**一起改**才算完:
+  `types.ts`(类型)、`taxCategory.ts`(选择逻辑)、两个组件
+  (`HomeMonthCategoryDonut` / `CategoryDetailDialog` 各自加 prop,
+  `OverviewSection` 传入)。比较时**逐字符**比,后端**不做**任何归一。
 
-  **准确的后果**(以前这句写得太含糊):改了 env 之后,
-  后端把税额归到新名字,前端**找不到那个分类** ->
-  **税额从「税额扇区」掉进「其他」**,而**统计数字本身仍然正确**
-  (后端用的是同一个配置值)。不是「不显示」,是「不再单独成一块」。
-
-  📌 **修复方案(需要跨前后端,别只改一边)**:
-  后端在**前端本来就在调**的某个响应里带上 `tax_category_name`
-  (候选:`WorkspaceAnalyticsOut`,仪表盘本来就要它;仓库目前**没有**
-  config/settings 类端点),前端 `taxCategory.ts` 保留常量作 **fallback**,
-  组件优先用响应里的值。**必须三处一起改**,漏一处就是两处对不上。
+  护栏:`tests/test_analytics_exposes_tax_category.py`(改 env 后端点必须
+  跟着变 —— 否则写死一个字面量也能过)、`donutSlices.test.ts` 里那四条。
 
 ## 新增:默认分类种子
 

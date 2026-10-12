@@ -22,7 +22,7 @@ import {
   TransactionList
 } from '@beecount/web-features'
 
-import { TAX_CATEGORY_NAME } from '../../lib/taxCategory'
+import { taxCategoryName } from '../../lib/taxCategory'
 import { ArrowRight, Edit3, TrendingDown, TrendingUp } from 'lucide-react'
 
 import { useAuth } from '../../context/AuthContext'
@@ -42,6 +42,9 @@ import {
 
 interface Props {
   category: WorkspaceCategory | null
+  /** 后端下发的消费税分类名(analytics.tax_category_name);
+   *  缺省时 taxCategoryName() 退回默认值。 */
+  taxCategoryNameFromBackend?: string
   /** 账本作用域:'all' 跨账本聚合,'current' 仅当前账本。控制交易列表 +
    *  统计的 ledger filter,顶部 toggle 可切换。 */
   scope: DetailScope
@@ -109,6 +112,7 @@ interface StatsAgg {
  */
 export function CategoryDetailDialog({
   category,
+  taxCategoryNameFromBackend,
   scope,
   onScopeChange,
   currency,
@@ -204,7 +208,7 @@ export function CategoryDetailDialog({
                   从餐饮/购物等分类里剥出来的消费税,而那些交易并不真的挂在
                   「税与保险」下。所以点进来看到的合计必然**小于**扇区值。
                   不说清楚的话用户会以为数据丢了。 */}
-              {category?.name?.trim() === TAX_CATEGORY_NAME ? (
+              {category?.name?.trim() === taxCategoryName(taxCategoryNameFromBackend) ? (
                 <span className="mt-1 text-[11px] font-normal normal-case tracking-normal text-muted-foreground">
                   {t('detail.category.taxSliceHint')}
                 </span>

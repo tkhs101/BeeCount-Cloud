@@ -427,6 +427,14 @@ export type WorkspaceAnalytics = {
   /** 仅 scope=year 时填,已发生月份 < 3 时为空。 */
   anomaly_months: WorkspaceAnalyticsAnomalyMonth[]
   range: WorkspaceAnalyticsRange
+  /**
+   * 消费税归属的分类名(后端 `TAX_CATEGORY_NAME` 的原值)。
+   *
+   * 前端**不要**再硬编码「税与保险」—— 改了那个 env 之后后端认新名字、
+   * 前端认旧名字,税额就会从扇区掉进「其他」。
+   * 比较时**逐字符**比(后端不做任何归一)。
+   */
+  tax_category_name: string
 }
 
 export type UserAdmin = {

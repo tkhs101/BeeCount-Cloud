@@ -54,6 +54,13 @@ _TOP = (
 
 
 
+# 217 轮:在**模块导入时**抓一份字节快照。pytest 先收集全部模块
+# 再执行,所以这一刻**任何测试都还没跑** —— 既不会被更早的测试污染,
+# 也允许工作区本来就有未提交改动(第 2 版就死在这)。
+_TARGET_PATH = pathlib.Path(_TARGET)
+_PRISTINE = _TARGET_PATH.read_bytes()
+
+
 def _run(find: str, repl: str) -> str:
     proc = subprocess.run(
         [
@@ -125,16 +132,25 @@ def test_run_leaves_the_target_file_byte_identical() -> None:
     > 可能已经破坏掉的东西。所以改成**与 `git show HEAD:<file>` 的 blob 比**:
     > 权威、不依赖执行顺序、顺带能抓「内容被改」。
     """
-    target = pathlib.Path(_TARGET)
-    pristine = subprocess.run(
-        ["git", "show", f"HEAD:{_TARGET}"], capture_output=True, check=True
-    ).stdout
+    # ⚠️ **第三版**(217 轮)。前两版各有一个盲区,而且都是我自己踩出来的:
+    #
+    # | 版 | 判据 | 盲区 |
+    # |---|---|---|
+    # | 1 | `before == after`(before 在测试里读) | **污染来自更早的测试** ->
+    # |   轮到本测试时文件已经脏了,before/after 都脏 -> 相等 -> **变异不红** |
+    # | 2 | `after == git show HEAD:<file>` | **工作区有任何未提交改动就永远红** |
+    #   (217 轮我给 `workspace.py` 加了个字段,这条护栏立刻误报 —— 而它没坏) |
+    # | 3 | `after == _PRISTINE`(模块导入时取的字节) | — |
+    #
+    # **为什么模块级取就是安全的**:pytest **先收集全部模块、再执行**,
+    # 所以 `_PRISTINE` 抓在手是**任何测试跑之前** —— 既不会被更早的测试污染,
+    # 也**允许工作区本来就有未提交改动**。
     _run(*_DEAD_FIND_TUPLE)
-    after = target.read_bytes()
-    assert after == pristine, (
-        "工具跑完之后目标文件**不再与 git 里存的一模一样**。\n"
-        f"  git 里 : CRLF={pristine.count(bytes([13, 10]))}\n"
-        f"  跑之后: CRLF={after.count(bytes([13, 10]))}\n"
+    after = _TARGET_PATH.read_bytes()
+    assert after == _PRISTINE, (
+        "工具跑完之后目标文件被改了字节。\n"
+        f"  跑之前: {len(_PRISTINE)} B, CRLF={_PRISTINE.count(bytes([13, 10]))}\n"
+        f"  跑之后: {len(after)} B, CRLF={after.count(bytes([13, 10]))}\n"
         "  内容相同但行尾不同 = 210 轮那个 read_text/write_text 转换。"
         "\n  ⚠️ `git diff` 看不见它(.gitattributes 的 eol=lf 会规范化比较),"
         "\n     所以只能靠这里的字节级断言。"

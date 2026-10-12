@@ -808,6 +808,13 @@ class WorkspaceAnalyticsOut(BaseModel):
     # 仅在 scope=year 填;月份数 < 3 时返回空 list(baseline 不稳)。
     anomaly_months: list[WorkspaceAnalyticsAnomalyMonthOut] = Field(default_factory=list)
     range: WorkspaceAnalyticsRangeOut
+    # 消费税归属的分类名(217 轮加)。**前端本来只能硬编码「税与保险」**
+    # (`apps/web/src/lib/taxCategory.ts`),所以改了 `TAX_CATEGORY_NAME` env
+    # 之后后端认新名字、前端认旧名字 -> 税额从扇区掉进「其他」。
+    # 这里把它下发,前端就不必再硬编码。
+    # ⚠️ 这是**后端配置的原值**,不做任何大小写/别名归一 ——
+    #    前端要拿它和 `category_ranks` 里的 `category_name` **逐字符**比较。
+    tax_category_name: str
 
 
 class ReadSummaryOut(BaseModel):

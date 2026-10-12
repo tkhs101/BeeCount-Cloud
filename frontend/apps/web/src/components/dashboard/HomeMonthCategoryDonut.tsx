@@ -4,12 +4,15 @@ import { Card, CardContent, CardHeader, CardTitle, useT } from '@beecount/ui'
 import type { WorkspaceAnalyticsCategoryRank } from '@beecount/api-client'
 import { Amount } from '@beecount/web-features'
 
-import { TAX_CATEGORY_NAME } from '../../lib/taxCategory'
+import { taxCategoryName } from '../../lib/taxCategory'
 
 interface Props {
   /** 本月支出类别排行（scope=month&metric=expense 返回的 category_ranks）。 */
   ranks: WorkspaceAnalyticsCategoryRank[]
   currency?: string
+  /** 后端下发的消费税分类名(analytics.tax_category_name);
+   *  缺省时 taxCategoryName() 退回默认值。 */
+  taxCategoryNameFromBackend?: string
 }
 
 /**
@@ -81,7 +84,11 @@ const CHART_PALETTE = [
 /** 「其他」合并块专用中性灰 —— 不参与 PALETTE 轮转。 */
 const OTHER_SLICE_COLOR = '#94a3b8'
 
-export function HomeMonthCategoryDonut({ ranks, currency = 'CNY' }: Props) {
+export function HomeMonthCategoryDonut({
+  ranks,
+  currency = 'CNY',
+  taxCategoryNameFromBackend,
+}: Props) {
   const t = useT()
   const otherLabel = t('home.monthDonut.other')
   const slices = useMemo(
@@ -93,9 +100,9 @@ export function HomeMonthCategoryDonut({ ranks, currency = 'CNY' }: Props) {
         MAX_SLICES_DEFAULT,
         // 消费税扇区钉住 —— 它金额最小,靠排名永远争不过日常分类,
         // 而它恰恰是用户最想看到的那一块。
-        [TAX_CATEGORY_NAME]
+        [taxCategoryName(taxCategoryNameFromBackend)]
       ),
-    [ranks, otherLabel, t]
+    [ranks, otherLabel, t, taxCategoryNameFromBackend]
   )
   const total = useMemo(() => slices.reduce((s, r) => s + r.total, 0), [slices])
 
