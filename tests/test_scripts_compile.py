@@ -1,4 +1,4 @@
-"""护栏:`scripts/*.py` 必须**能编译**。
+"""护栏:仓库里的**脚本与 YAML 配置**必须是**合法**的。
 
 ## 为什么要有这条(179 轮实测踩到)
 
@@ -123,3 +123,53 @@ def test_every_script_compiles() -> None:
         except SyntaxError as exc:
             broken.append(f"{path.relative_to(path.parents[1])}:{exc.lineno} {exc.msg}")
     assert not broken, "这些脚本**有语法错误**:\n  " + "\n  ".join(broken)
+
+
+# ----------------------------------------------------------------------
+# YAML 必须能被解析(183 轮)
+# ----------------------------------------------------------------------
+
+_YAML_GLOBS = ("*.yml", "*.yaml")
+_YAML_SKIP_PARTS = _SKIP_PARTS | {"node_modules"}
+
+
+def _yaml_files() -> list[Path]:
+    out: list[Path] = []
+    for pat in _YAML_GLOBS:
+        out.extend(_REPO.rglob(pat))
+    return sorted(
+        p for p in out
+        if not (_YAML_SKIP_PARTS & set(p.relative_to(_REPO).parts))
+    )
+
+
+def test_yaml_files_are_not_empty() -> None:
+    """先确认这条护栏**扫到了东西** —— 空集合的断言恒真。"""
+    assert _yaml_files(), "没找到任何 .yml/.yaml —— glob 写错了。"
+
+
+def test_every_yaml_file_parses() -> None:
+    """每个 YAML 都必须能被 `yaml.safe_load` 解析。
+
+    🔴 这条是 182 轮那次事故的直接产物:我用 python 字符串替换改
+    `ci.yml`,注释里的换行**没转义** -> 整个文件**解析不了**,
+    **CI workflow 直接失效**,而我当时**只跑了 ruff**(它读命令行参数,
+    **不读 YAML**)所以完全没发现。
+
+    > 📌 **「我改了配置」要验配置能被解析**,不是验那行命令跑不跑通。
+    > ruff 绿 != workflow 是合法 YAML。
+
+    GitHub Actions **不做本地 YAML 校验** —— 写坏了要等**手动触发**
+    才发现。而本仓 `ci.yml` 是 `workflow_dispatch`,平时根本不跑。
+
+    覆盖 16 个文件:5 个 workflow + 6 个 issue 模板 + issue-lint 配置
+    + 2 个 docker-compose + pnpm workspace/lockfile。
+    """
+    broken: list[str] = []
+    for path in _yaml_files():
+        try:
+            yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception as exc:  # yaml.YAMLError 及其子类
+            broken.append(f"{path.relative_to(_REPO)}: {exc}")
+    detail = "\n  ".join(broken)
+    assert not broken, f"这些 YAML **解析不了**:\n  {detail}"

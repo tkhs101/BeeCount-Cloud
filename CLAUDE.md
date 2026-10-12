@@ -934,6 +934,27 @@ ruff check src tests alembic scripts server.py new-apple-ui
 > 📌 **「我改了配置」要验配置**能**被解析**,不是验那行命令跑不跑通。
 > ruff 绿 ≠ workflow 是合法 YAML。
 
+### ✅ 「YAML 能不能解析」也变成护栏(183 轮)
+
+182 轮只修了 `ci.yml` **一个**文件 —— **没问其它 workflow 是不是也坏了**。
+枚举全仓 **16 个** YAML(5 workflow + 6 issue 模板 + issue-lint 配置
++ 2 个 docker-compose + pnpm workspace/lockfile),**全部可解析**。
+
+护栏 `tests/test_scripts_compile.py::test_every_yaml_file_parses` 全部纳入。
+⚠️ GitHub Actions **不做本地 YAML 校验**,写坏了要等**手动触发**才发现 ——
+而本仓 `ci.yml` 恰恰是 `workflow_dispatch`,**平时根本不跑**。
+
+**变异验证 = 原样复现 182 轮那次事故** -> **变红** ✅;还原 -> 恢复绿 ✅。
+
+> 📌 **把事故变成护栏**:不是「记一条纪律」,而是**让同一个错误再也
+> 溜不过去**。判据能**复现那次具体事故**,才算护栏真的接上了。
+
+📌 又踩一次 `
+` 的坑(heredoc 里被写成真换行,把字符串劈成语法错误)——
+这是本会话**第三次**。**含 `
+` 的代码一律用 `edit` 工具写。**
+
+
 ### ✅ 唯一来源:护栏**从 ci.yml 解析**,不再维护副本(182 轮)
 
 `test_no_python_file_falls_outside_every_gate` 现在用 `yaml.safe_load` +
