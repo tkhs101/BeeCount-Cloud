@@ -572,3 +572,50 @@ def test_batch_create_supports_split_payment():
         )
     finally:
         app.dependency_overrides.clear()
+
+
+def test_unrelated_edit_keeps_inconsistent_legs() -> None:
+    """改一个**无关字段**不许抹掉既有腿(哪怕它们自相矛盾)。
+
+    ## 为什么
+
+    旧行为在 `snapshot_mutator.update_transaction` 末尾那个 try/except 里
+    把不自洽的既有腿写成 `[]`。实测代价完全不成比例:
+
+    | 父 5000 / 腿合计 4999 | 账户余额被扣 | 支出合计−账户变动 缺口 |
+    |---|---|---|
+    | 抹掉腿(旧) | **0** | **5000** |
+    | 保留(现在) | 4999 | **1** |
+
+    `_split_legs` 只按账户聚合腿、**从不检查合计**,而**有腿时父
+    `account_*` 是空的** —— 父对余额零贡献。抹掉腿等于让整笔金额
+    从所有账户余额上消失,而它还照样进统计。
+
+    而「不变式」本来就**已经**被破坏:实测 `_merge_tx_splits_after_merge`
+    与 `replace_tx_splits` **都不校验合计**,脏腿能从 `/sync/push` 落库。
+
+    📌 用户**显式**改腿时仍然被拒(那条 `_normalize_splits` 抛出的异常
+    不被这个 try 捕获)—— 这条测的正是「无关编辑不该毁数据」。
+    """
+    from src.snapshot_mutator import update_transaction
+
+    snap = {"items": [], "accounts": [], "categories": [], "tags": []}
+    snap["items"].append({
+        "syncId": "tx_1", "type": "expense", "amount": 5000.0,
+        "categoryName": "购物", "note": "旧备注",
+        "accountName": None, "accountId": None,
+        "happenedAt": "2026-10-03T12:00:00Z",
+        "splits": [{"accountId": "acc-1", "amount": 3000.0},
+                   {"accountId": "acc-2", "amount": 1999.0}],   # 4999 != 5000
+    })
+
+    new_snap = update_transaction(snap, "tx_1", {"note": "改成新备注"})
+    item = new_snap["items"][0]
+
+    assert item["note"] == "改成新备注", "无关字段本身必须更新成功"
+    legs = item.get("splits")
+    assert legs, (
+        "改个备注把用户的腿抹掉了 —— 整笔金额会从所有账户余额上消失,"
+        "而它还照样进统计(缺口 5000,而不是 1)"
+    )
+    assert len(legs) == 2, f"腿的数量被改了:{legs}"

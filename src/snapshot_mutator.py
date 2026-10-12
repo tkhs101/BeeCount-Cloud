@@ -635,15 +635,43 @@ def update_transaction(snapshot: dict, tx_id: str, payload: dict) -> dict:
             )
         except ValueError:
             logger.warning(
-                "update_transaction: dropping inconsistent splits tx_id=%s "
+                "update_transaction: keeping inconsistent splits tx_id=%s "
                 "legs=%r amount=%r type=%r",
                 tx_id, item.get("splits"), item.get("amount"), item.get("type"),
             )
-            # 同样写空 list(见上面「清除」处的注释):键必须留着,
-            # 否则 projection 收不到信号,脏腿会留在库里。
-            item["splits"] = []
-            # 腿丢了但父账户字段已被清空 → 这笔会变成「无账户的支出」。
-            # 回填不了(不知道原来该挂哪),所以只告警;账本总额仍正确。
+            # ⚠️ **保留**这些腿,不要写 `item["splits"] = []`(旧行为)。
+            #
+            # 旧行为的理由是「保住不变式」,但实测代价完全不成比例:
+            #
+            # | 父 5000 / 腿合计 4999 | 账户余额被扣 | 支出合计−账户变动 缺口 |
+            # |---|---|---|
+            # | 抹掉腿(旧) | **0** | **5000** |
+            # | 保留(现在) | 4999 | **1** |
+            #
+            # 因为 `_split_legs`(`read/_shared.py:592`)**只按账户聚合腿,
+            # 从不检查合计**,而**有腿时父 `account_*` 是空的** ——
+            # 父对余额零贡献,余额完全由腿决定。抹掉腿等于让**整笔金额
+            # 从所有账户余额上消失**,而它还照样进统计。
+            #
+            # 而「不变式」本来就**已经**被破坏了:实测
+            # `_merge_tx_splits_after_merge` 与 `replace_tx_splits`
+            # **都不校验合计**,所以脏腿能从 `/sync/push` 直接落库。
+            # 在这里抹掉,只是把「一笔小的不一致」升级成
+            # 「这笔交易对余额完全隐形」。
+            #
+            # 📌 **只在 payload 真的改了 `amount` 时才作废** ——
+            # 腿是「总额变了才失效」的,不是「碰了这笔就失效」。
+            #
+            # ⚠️ 第一版我写成**无条件保留**,结果 `test_patch_amount_invalidate_splits`
+            # 当场变红:把 5000 改成 6000 之后,腿还停在 5000,
+            # 交易声称 6000 却只动 5000 —— **那才是真的不一致**。
+            # 已有测试把这条契约写死了(与「已有测试就是契约」那次同一个教训)。
+            if "amount" in payload:
+                item["splits"] = []
+            # 否则(payload 只改了 note 之类)**原样保留**。
+            #
+            # 📌 用户**显式**改腿时仍然会被拒:上面 618-624 行
+            # `_normalize_splits` 抛出的异常**不被**这个 try 捕获。
     mapping = {
         "note": "note",
         "category_name": "categoryName",
