@@ -205,6 +205,29 @@ pnpm / Node 版本的唯一来源、lockfile 不许绕过的道理、Dockerfile 
 📌 **判据:一句话里出现「第 NN 轮」,它多半属于日志。**
 不是按重要性分,是按**是否还会过期**分 —— 长期有效才配进指南。
 
+### ⚠️ 行尾:**仓库里只允许 LF**(`.gitattributes`,209 轮)
+
+`.gitattributes` 声明 `* text=auto eol=lf`;`pnpm-lock.yaml -text` 单独排除
+(它必须和 `--frozen-lockfile` 逐字节一致才不重算依赖)。
+
+**这不是审美问题 —— 它已经造成三次真实故障:**
+
+| # | 现象 | 真正的原因 |
+|---|---|---|
+| 1 | `edit` 报 `old_string not found`,那行**明明在文件里** | CRLF 文件,`edit` 按 `\n` 匹配 |
+| 2 | 同一文件**连续两次**匹配失败,白花两轮 | 同上;表现像「锚点写错」 |
+| 3 | `tests/test_scripts_compile.py` 变成**混合行尾** | `cat >>` 追加(LF)到 CRLF 文件上 |
+
+> 📌 **工具失灵的表现是「匹配不上」,你会以为是自己写错了锚点** ——
+> 比报错更费时间。`tools/*` 改不动的时候,先 `git ls-files --eol <file>` 看一眼。
+
+⚠️ **转换时只改行尾、不改内容**:删文件 + `git checkout-index -f` 强制按
+`.gitattributes` 重新检出,转换后 `git diff` **必须为空** —— 这是「只变行尾」
+的证据。⚠️ `git checkout-index -af` **不转换**,必须先 `rm` 再检出。
+
+📌 **`git status` 显示 `M` 但 `git diff` 为空** = 文件刚被替换、stat cache
+过期,**不是内容变了**。206 轮我差点在这里又绕一圈。
+
 ## 部署
 
 照 [`docs/SELFHOST-RUNBOOK.md`](docs/SELFHOST-RUNBOOK.md) 走（源码安装，不用
