@@ -128,26 +128,54 @@ def test_every_mcp_schema_exposes_wrapper_params() -> None:
 
     assert not missing, "\n".join(missing)
 
-def test_receipt_variant_forwards_every_param_to_the_implementation() -> None:
-    """**第 4 层**(kw 字面量)只有查源码能抓 —— 上面两条结构上都盖不到。
+def test_receipt_wrapper_actually_forwards_splits(monkeypatch) -> None:
+    """wrapper 必须把参数**真的**透传下去 —— 判据是**真调一次**。
 
-    ⚠️ 本轮实测:把 `"splits": splits,` 从 wrapper 的 kw dict 删掉,
-    上面两条护栏**照样全绿** —— 少传一项不改签名、不改 schema。
+    ⚠️ 这条护栏原来断言「wrapper 源码里有 `"splits": splits,`」。那是
+    **源码文本判据**,而 151-153 轮已实测这一族对「代码不可达」**无效**
+    (文本还在、代码不跑,护栏照样绿)——
+    `mutation_check.py --mode unreachable` 就是为抓这一族加的。
 
-    判据 = wrapper 源码里组装 `kw` 的那段,**每个参数都必须出现**。
+    ### 为什么替换 `_logged_call` 而不是造一个假 ctx
+
+    我先试了传 `ctx=None`、再试 `SimpleNamespace(request_context=...)` ——
+    **连错两次**:wrapper 走 `_logged_call`,而它内部要 `get_mcp_user_from_context`
+    + `require_mcp_scope`(真鉴权),假 ctx 补不齐,第三次又冒出 `scope` 缺失。
+
+    📌 **别逐个属性试**,去读被调的那个函数。而这里正确解法更简单:
+    **把 `_logged_call` 本身换掉** —— 我要验的是「wrapper 拼出来的 kw 对不对」,
+    鉴权不属于这件事。**隔离掉与判据无关的依赖。**
     """
-    name = "create_transaction_with_receipt"
-    impl_params = set(inspect.signature(getattr(W, name)).parameters) - {"user"}
-    wrap_params = set(inspect.signature(getattr(S, name)).parameters) - {"ctx"}
+    import asyncio
+    import inspect as _inspect
+    from types import SimpleNamespace
 
-    assert impl_params == wrap_params, "签名层已经不一致,先修那个"
+    import src.mcp.server as S
 
-    body = inspect.getsource(getattr(S, name))
-    missing = sorted(p for p in impl_params if f'"{p}": {p},' not in body)
+    captured: dict = {}
+
+    async def _fake_logged_call(ctx, *, name, scope, kwargs, body):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(S, "_logged_call", _fake_logged_call)
+
+    params = _inspect.signature(S.create_transaction_with_receipt).parameters
+    kwargs = {n: ("SENTINEL-" + n) for n, p in params.items()
+              if n != "ctx" and p.default is not p.empty}
+    kwargs["amount"] = 1.0
+    kwargs["image_base64"] = "Zm9v"
+
+    asyncio.run(S.create_transaction_with_receipt(
+        SimpleNamespace(), **kwargs))
+
+    missing = sorted(k for k in kwargs if k not in captured)
     assert not missing, (
-        f"{name} 的 kw 字面量里没有透传 {missing}"
-        "  -> 签名和 schema 都对,但底层实际拿不到这些参数 —— "
-        "**结构判据全绿,功能却是坏的**"
+        f"wrapper 没有把这些参数透传下去:{missing}"
+        "  -> 签名层与 schema 层都绿,但底层实际拿不到 —— **结构全对、功能是坏的**"
+    )
+    assert captured.get("splits") == "SENTINEL-splits", (
+        f"splits 没有原样传下去,实际拿到 {captured.get('splits')!r}"
     )
 
 
