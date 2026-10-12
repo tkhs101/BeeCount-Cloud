@@ -729,3 +729,46 @@ def test_dirty_splits_survive_a_rest_note_patch() -> None:
     assert abs(moved - (-4999.0)) < 1e-6, (
         f"两条腿合计 4999,余额合计应该减少 4999,实得 {moved}"
     )
+
+
+def test_delete_tx_also_removes_its_legs() -> None:
+    """删掉一笔组合支付交易,**腿也必须跟着删**。
+
+    ## 实测过的严重 bug(修复前)
+
+        删前腿数 = 2
+        DELETE -> **200**(成功)
+        删后腿数 = **2**   <- 悬空腿还在
+
+    SQLite 默认**不开** FK cascade,而 `_split_legs`(`read/_shared.py`)
+    按账户聚合**全部**腿、从不看父行还在不在 —— 于是**整笔金额永远扣在
+    账户余额上**。用户删了交易,钱回不来。**HTTP 200,不报错,零信号。**
+
+    这是 163 轮那个 bug 的**镜像**(那次是「无关编辑抹掉腿」,
+    这次是「删除交易留下腿」)。CLAUDE.md 原来**没有**记这一条。
+
+    ⚠️ DELETE 必须带 `base_change_id`,否则 **422**;而且 `client.delete()`
+    这个 httpx 版本**不收 json**,得用 `client.request("DELETE", ...)`。
+    """
+    from sqlalchemy import func, select
+
+    from src.models import ReadTxSplitProjection
+
+    client, TS, H, ids = _setup("sp-del-probe@t.com")
+    r0 = _create_split_tx(client, H, ids, legs=[
+        {"account_id": ids["招行卡"], "amount": 3000.0},
+        {"account_id": ids["现金"], "amount": 2000.0},
+    ], amount=5000.0, note="待删")
+    assert r0.status_code == 200, r0.text
+    tx_id = r0.json().get("entity_id")
+
+    d = client.request("DELETE", f"/api/v1/write/ledgers/lg1/transactions/{tx_id}",
+                      headers=H, json={"base_change_id": 0})
+    assert d.status_code == 200, d.text
+
+    with TS() as db:
+        after = db.scalar(select(func.count()).select_from(
+            ReadTxSplitProjection).where(
+            ReadTxSplitProjection.tx_sync_id == tx_id))
+
+    assert after == 0, f"删掉交易后还剩 {after} 条悬空腿"

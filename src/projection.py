@@ -643,6 +643,16 @@ def delete_entity(
 def delete_tx(db: Session, *, ledger_id: str, sync_id: str) -> None:
     delete_entity(db, ReadTxProjection, ledger_id=ledger_id, sync_id=sync_id)
 
+    # ⚠️ **必须显式删腿**。SQLite 默认**不开** FK cascade(CLAUDE.md 记过:
+    # 需 `PRAGMA foreign_keys=ON`),指望父行带走子表 -> 腿会永久留下。
+    #
+    # 实测(修复前):删掉一笔 5000 的组合支付交易返回 **200**,但
+    # `read_tx_split_projection` 里那两条腿**一条没少**。而
+    # `_split_legs`(`read/_shared.py`)按账户聚合**全部**腿、从不看
+    # 父行还在不在 —— 于是**整笔金额永远扣在账户余额上**,用户删了交易
+    # 钱却回不来。HTTP 200,不报错,零信号。
+    delete_tx_splits(db, ledger_id=ledger_id, tx_sync_id=sync_id)
+
 
 def delete_account(db: Session, *, user_id: str, sync_id: str) -> None:
     """user-global account delete。PK=(user_id, sync_id)。"""
