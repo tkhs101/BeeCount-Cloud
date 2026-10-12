@@ -128,7 +128,7 @@ def test_every_model_column_is_created_by_migrations(migrated_schema) -> None:
             continue                      # 上面那条已经报了
         miss = sorted(cols - actual)
         if miss:
-            problems.append(f"{table}: 缺列 {miss}")
+            problems.append(f"{table}: missing columns {miss}")
     assert not problems, (
         "columns in models but NOT created by the migration chain.\n"
         "Local tests stay green because they use Base.metadata.create_all()\n"
@@ -141,4 +141,117 @@ def test_migrations_do_not_create_unknown_tables(migrated_schema) -> None:
     """反向:迁移建了模型里没有的表 —— 多半是忘了更新模型或删了迁移。"""
     want = {t.name for t in Base.metadata.tables.values()}
     extra = sorted(set(migrated_schema) - want)
-    assert not extra, f"迁移建了模型里没有的表: {extra}"
+    assert not extra, f"tables created by migrations but absent from models: {extra}"
+
+
+# --------------------------------------------------------------------------- #
+# 中间路径:真实部署不是从空库升上来,是从某个旧版本升上来                      #
+# --------------------------------------------------------------------------- #
+
+_SCRIPT_REVISIONS = """
+import sys; sys.path.insert(0, {repo!r})
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+cfg = Config({ini!r}); cfg.set_main_option("script_location", {scripts!r})
+for r in ScriptDirectory.from_config(cfg).walk_revisions():
+    print(r.revision)
+"""
+
+_UPGRADE_TO = """
+import sys; sys.path.insert(0, {repo!r})
+from alembic import command
+from alembic.config import Config
+cfg = Config({ini!r})
+cfg.set_main_option("script_location", {scripts!r})
+command.upgrade(cfg, {target!r})
+print("OK")
+"""
+
+
+def _upgrade_to(workdir, target: str) -> None:
+    runner = _UPGRADE_TO.format(repo=str(REPO), ini=str(REPO / "alembic.ini"),
+                                scripts=str(REPO / "alembic").replace("\\", "/"),
+                                target=target)
+    env = {**os.environ, "DATABASE_URL": f"sqlite:///{workdir / 'up.db'}",
+           "PYTHONPATH": str(REPO)}
+    proc = subprocess.run(
+        [sys.executable, "-c", runner], cwd=workdir, env=env,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=600,
+    )
+    assert "OK" in proc.stdout, (
+        f"alembic upgrade {target} FAILED:\n{proc.stderr[-1200:]}")
+
+
+def _schema_of(path) -> dict[str, set[str]]:
+    engine = create_engine(f"sqlite:///{path}")
+    try:
+        insp = inspect(engine)
+        return {
+            t: {c["name"] for c in insp.get_columns(t)}
+            for t in insp.get_table_names()
+            if not t.startswith("alembic")
+        }
+    finally:
+        # ⚠️ 不 dispose 的话 Windows 删不掉 tmp 文件,而「删不掉」往往又被
+        # 静默吞掉 —— 于是每次跑测试在 temp 里留一堆库。
+        engine.dispose()
+
+
+def _prev_revision() -> str:
+    out = subprocess.run(
+        [sys.executable, "-c", _SCRIPT_REVISIONS.format(
+            repo=str(REPO), ini=str(REPO / "alembic.ini"),
+            scripts=str(REPO / "alembic").replace("\\", "/"))],
+        cwd=REPO, env={**os.environ, "PYTHONPATH": str(REPO)},
+        capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=300,
+    ).stdout
+    revs = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    assert len(revs) >= 2, f"迁移链太短,无法测中间路径: {revs}"
+    return revs[1]          # revs[0] 是 head,取它上游那个
+
+
+def test_upgrading_from_the_previous_revision_yields_the_same_schema(
+        tmp_path, migrated_schema) -> None:
+    """从 **head 的上一个版本**升到 head,最终 schema 必须与从空库升上来一致。
+
+    🔴 213 轮实测:22 条路径**全部能升通**(负结果,值得记),但全跑要
+    **49 秒** —— 放进每次全量的必过门太贵。所以只测**最可能坏的那一条**:
+    新加的那个迁移(它下游那个 rev -> head)。成本恒定(2 次迁移),
+    而且**每次新增迁移时自动覆盖新迁移的那条路径**。
+
+    判据不是「不报错」而是**最终 schema 相同** —— 有的迁移能跑通却
+    漏了列,那种情况只在这里会红。
+
+    > 📌 「升级不报错」不等于「升级结果正确」。中间路径最容易出的
+    > 就是「跑过了,但少了几列」。
+
+    ⚠️ **诚实的局限(213 轮实测)**:这条**当前无法通过「改坏一个迁移」
+    验证自己会红** —— 因为仓库里**没有路径依赖的迁移**,从空库升和从
+    0021 升本来就该得到同一个 schema。把 0022 改成 no-op 的话,
+    **两条路径会一起缺那几张表**,判据仍然「相同」。
+    > 📌 这接近 CLAUDE.md 记的「空集合的断言恒真」——
+    > 但**不完全恒真**:它的价值在**将来**有人写了带 `inspect(...)`
+    > 的迁移(那种迁移在空库路径和中间路径上行为不同)。
+    > 留着的理由是这个,**不是**「已经验证过它有效」。
+    """
+    prev = _prev_revision()
+    _upgrade_to(tmp_path, prev)
+    _upgrade_to(tmp_path, "head")
+    got = _schema_of(tmp_path / "up.db")
+
+    only_empty = sorted(set(migrated_schema) - set(got))
+    only_mid = sorted(set(got) - set(migrated_schema))
+    diff = {t: (sorted(migrated_schema[t] - got[t]),
+                sorted(got[t] - migrated_schema[t]))
+            for t in set(migrated_schema) & set(got)
+            if migrated_schema[t] != got[t]}
+
+    assert not (only_empty or only_mid or diff), (
+        f"schema after upgrading from {prev} to head DIFFERS from the "
+        f"empty-db path:\n"
+        f"  only in empty-db path: {only_empty}\n"
+        f"  only in mid path:     {only_mid}\n"
+        + "\n".join(f"  {t}: missing {a} / extra {b}" for t, (a, b) in diff.items())
+    )
